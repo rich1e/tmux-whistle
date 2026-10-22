@@ -505,6 +505,10 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
    鼠标路径都会跳过），没有快捷键。
 4. **`running` 有了灭灯信号** —— 订阅 `SessionEnd`，agent 退出时清掉该 pane 的 running
    （见 TODO-11）。
+5. **status-right 增加四态汇总** —— `●1 ✓1 ◷0 ✗0`。`whistle_count_states`（纯函数）
+   从同一份 `list-panes` 输出算四态分布，写入 `@whistle_count_*`；汇总段与 `🔔N`
+   共用同一个注入点（`@whistle_status_right`），所以自愈仍然只有一个入口。
+   四个格子固定出现（含 0），状态栏宽度不跳动；全零时整段隐藏。
 
 ---
 

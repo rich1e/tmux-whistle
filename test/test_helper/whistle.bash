@@ -50,7 +50,7 @@ wt_fake_omt_format() {
   # 末位字符是右分隔符 —— format_patch 必须把徽章插在它之前（KP-5）。
   #
   # 内容里带 #{window_name}，这样 W: 循环的输出能分辨哪个窗口是哪段；
-  # 但不要在窗口名两侧加装饰字符，否则会隔断 "w1✔" 这类连续子串。
+  # 但不要在窗口名两侧加装饰字符，否则会隔断 "w1✓" 这类连续子串。
   wt set -g window-status-format \
     '#{window_name}#[none]#[none]▌'
   wt set -g window-status-current-format \
@@ -73,7 +73,7 @@ wt_publish_and_patch() {
 # 渲染整个 session 的窗口列表，每个窗口一段
 #
 # display -pF 不会解析 #[...] 样式指令（只有真状态栏渲染器才处理），
-# 所以样式会以字面文本形式混在输出里，"w1" 和 "✔" 之间夹着 #[fg=...]，
+# 所以样式会以字面文本形式混在输出里，"w1" 和 "✓" 之间夹着 #[fg=...]，
 # 无法直接做子串匹配。这里把 #[...] 和 SGR 序列都剥掉再交给断言。
 wt_render_windows() {
   local esc

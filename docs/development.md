@@ -71,7 +71,7 @@ sequenceDiagram
     alt 任一关卡失败
         gate-->>Dev: ✗ 就地停住，报出文件与行号
     else 四关全绿
-        gate-->>Dev: ✓ 199 项通过
+        gate-->>Dev: ✓ 207 项通过
         Dev->>git: git commit
     end
 ```
@@ -176,7 +176,7 @@ flowchart LR
     HK["after-select-window<br/>after-select-pane<br/>window-pane-changed / pane-exited"]
   end
 
-  USER["其它 session 的状态栏<br/>徽章 ✔ · 全局计数 🔔N · 瞬时提示"]
+  USER["其它 session 的状态栏<br/>徽章 ✓ · 全局计数 🔔N · 瞬时提示"]
 
   CC --> CLI
   DET --> CLI

@@ -61,8 +61,8 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_color_error #d70000
 @whistle_color_running #5f87af
 @whistle_icon_pending 🔔
-@whistle_icon_done ✔
-@whistle_icon_wait ⏳
+@whistle_icon_done ✓
+@whistle_icon_wait ◷
 @whistle_icon_error ✗
 @whistle_icon_running ●
 @whistle_display_ms 0
@@ -171,6 +171,24 @@ whistle_aggregate() {
     fi
   done
   printf '%s|%s|%s\n' "$_best_state" "$_best_msg" "$_pending"
+}
+
+# whistle_count_states
+#
+# stdin  = 与 whistle_aggregate 同一份 list-panes 输出
+# stdout = "<running>|<done>|<wait>|<error>" 四态各有多少个 pane
+#
+# 与 whistle_aggregate 的分工：它算「窗口该显示哪个状态」+ 待处理总数，
+# 这里算四态分布，给 status-right 的汇总段用。纯函数，不碰 tmux（§4.0）。
+whistle_count_states() {
+  awk -F'|' '
+    $1 !~ /^%/ { next }
+    $2 == "running" { r++ }
+    $2 == "done"    { d++ }
+    $2 == "wait"    { w++ }
+    $2 == "error"   { e++ }
+    END { printf "%d|%d|%d|%d\n", r, d, w, e }
+  '
 }
 
 # -- 状态读写 --------------------------------------------------------------
@@ -318,9 +336,26 @@ whistle_recompute_global() {
   # 必须带 pane_id：whistle_aggregate 会跳过不以 '%' 开头的行，
   # 只传 @whistle 的话每一行都被丢掉，计数恒为 0。
   # 全局计数用不到消息，消息列留空。
-  _n=$(whistle_tmux list-panes -a -F '#{pane_id}|#{@whistle}' 2> /dev/null \
-    | whistle_aggregate | cut -d'|' -f3)
-  whistle_tmux set -g @whistle_pending "${_n:-0}"
+  #
+  # 一次 list-panes 喂两个纯函数：聚合态 / 待处理总数 + 四态分布。
+  _cg_rows=$(whistle_tmux list-panes -a -F '#{pane_id}|#{@whistle}' 2> /dev/null)
+
+  _n=$(printf '%s\n' "$_cg_rows" | whistle_aggregate | cut -d'|' -f3)
+  _c=$(printf '%s\n' "$_cg_rows" | whistle_count_states)
+
+  # 纯 shell 拆 "r|d|w|e"，避免四次 cut 子进程
+  _cr=${_c%%|*}
+  _rest=${_c#*|}
+  _cd=${_rest%%|*}
+  _rest=${_rest#*|}
+  _cw=${_rest%%|*}
+  _ce=${_rest#*|}
+
+  whistle_tmux set -g @whistle_pending "${_n:-0}" \
+    \; set -g @whistle_count_running "${_cr:-0}" \
+    \; set -g @whistle_count_done "${_cd:-0}" \
+    \; set -g @whistle_count_wait "${_cw:-0}" \
+    \; set -g @whistle_count_error "${_ce:-0}"
 }
 
 # -- 查询 ------------------------------------------------------------------

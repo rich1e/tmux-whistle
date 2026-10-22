@@ -54,8 +54,8 @@ expect_contains() {
   local out
   out=$(wt display -pF "$fmt")
 
-  expect_contains "$out" '✔'
-  expect_contains "$out" '⏳'
+  expect_contains "$out" '✓'
+  expect_contains "$out" '◷'
 }
 
 @test "border-status: pane 徽章 format 大括号配平（畸形会静默渲染成空）" {

@@ -66,12 +66,42 @@ whistle_mark_build() {
   printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_w" "$_c_run" "$_s_run"
 }
 
+# whistle_summary_build → 全 server 的四态汇总（纯 format，零 fork）
+#
+# 窗口徽章只在"拥有该窗口的 session"里可见，所以另给一段跨 session 的分布：
+#   ●1 ✓1 ◷0 ✗0
+#
+# 整段只在真有 agent 活动时出现（running 或待处理任一非零），否则为空。
+# 四个格子一起出现、包括计数为 0 的 —— 这样状态栏宽度不会随计数跳动，
+# 也保证「四种状态」始终一眼可见。
+whistle_summary_build() {
+  _sm_c_run=$(whistle_conf '@whistle_color_running')
+  _sm_c_done=$(whistle_conf '@whistle_color_done')
+  _sm_c_wait=$(whistle_conf '@whistle_color_wait')
+  _sm_c_err=$(whistle_conf '@whistle_color_error')
+  _sm_s_run=$(whistle_icon '@whistle_icon_running')
+  _sm_s_done=$(whistle_icon '@whistle_icon_done')
+  _sm_s_wait=$(whistle_icon '@whistle_icon_wait')
+  _sm_s_err=$(whistle_icon '@whistle_icon_error')
+
+  # #{||:a,b} 的真值判定是"非空且不等于 0"，见 tmux FORMATS。
+  printf '#{?#{||:#{@whistle_count_running},#{@whistle_pending}},'
+  printf '#[fg=%s]%s#{@whistle_count_running}#[default] ' "$_sm_c_run" "$_sm_s_run"
+  printf '#[fg=%s]%s#{@whistle_count_done}#[default] ' "$_sm_c_done" "$_sm_s_done"
+  printf '#[fg=%s]%s#{@whistle_count_wait}#[default] ' "$_sm_c_wait" "$_sm_s_wait"
+  printf '#[fg=%s]%s#{@whistle_count_error}#[default] ,}' "$_sm_c_err" "$_sm_s_err"
+}
+
 # whistle_status_right_build → 状态栏右侧的全局待处理计数
 #
 # 这是跨 session 可见性的关键：窗口徽章只出现在"拥有该窗口的 session"的
 # 状态栏里，你在 B 时看不到 A 的窗口列表。全局计数补上这一块 ——
 # 不管你在哪个 session，都能看到"别处还有 N 件事等着"。
+#
+# 前面接四态汇总：汇总给分布，🔔 给"总共几件要处理"这一眼。
+# 两者共用同一次 status-right 注入，所以自愈只需要一个入口。
 whistle_status_right_build() {
+  whistle_summary_build
   printf '#{?@whistle_pending, #[fg=%s]%s#{@whistle_pending}#[default],}' \
     "$(whistle_conf '@whistle_color_wait')" \
     "$(whistle_icon '@whistle_icon_pending')"

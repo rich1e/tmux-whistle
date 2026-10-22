@@ -197,3 +197,32 @@ EOF
     run cat "$BATS_TEST_TMPDIR/out"
     assert_eq "$output" 'done|最后一行|1'
 }
+
+# -- whistle_count_states ---------------------------------------------------
+
+@test "count_states: 四态各数各的" {
+    run whistle_count_states <<'EOF'
+%1|running|
+%2|running|
+%3|done|好了
+%4|wait|等着
+%5|error|炸了
+EOF
+    assert_eq "$output" '2|1|1|1'
+}
+
+@test "count_states: 空输入全是 0" {
+    run whistle_count_states </dev/null
+    assert_eq "$output" '0|0|0|0'
+}
+
+@test "count_states: 跳过空状态与格式错误的行" {
+    run whistle_count_states <<'EOF'
+garbage
+%1||
+%2||消息误读探针
+%3|banana|
+%4|done|
+EOF
+    assert_eq "$output" '0|1|0|0'
+}

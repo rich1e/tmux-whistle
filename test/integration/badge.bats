@@ -30,11 +30,11 @@ teardown() {
     wt set -w -t w2 @whistle_win "wait"
 
     run wt_render_windows
-    assert_contains "$output" 'w1✔'
-    assert_contains "$output" 'w2⏳'
+    assert_contains "$output" 'w1✓'
+    assert_contains "$output" 'w2◷'
     # 交叉验证：w1 不该出现 wait 的符号，反之亦然
-    assert_not_contains "$output" 'w1⏳'
-    assert_not_contains "$output" 'w2✔'
+    assert_not_contains "$output" 'w1◷'
+    assert_not_contains "$output" 'w2✓'
 }
 
 @test "KP-1: 无状态的窗口不显示任何徽章" {
@@ -45,7 +45,7 @@ teardown() {
 
     run wt_render_windows
     assert_contains "$output" 'w1▌'
-    assert_not_contains "$output" '✔'
+    assert_not_contains "$output" '✓'
 }
 
 @test "KP-1: 三种状态各自有对应符号" {
@@ -69,8 +69,8 @@ teardown() {
     run wt_render_windows
     assert_contains "$output" 'w1●'
     # running 只亮 ●，不该串到其余三个状态的符号上
-    assert_not_contains "$output" '✔'
-    assert_not_contains "$output" '⏳'
+    assert_not_contains "$output" '✓'
+    assert_not_contains "$output" '◷'
     assert_not_contains "$output" '✗'
 }
 
@@ -80,14 +80,14 @@ teardown() {
     whistle_mark_publish
     whistle_format_patch window-status-format
 
-    for pair in 'done ✔' 'wait ⏳' 'error ✗' 'running ●'; do
+    for pair in 'done ✓' 'wait ◷' 'error ✗' 'running ●'; do
         local st="${pair% *}" sym="${pair#* }"
         wt set -w -t w1 @whistle_win "$st"
         run wt_render_windows
         assert_contains "$output" "w1${sym}"
         # 只断言本状态该有的符号：其余三个不该同时出现
         local other
-        for other in ✔ ⏳ ✗ ●; do
+        for other in ✓ ◷ ✗ ●; do
             [ "$other" = "$sym" ] && continue
             assert_not_contains "$output" "$other"
         done
@@ -107,7 +107,7 @@ teardown() {
     run wt_render_windows
     # 哨兵仍在格式里（幂等注入不受开关影响），但渲染为空
     assert_contains "$output" 'w1'
-    assert_not_contains "$output" '✔'
+    assert_not_contains "$output" '✓'
 }
 
 @test "开关: @whistle_badge 从 off 改回 on 后徽章恢复" {
@@ -122,7 +122,7 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✔'
+    assert_contains "$output" 'w1✓'
 }
 
 @test "开关: @whistle_badge 只关窗口徽章，全局计数不受影响" {
@@ -150,7 +150,7 @@ teardown() {
     wt set -w -t w2 @whistle_win "error"
 
     run wt_render_windows
-    assert_contains "$output" 'w1✔'
+    assert_contains "$output" 'w1✓'
     assert_contains "$output" 'w2✗'
 }
 
@@ -219,8 +219,8 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✔'
-    assert_not_contains "$output" '✔✔'
+    assert_contains "$output" 'w1✓'
+    assert_not_contains "$output" '✓✓'
 }
 
 @test "KP-4: 已注入过时 patch 是幂等空操作，不改内容" {
@@ -280,20 +280,21 @@ teardown() {
 
   wt set -w -t w1 @whistle_win "done"
   run wt_render_windows
-  assert_contains "$output" 'w1✔'
+  assert_contains "$output" 'w1✓'
 }
 
 @test "图标: @whistle_icon_done 可改成任意符号" {
   wt_load core
   wt_load status-line
-  wt set -g @whistle_icon_done '✓'
+  # 用一个和默认 ✓ 明显不同的符号，否则「改了没生效」也看不出来
+  wt set -g @whistle_icon_done '★'
   whistle_mark_publish
   whistle_format_patch window-status-format
 
   wt set -w -t w1 @whistle_win "done"
   run wt_render_windows
-  assert_contains "$output" 'w1✓'
-  assert_not_contains "$output" '✔'
+  assert_contains "$output" 'w1★'
+  assert_not_contains "$output" '✓'
 }
 
 @test "图标: running 也可改成任意符号" {
@@ -343,18 +344,18 @@ teardown() {
 @test "图标: 显式设成空串表示不要图标（区别于未设置）" {
   wt_load core
   wt_load status-line
-  # 未设置 → 用默认 ✔
+  # 未设置 → 用默认 ✓
   wt set -w -t w1 @whistle_win "done"
   whistle_mark_publish
   whistle_format_patch window-status-format
   run wt_render_windows
-  assert_contains "$output" 'w1✔'
+  assert_contains "$output" 'w1✓'
 
   # 显式空串 → 徽章位置什么都没有
   wt set -g @whistle_icon_done ''
   whistle_mark_publish
   run wt_render_windows
-  assert_not_contains "$output" '✔'
+  assert_not_contains "$output" '✓'
   assert_contains "$output" 'w1'
 }
 
@@ -427,6 +428,78 @@ teardown() {
   assert_contains "$output" '🔔3'
 }
 
+# -- status-right 的四态汇总 --------------------------------------------------
+
+@test "status-right: 四态汇总按各自图标渲染，计数为 0 的也保留" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 2
+  wt set -g @whistle_count_running 1
+  wt set -g @whistle_count_done 1
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 1
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '●1'
+  assert_contains "$output" '✓1'
+  # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
+  assert_contains "$output" '◷0'
+  assert_contains "$output" '✗1'
+  # 汇总与 🔔 计数是两个独立的读法，都要在
+  assert_contains "$output" '🔔2'
+}
+
+@test "status-right: 只有 running 时也显示汇总（窗口徽章看不到别的 session）" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 0
+  wt set -g @whistle_count_running 2
+  wt set -g @whistle_count_done 0
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '●2'
+}
+
+@test "status-right: 没有任何 agent 活动时整段不出现" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 0
+  wt set -g @whistle_count_running 0
+  wt set -g @whistle_count_done 0
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+
+  run wt display -pF '#{E:status-right}'
+  assert_not_contains "$output" '●0'
+  assert_not_contains "$output" '✓0'
+}
+
+@test "status-right: 汇总 format 的大括号配平" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  local open close
+  open=$(printf '%s' "$output" | tr -cd '{' | wc -c | tr -d ' ')
+  close=$(printf '%s' "$output" | tr -cd '}' | wc -c | tr -d ' ')
+  assert_eq "$open" "$close"
+}
+
 @test "status-right: unpatch 精确还原原值" {
   wt_load core
   wt_load status-line
@@ -452,5 +525,5 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✔'
+    assert_contains "$output" 'w1✓'
 }

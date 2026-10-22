@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats      # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 199 项测试（24 单测 + 175 集成/e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 207 项测试（27 单测 + 180 集成/e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -52,7 +52,7 @@ L1 存储     tmux user option（tmux server 内存，不落盘、不跨 tmux �
 |---|---|---|
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` | **真源**，只有这里能写 |
 | window | `@whistle_win` `@whistle_win_msg` `@whistle_win_count` | 派生，由 `whistle_recompute_window` 重算 |
-| global | `@whistle_pending` `@whistle_mark` `@whistle_status_right` `@whistle_pane_mark` | 派生 / format 串 |
+| global | `@whistle_pending` `@whistle_count_*` `@whistle_mark` `@whistle_status_right` `@whistle_pane_mark` | 派生 / format 串 |
 
 **徽章必须是纯 tmux format，一个进程都不 fork。** 状态栏每 `status-interval` 重算一次，
 写成 gpakosz 那种 shell function 就会每次刷新都 fork 一个 `sh -c`。整段徽章串存进 global

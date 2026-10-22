@@ -6,7 +6,7 @@
 B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 
 ```
-  ● agentA ✔          ← 窗口徽章：这个窗口的 agent 做完了
+  ● agentA ✓          ← 窗口徽章：这个窗口的 agent 做完了
                      🔔2   ← 全局计数：全机器还有 2 件事等着你
   [agentA] 完成: 重构完成，抽出了 core.sh   ← 瞬时提示（5 秒后消失）
 ```
@@ -130,8 +130,8 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_color_error` | `#d70000` | 错误色 |
 | `@whistle_color_running` | `#5f87af` | 运行中色 |
 | `@whistle_icon_pending` | `🔔` | 全局计数前面的图标 |
-| `@whistle_icon_done` | `✔` | 完成符号 |
-| `@whistle_icon_wait` | `⏳` | 等待符号 |
+| `@whistle_icon_done` | `✓` | 完成符号 |
+| `@whistle_icon_wait` | `◷` | 等待符号 |
 | `@whistle_icon_error` | `✗` | 错误符号 |
 | `@whistle_icon_running` | `●` | 运行中符号 |
 | **调试** | | |
@@ -154,9 +154,9 @@ set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
 ```tmux
-# 换图标（默认 🔔 / ✔ / ⏳ / ✗ / ●）
+# 换图标（默认 🔔 / ✓ / ◷ / ✗ / ●）
 set -g @whistle_icon_pending '●'
-set -g @whistle_icon_done    '✓'
+set -g @whistle_icon_done    '★'
 set -g @whistle_icon_wait    '⏸'
 set -g @whistle_icon_error   '⚠'
 set -g @whistle_icon_running '▶'
@@ -200,19 +200,24 @@ set -g @whistle_icon_pending ''
 三个独立信号，可以各自开关：
 
 ```
- 1 claude.exe✔            ← ① 窗口徽章
-                   🔔2     ← ② 全局待处理计数
+ 1 claude.exe✓            ← ① 窗口徽章
+      ●1 ✓1 ◷0 ✗0   🔔2  ← ② 四态汇总 + 全局待处理计数
  [claude.exe] 完成: 重构完成，抽出了 core.sh   ← ③ 瞬时提示（5 秒）
 ```
 
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **全局计数** `🔔N` | `status-right`，**每个 session 都显示** | 全机器还有几件事等着我 |
+| **四态汇总** `●1 ✓1 ◷0 ✗0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`●` 在跑 / `✓` 完成 / `◷` 等待 / `✗` 失败） |
+| **全局计数** `🔔N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 
-跨 session 时**只有 ② 和 ③ 可见** —— 你在 B 的窗口列表里看不到 A 的窗口。
-所以 ② 才是"别处有事"的常驻信号，① 是"这个 session 里的细节"。
+汇总段只在真有 agent 活动（`●` 或 `🔔` 非零）时出现；四个格子一起出现、
+**计数为 0 的也保留**，这样状态栏宽度不会随计数跳动。
+
+跨 session 时只有 status-right 上那几项和瞬时提示可见 —— 你在 B 的窗口列表里
+看不到 A 的窗口。所以汇总和计数才是"别处有事"的常驻信号，窗口徽章是"这个
+session 里的细节"。
 
 还有一个可选的第 4 个信号：`@whistle_border_status top` 会在**每个 pane 的边框上**
 显示该 pane 自己的状态符号。同一窗口切了多个 pane 时特别有用 —— 一眼看出是哪个 pane 在等你。
@@ -223,8 +228,8 @@ set -g @whistle_icon_pending ''
 | 状态 | 徽章 | 计入 🔔 | 什么时候出现 |
 |---|---|---|---|
 | `running` | `●` | 否 | agent 开始干活 |
-| `done` | `✔` | 是 | 一轮工作结束 |
-| `wait` | `⏳` | 是 | 等你批准 / 等你输入 |
+| `done` | `✓` | 是 | 一轮工作结束 |
+| `wait` | `◷` | 是 | 等你批准 / 等你输入 |
 | `error` | `✗` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
 `running` 不计入 `🔔N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
@@ -249,10 +254,10 @@ hooks 装好后自动工作：
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
 | 发一条 prompt | — | `●`，不计入 🔔 |
-| agent 跑完一轮 | `Stop` hook | `✔` + 🔔 + 提示 |
-| agent 要你批准工具调用 | `Notification/permission_prompt` | `⏳` + 🔔 + 提示 |
+| agent 跑完一轮 | `Stop` hook | `✓` + 🔔 + 提示 |
+| agent 要你批准工具调用 | `Notification/permission_prompt` | `◷` + 🔔 + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `✗` + 🔔 + 提示（消息就是错误文本） |
-| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`✔`/`⏳`/`✗` 保留，等你处理） |
+| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`✓`/`◷`/`✗` 保留，等你处理） |
 
 ### 场景二：任何 agent / 脚本
 
