@@ -14,10 +14,22 @@ WHISTLE_MARK_SENTINEL='#{E:@whistle_mark}'
 # status-right 里的全局待处理计数占位符
 WHISTLE_RIGHT_SENTINEL='#{E:@whistle_status_right}'
 
-# 各状态在状态栏上的符号
-WHISTLE_SYM_done='✔'
-WHISTLE_SYM_wait='⏳'
-WHISTLE_SYM_error='✗'
+# whistle_icon <option> → 该状态的符号
+#
+# 图标是用户填的、而且会进 tmux format，所以必须过 whistle_sanitize：
+# 填进 # { } | 会被二次展开或截断条件式。
+#
+# 「选项不存在」与「选项被显式设成空」要区别对待：
+#   不存在 → 回落默认值（用户没配）
+#   空     → 就用空（用户明确不想要图标，比如只要一个纯数字计数）
+# 用 show 的退出码区分 —— 未设置的 option 上 tmux show 返回非零。
+whistle_icon() {
+  if _ic_raw=$(whistle_tmux show -gv "$1" 2> /dev/null); then
+    whistle_sanitize "$_ic_raw"
+  else
+    whistle_conf_default "$1"
+  fi
+}
 
 # whistle_mark_build → 打印徽章 format 串
 #
@@ -37,11 +49,14 @@ whistle_mark_build() {
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
+  _s_done=$(whistle_icon '@whistle_icon_done')
+  _s_wait=$(whistle_icon '@whistle_icon_wait')
+  _s_err=$(whistle_icon '@whistle_icon_error')
 
   _w='#{@whistle_win}'
-  printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_c_done" "$WHISTLE_SYM_done"
-  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_c_wait" "$WHISTLE_SYM_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_w" "$_c_err" "$WHISTLE_SYM_error"
+  printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_c_done" "$_s_done"
+  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_c_wait" "$_s_wait"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_w" "$_c_err" "$_s_err"
 }
 
 # whistle_status_right_build → 状态栏右侧的全局待处理计数
@@ -50,8 +65,9 @@ whistle_mark_build() {
 # 状态栏里，你在 B 时看不到 A 的窗口列表。全局计数补上这一块 ——
 # 不管你在哪个 session，都能看到"别处还有 N 件事等着"。
 whistle_status_right_build() {
-  printf '#{?@whistle_pending, #[fg=%s]🔔#{@whistle_pending}#[default],}' \
-    "$(whistle_conf '@whistle_color_wait')"
+  printf '#{?@whistle_pending, #[fg=%s]%s#{@whistle_pending}#[default],}' \
+    "$(whistle_conf '@whistle_color_wait')" \
+    "$(whistle_icon '@whistle_icon_pending')"
 }
 
 whistle_status_right_publish() {
@@ -95,11 +111,14 @@ whistle_pane_mark_build() {
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
+  _s_done=$(whistle_icon '@whistle_icon_done')
+  _s_wait=$(whistle_icon '@whistle_icon_wait')
+  _s_err=$(whistle_icon '@whistle_icon_error')
 
   _p='#{@whistle}'
-  printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$WHISTLE_SYM_done"
-  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$WHISTLE_SYM_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_p" "$_c_err" "$WHISTLE_SYM_error"
+  printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$_s_done"
+  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$_s_wait"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_p" "$_c_err" "$_s_err"
 }
 
 whistle_pane_mark_publish() {

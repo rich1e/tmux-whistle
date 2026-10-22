@@ -59,11 +59,20 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_color_done #00af00
 @whistle_color_wait #af8700
 @whistle_color_error #d70000
+@whistle_icon_pending 🔔
+@whistle_icon_done ✔
+@whistle_icon_wait ⏳
+@whistle_icon_error ✗
 @whistle_display_ms 0
 @whistle_debug off
 @whistle_detect off
 @whistle_detect_interval 15
 @whistle_detect_idle 180'
+
+# whistle_conf_default <option 名> → 默认表里的值（不查 tmux）
+whistle_conf_default() {
+  printf '%s\n' "$WHISTLE_DEFAULTS" | grep "^$1 " | head -1 | cut -d' ' -f2-
+}
 
 # whistle_conf <option 名> → 生效值（option 优先，缺省回落默认表）
 whistle_conf() {
@@ -72,7 +81,7 @@ whistle_conf() {
     printf '%s' "$_cv"
     return 0
   fi
-  printf '%s\n' "$WHISTLE_DEFAULTS" | grep "^$1 " | head -1 | cut -d' ' -f2-
+  whistle_conf_default "$1"
 }
 
 # -- 纯函数（§4.0：不碰 tmux） ---------------------------------------------

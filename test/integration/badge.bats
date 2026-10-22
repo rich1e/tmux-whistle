@@ -247,6 +247,95 @@ teardown() {
     assert_contains "$output" '#{window_name}'
 }
 
+# -- 图标可配置 --------------------------------------------------------------
+
+@test "图标: 默认各状态符号不变" {
+  wt_load core
+  wt_load status-line
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+
+  wt set -w -t w1 @whistle_win "done"
+  run wt_render_windows
+  assert_contains "$output" 'w1✔'
+}
+
+@test "图标: @whistle_icon_done 可改成任意符号" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_icon_done '✓'
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+
+  wt set -w -t w1 @whistle_win "done"
+  run wt_render_windows
+  assert_contains "$output" 'w1✓'
+  assert_not_contains "$output" '✔'
+}
+
+@test "图标: wait 与 error 也各自可改" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_icon_wait '⏸'
+  wt set -g @whistle_icon_error '⚠'
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+
+  wt set -w -t w1 @whistle_win "wait"
+  run wt_render_windows
+  assert_contains "$output" 'w1⏸'
+
+  wt set -w -t w1 @whistle_win "error"
+  run wt_render_windows
+  assert_contains "$output" 'w1⚠'
+}
+
+@test "图标: @whistle_icon_pending 改的是全局计数前面的符号" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_icon_pending '●'
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+  wt set -g @whistle_pending 3
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '●3'
+  assert_not_contains "$output" '🔔'
+}
+
+@test "图标: 显式设成空串表示不要图标（区别于未设置）" {
+  wt_load core
+  wt_load status-line
+  # 未设置 → 用默认 ✔
+  wt set -w -t w1 @whistle_win "done"
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+  run wt_render_windows
+  assert_contains "$output" 'w1✔'
+
+  # 显式空串 → 徽章位置什么都没有
+  wt set -g @whistle_icon_done ''
+  whistle_mark_publish
+  run wt_render_windows
+  assert_not_contains "$output" '✔'
+  assert_contains "$output" 'w1'
+}
+
+@test "图标: 填进 format 特殊字符会被消毒，不破坏渲染" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_icon_done '#{host}'
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+
+  wt set -w -t w1 @whistle_win "done"
+  run wt_render_windows
+  # # { } 被剔掉，剩下 host —— 关键是没有被二次展开成主机名
+  assert_contains "$output" 'host'
+  assert_not_contains "$output" '#{'
+}
+
 # -- status-right 的全局计数（跨 session 可见性） ------------------------------
 
 @test "status-right: 幂等注入，连续 patch 只有一处" {

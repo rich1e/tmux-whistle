@@ -11,6 +11,17 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
   [agentA] 完成: 重构完成，抽出了 core.sh   ← 瞬时提示（5 秒后消失）
 ```
 
+## 功能特性
+
+- **推送而非轮询**：agent 通过 hook 主动上报状态，tmux 不去 `capture-pane` 猜提示符 —— 没有扫描成本，也没有误报
+- **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`、`running` 四态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
+- **跨 session 且粘性**：通知出现在你正看着的那个 session，一直保留到你切进去处理完
+- **六个独立信号**：窗口徽章、全局计数 `🔔N`、边框变色、边框状态行、瞬时提示、桌面通知，各管各的，可单独关闭
+- **任何 agent 都能接入**：Claude Code 装上 hooks 即用；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
+- **零运行时依赖**：只用 tmux 自身能力，兼容 oh-my-tmux 与 tpm / tpack
+
+详见 [使用](#使用)、[配置](#配置)、[兼容性](#兼容性)。
+
 ## 为什么不是 monitor-activity
 
 | | monitor-activity | tmux-notify | tmux-whistle |
@@ -112,6 +123,10 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_color_done` | `#00af00` | 完成色 |
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
+| `@whistle_icon_pending` | `🔔` | 全局计数前面的图标 |
+| `@whistle_icon_done` | `✔` | 完成符号 |
+| `@whistle_icon_wait` | `⏳` | 等待符号 |
+| `@whistle_icon_error` | `✗` | 错误符号 |
 | **调试** | | |
 | `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
@@ -131,7 +146,20 @@ set -g @whistle_color_done '#00af00'  # 改色
 set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
-**改颜色不需要重载配置** —— 徽章是纯 format，重跑一次 `scripts/setup.sh`（或 `prefix + r`）即可。
+```tmux
+# 换图标（默认 🔔 / ✔ / ⏳ / ✗）
+set -g @whistle_icon_pending '●'
+set -g @whistle_icon_done    '✓'
+set -g @whistle_icon_wait    '⏸'
+set -g @whistle_icon_error   '⚠'
+
+# 显式设成空串 = 不要图标，只留颜色和数字
+set -g @whistle_icon_pending ''
+```
+
+图标要过一遍消毒（剔掉 `# { } |`），所以填这些字符不会破坏状态栏。**设成空串**与**不设置**是两回事：不设置用默认图标，设成空串就是真的不显示。
+
+**改颜色和图标不需要重载配置** —— 徽章是纯 format，重跑一次 `scripts/setup.sh`（或 `prefix + r`）即可。
 
 > `@whistle_badge` / `@whistle_self` 这类**开关**也建议重载一次：它们决定徽章
 > format 的内容与投递目标，重载（`prefix + r`）能让改动立刻生效。
