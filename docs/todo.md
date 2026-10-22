@@ -12,8 +12,6 @@
 
 - [ ] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [ ] **TODO-2** 菜单超过 26 项时静默截断
-- [ ] **TODO-5** `@whistle_badge` 没有任何代码读，设 `off` 无效
-- [ ] **TODO-6** `@whistle_self` 的行为与名字/文档相反
 
 ### 文档缺陷
 
@@ -24,6 +22,8 @@
 
 - [x] **TODO-3** 菜单第 10 项起没有快捷键
 - [x] **TODO-4** `make fmt-check` 实际没有检查 bash 测试文件
+- [x] **TODO-5** `@whistle_badge` 没有任何代码读
+- [x] **TODO-6** `@whistle_self` 的行为与名字/文档相反
 
 ---
 
@@ -149,7 +149,7 @@ posix 方言解析失败 → shfmt 报错到 stderr、stdout 为空 → 脚本�
 
 ## TODO-5 · `@whistle_badge` 没有任何代码读
 
-⬜ 待处理
+✅ 已修复（`lib/status-line.sh` 的 `whistle_mark_build`）
 
 **现象**：README 配置表写着 `@whistle_badge off` = 关掉窗口徽章，但设成 `off`
 之后徽章照常出现。
@@ -183,13 +183,22 @@ tmux show -gwv window-status-format
 **回归测试**：设 `off` 后 `whistle_deliver` 跑一遍，断言
 `window-status-format` 里哨兵要么不存在、要么渲染为空；再设回 `on` 断言徽章恢复。
 
+**已修**：选了「注入但渲染为空」—— `whistle_mark_build` 在 `@whistle_badge off`
+时直接返回空串。哨兵照常注入、渲染为空，`window-status-format` 的其余内容不受影响，
+也不需要事后回滚（回滚会和 `whistle_ensure_status_line` 的自愈逻辑打架）。
+
+**回归测试**（`test/integration/badge.bats` 3 条）：`off` 时不渲染徽章但格式保持；
+从 `off` 改回 `on` 后徽章恢复；`off` 不影响 `status-right` 的全局计数
+（后两条是防「修过头」——徽章和计数是两个独立信号）。
+
 **相关代码**：`lib/status-line.sh` 的 `whistle_format_patch` / `whistle_mark_build`。
 
 ---
 
 ## TODO-6 · `@whistle_self` 的行为与名字相反
 
-⬜ 待处理 · **语义已定**：`on` = 提示自己所在的 session，`off` = 不提示
+✅ 已修复（`lib/deliver.sh` 的 `whistle_display_fanout`）
+· 语义：`on` = 提示自己所在的 session，`off` = 不提示
 
 **现象**：文档与选项名都说「是否**也**提示自己所在的 session」，默认 `off`，
 但实际行为是反的。实测（打桩记录 `display-message` 的目标）：
@@ -221,25 +230,36 @@ done
 
 **修复方向**：把开关移到 origin 那一条上，扇出循环改为无条件执行 ——
 
+**已修**：按上面的方案实现了，并把重复的 `display-message` 调用抽成
+`whistle_display_to`（origin 与扇出两条路径共用，`-d` 的时长判断只写一次）：
+
 ```sh
 # 发往 origin 的那条由 @whistle_self 决定
 if [ "$(whistle_conf '@whistle_self')" = on ]; then
-  display_message_to "$_origin" "$_body"
+  whistle_display_to "$_origin" "$_body"
 fi
 # 扇出给其它 attached session，与 self 无关
 for _s in $(... list-clients ...); do
   [ "$_s" = "$_origin" ] && continue
-  display_message_to "$_s" "$_body"
+  whistle_display_to "$_s" "$_body"
 done
 ```
 
-**行为变更提醒**：修完之后**默认行为会变** —— 改前默认会提示自己所在 session，
-改后默认不再提示。这是往「不打扰自己」的预期靠拢，但对已有用户是可见变化，
-建议在 README 的调优小节里说明一句。
+**行为变更**：默认行为已变 —— 改前默认会提示自己所在 session，改后默认不再提示。
+这是往「不打扰自己」的预期靠拢，但对已有用户是可见变化。README 的调优一节已补一张
+表说明四种组合，并提示单 session 用户需要开 `@whistle_self on`。
 
-**回归测试**：目前 `deliver.bats` 里那条 `@whistle_self on` 的用例只断言了
-`status == 0`，**完全没有断言目标 session**。需要打桩 `whistle_tmux` 记录
-`display-message` 的 `-t` 参数，分别断言 on/off 两种取值下的目标集合。
+**回归测试**（`test/integration/deliver.bats` 3 条）：`off` 时不提示 origin；
+`on` 时提示 origin；同一 session 的多个 client 只收一次。
+
+原用例只断言了 `status == 0`，**完全没有断言目标 session** —— 这就是它能长期
+藏着的原因。新的用例打桩 `whistle_tmux` 记录 `display-message` 的 `-t` 参数。
+
+写这批用例时踩到一个坑，值得单独记：**打桩函数里捕获的变量不能用 `local`**。
+`whistle_tmux` 是在 helper 里定义的，但调用它的是测试体 —— helper 早已返回，
+`local` 变量随之失效，打桩于是**安静地返回空**。第一版用例就是这么假绿的：
+`self=on` 的断言通过了，但根本没验证到 origin 以外的目标。
+「打桩没生效」这种失败模式不会报错，只会让你以为自己测过了。
 
 **相关代码**：`lib/deliver.sh` 的 `whistle_display_fanout`。
 

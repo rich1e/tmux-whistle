@@ -133,6 +133,22 @@ set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 
 **改颜色不需要重载配置** —— 徽章是纯 format，重跑一次 `scripts/setup.sh`（或 `prefix + r`）即可。
 
+> `@whistle_badge` / `@whistle_self` 这类**开关**也建议重载一次：它们决定徽章
+> format 的内容与投递目标，重载（`prefix + r`）能让改动立刻生效。
+
+### `@whistle_self` 到底控制什么
+
+它只管**发起方自己所在的**那个 session（也就是 agent 跑任务的那个 session），
+不管其它 session 的扇出：
+
+| | 你在别的 session（常见情况） | 你和 agent 在同一个 session |
+|---|---|---|
+| `off`（默认） | 收得到（其它 session 的扇出） | **收不到**瞬时提示 |
+| `on` | 收得到 | 也收得到 |
+
+也就是说：**只有你一个人、且只有一个 session 时，默认配置下不会有瞬时提示**。
+那种场景想看到提示，开 `@whistle_self on`，或者直接看窗口徽章 / `🔔N`。
+
 ### 徽章在 oh-my-tmux 里的位置
 
 徽章走 oh-my-tmux 的官方扩展点 `tmux_conf_theme_window_status_format`，落在 powerline
