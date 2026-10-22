@@ -170,6 +170,26 @@ whistle_state_label() {
   esac
 }
 
+# 往一个 session 发瞬时提示。
+#
+# display-time 为 0 时不传 -d，让 tmux 用它自己的 display-time。
+# -d 0 是"一直显示到被覆盖"，会和新消息互相顶掉，不能用。
+whistle_display_to() {
+  _dt_sess="$1"
+  _dt_body="$2"
+  _dt_dur=$(whistle_conf '@whistle_display_ms')
+  if [ "$_dt_dur" != 0 ]; then
+    whistle_tmux display-message -d "$_dt_dur" -t "$_dt_sess" "$_dt_body" 2> /dev/null || true
+  else
+    whistle_tmux display-message -t "$_dt_sess" "$_dt_body" 2> /dev/null || true
+  fi
+}
+
+# 扇出到所有该看到的 session。
+#
+# @whistle_self 只管**发起方自己所在的**那个 session：on 才提示它。
+# 扇出给其它 attached session 与该开关无关（原理 5：按 session 广播而非按
+# client，这样同一 session 的多个 client 都能收到）。
 whistle_display_fanout() {
   _win="$1"
   _state="$2"
@@ -181,26 +201,13 @@ whistle_display_fanout() {
   _body="[$_origin] $(whistle_state_label "$_state")"
   [ -n "$_msg" ] && _body="$_body: $_msg"
 
-  # display-time 为 0 时不传 -d，让 tmux 用它自己的 display-time。
-  # -d 0 是"一直显示到被覆盖"，会和新消息互相顶掉，不能用。
-  _dur=$(whistle_conf '@whistle_display_ms')
-  if [ "$_dur" != 0 ]; then
-    whistle_tmux display-message -d "$_dur" -t "$_origin" "$_body" 2> /dev/null || true
-  else
-    whistle_tmux display-message -t "$_origin" "$_body" 2> /dev/null || true
+  if [ "$(whistle_conf '@whistle_self')" = on ]; then
+    whistle_display_to "$_origin" "$_body"
   fi
 
-  [ "$(whistle_conf '@whistle_self')" = on ] && return 0
-
-  # 扇出到其它 attached session（原理 5：按 session 广播而非按 client，
-  # 这样同一 session 的多个 client 都能收到）
   for _s in $(whistle_tmux list-clients -F '#{client_session}' 2> /dev/null | sort -u); do
     [ "$_s" = "$_origin" ] && continue
-    if [ "$_dur" != 0 ]; then
-      whistle_tmux display-message -d "$_dur" -t "$_s" "$_body" 2> /dev/null || true
-    else
-      whistle_tmux display-message -t "$_s" "$_body" 2> /dev/null || true
-    fi
+    whistle_display_to "$_s" "$_body"
   done
 }
 

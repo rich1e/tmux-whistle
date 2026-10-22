@@ -72,6 +72,88 @@ win_of() {
   assert_eq "$status" 0
 }
 
+# -- 扇出目标：@whistle_self --------------------------------------------------
+#
+# 打桩 whistle_tmux 记录 display-message 的 -t 参数。headless server 没有
+# attached client，list-clients 是空的，不打桩就只能断言 "不崩" —— 而这正是
+# 本 bug 长期没被发现的原因（旧的 @whistle_self 用例只断言了 status==0）。
+
+stub_display_targets() {
+  local calls="$1"; shift
+  : > "$calls"
+
+  # _sd_calls / _sd_clients 必须用全局变量：whistle_tmux 是在这里定义的，
+  # 但调用它的是测试体 —— 本函数早已返回，local 变量随之失效，
+  # 打桩就会安静地返回空（正是这个坑让第一版用例假绿）。
+  _sd_calls="$calls"
+  _sd_clients=$(printf '%s\n' "$@")
+
+  # 复制原函数留个后门：配置读取（show）必须仍走真实 tmux。
+  # 否则 whistle_conf 拿到空值会回落到默认值表，开关设了也不生效。
+  eval "_sd_real_tmux() $(declare -f whistle_tmux | tail -n +2)"
+
+  # shellcheck disable=SC2329  # 由被 source 的 deliver 函数间接调用
+  whistle_tmux() {
+    case "${1:-}" in
+    display-message)
+      case "$*" in
+      *"#{session_name}"*) printf 'origin-sess' ;;
+      *) printf '%s\n' "$*" >> "$_sd_calls" ;;
+      esac
+      ;;
+    list-clients) printf '%s' "$_sd_clients" ;;
+    *) _sd_real_tmux "$@" ;;
+    esac
+    return 0
+  }
+}
+
+@test "display: @whistle_self off 时不提示发起方所在的 session" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self off
+  local calls="$BATS_TEST_TMPDIR/self_off"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess
+
+  whistle_display_fanout "$w" "done" 'x'
+
+  # 断言 -t 目标而不是裸 session 名：消息体本身是 "[origin-sess] 完成: x"，
+  # 里面就含 origin-sess 这个字符串。
+  run cat "$calls"
+  assert_contains "$output" '-t other-sess'
+  assert_eq "$(count_occurrences "$output" '-t origin-sess')" 0
+}
+
+@test "display: @whistle_self on 时也提示发起方所在的 session" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/self_on"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess
+
+  whistle_display_fanout "$w" "done" 'x'
+
+  run cat "$calls"
+  assert_contains "$output" '-t origin-sess'
+  assert_contains "$output" '-t other-sess'
+}
+
+@test "display: 扇出按 session 去重，同一 session 的两个 client 只收一次" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/dedup"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess other-sess
+
+  whistle_display_fanout "$w" "done" 'x'
+
+  run cat "$calls"
+  assert_eq "$(count_occurrences "$output" '-t other-sess')" 1
+}
+
 # -- 状态栏重画门控（KP-15） -----------------------------------------------
 
 @test "KP-15: 只刷新受影响 session 的 client，且带 -S（只刷状态栏）" {
