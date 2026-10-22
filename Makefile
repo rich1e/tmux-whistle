@@ -64,9 +64,10 @@ fmt: ## shfmt 原地格式化（按方言分两次调用）
 
 fmt-check: ## 格式检查（有未格式化文件则非零退出）
 	@command -v $(SHFMT) >/dev/null 2>&1 || { echo '缺 shfmt，先跑 make deps'; exit 1; }
-	@out=$$($(SHFMT) -l $(SHFMT_FLAGS) -ln=posix $(POSIX_SH) $(BASH_SH)); \
-	if [ -n "$$out" ]; then \
-		echo '以下文件未格式化，跑 make fmt：'; echo "$$out"; exit 1; \
+	@out=$$($(SHFMT) -l $(SHFMT_FLAGS) -ln=posix $(POSIX_SH)); \
+	out2=$$($(SHFMT) -l $(SHFMT_FLAGS) -ln=bash $(BASH_SH)); \
+	if [ -n "$$out$$out2" ]; then \
+		echo '以下文件未格式化，跑 make fmt：'; echo "$$out$$out2"; exit 1; \
 	fi
 
 ## -- 测试 ------------------------------------------------------------------
