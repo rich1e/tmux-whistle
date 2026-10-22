@@ -72,6 +72,73 @@ pane_of() {
   assert_eq "$output" ''
 }
 
+# -- 键位（回归：第 10 项起曾算成空） ---------------------------------------
+
+# 造 n 个待处理窗口（含 wt_start 自带的 w1）
+seed_pending_windows() {
+  local n="$1" i p
+  for ((i = 2; i <= n; i++)); do
+    wt new-window -d -n "w$i"
+  done
+  for ((i = 1; i <= n; i++)); do
+    p=$(wt display -p -t "w$i" '#{pane_id}')
+    "$CLI" "done" "m$i" -t "$p"
+  done
+}
+
+# 每项是 label / key / command 三行，取每组的第 2 行
+menu_keys() {
+  printf '%s\n' "$1" | awk 'NR % 3 == 2'
+}
+
+@test "menu-args: 第 9 项是数字 9，第 10 项起接字母" {
+  # 1-9 用数字，之后接字母表：第 10 项应落在字母表第 1 位。
+  # 曾同时踩两个坑：位置算成 $1 - 10（第 10 项得到 0），且算术展开后多写了一个
+  # ')'（cut 收到 "0)" 而非 "0"）。两者都让 cut 报错、stderr 被吞、key 变空。
+  # 空 key 在 display-menu 里合法（表示"无快捷键"），所以菜单照常弹出、
+  # 只是那一项不能用键选中 —— 不报错，靠断言才抓得到。
+  seed_pending_windows 11
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+
+  local keys
+  keys=$(menu_keys "$output")
+  assert_eq "$(printf '%s\n' "$keys" | sed -n 9p)" '9'
+  assert_eq "$(printf '%s\n' "$keys" | sed -n 10p)" 'a'
+  assert_eq "$(printf '%s\n' "$keys" | sed -n 11p)" 'b'
+}
+
+@test "menu-args: 满 26 项时键位全部非空且互不相同" {
+  # 上限是 26（9 个数字 + 17 个字母，a..q），第 26 项是 q
+  seed_pending_windows 26
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+
+  local keys total nonempty distinct
+  keys=$(menu_keys "$output")
+  total=$(printf '%s\n' "$keys" | wc -l | tr -d ' ')
+  nonempty=$(printf '%s\n' "$keys" | grep -c .)
+  distinct=$(printf '%s\n' "$keys" | sort -u | wc -l | tr -d ' ')
+
+  assert_eq "$total" 26
+  assert_eq "$nonempty" 26
+  assert_eq "$distinct" 26
+  assert_eq "$(printf '%s\n' "$keys" | sed -n 26p)" 'q'
+}
+
+@test "menu-args: 超过 26 项时截断到 26" {
+  seed_pending_windows 28
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+
+  local total
+  total=$(menu_keys "$output" | wc -l | tr -d ' ')
+  assert_eq "$total" 26
+}
+
 @test "menu-args: 命令里用的是 CLI 绝对路径（不依赖 PATH）" {
   "$CLI" "done" 'x'
   run "$CLI" --menu-args

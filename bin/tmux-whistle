@@ -167,11 +167,23 @@ EOF
 
 # -- 菜单 / 跳转 -----------------------------------------------------------
 
-# display-menu 的键位是单字符：1-9 之后接字母，最多 26 项
+# display-menu 的键位是单字符：1-9 之后接字母，最多 26 项（9 + 17 = a..q）
+#
+# 两个坑叠在一起，症状相同（第 10 项起 key 为空）：
+#   1. 位置算成了 $1 - 10，第 10 项得到 0 —— cut 不接受 0
+#   2. 算术展开后面多写了一个 ')'，cut 实际收到的是 "1)" 而不是 "1"
+# 两者都让 cut 报错；stderr 被 2>/dev/null 吞掉，key 变成空串。
+# 空 key 在 display-menu 里**合法**（表示"无快捷键"），所以菜单照常弹出、
+# 只是第 10 项往后全都不能用键选中 —— 不报错、不崩溃，只能靠断言抓。
+#
+# 位置单独算进变量：嵌套三层 $() 加引号里再塞算术，少一个括号看不出来。
 whistle_menu_key() {
   case "$1" in
   [1-9]) printf '%s' "$1" ;;
-  *) printf '%s' "$(printf '%s' abcdefghijklmnopqrstuvwxyz | cut -c "$(($1 - 10)))" 2> /dev/null)" ;;
+  *)
+    _mk_pos=$(($1 - 9))
+    printf '%s' "$(printf '%s' abcdefghijklmnopqrstuvwxyz | cut -c "$_mk_pos" 2> /dev/null)"
+    ;;
   esac
 }
 
