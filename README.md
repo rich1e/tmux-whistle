@@ -11,7 +11,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
   [agentA] 完成: 重构完成，抽出了 core.sh   ← 瞬时提示（5 秒后消失）
 ```
 
-## 它和 monitor-activity / tmux-notify 有什么不同
+## 为什么不是 monitor-activity
 
 | | monitor-activity | tmux-notify | tmux-whistle |
 |---|---|---|---|
@@ -24,39 +24,58 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 根本差别：**"我做完了"和"我在等你"是 agent 自己的判断**，tmux 层面看不到。
 所以 tmux-whistle 不去猜，而是让 agent 通过 hook 主动告诉我们。
 
+---
+
 ## 安装
 
-### 用 tpm / tpack（推荐）
+### 方式一：tpm / tpack（推荐）
 
 ```tmux
 # ~/.tmux.conf 或 ~/.config/tmux/tmux.conf.local
 set -g @plugin 'rich1e/tmux-whistle'
 ```
 
-然后 `prefix + I`。
+然后按 `prefix + I`。tpm 会 clone 仓库并执行插件入口，徽章、全局计数、
+边框、瞬时提示、`prefix + W` 菜单随即就位。
 
-### 本地开发
+**还要补两步**（tpm 路径不会自动做）：
 
 ```sh
-git clone <this repo> ~/code/tmux-whistle
-cd ~/code/tmux-whistle
-./install.sh          # 符号链接 + 写 tmux.conf.local + 装 Claude Code hooks
+# ① 装 Claude Code hooks —— 不装的话 agent 干完不会自动亮徽章
+~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle install-hooks
+
+# ② 把 CLI 链进 PATH —— 不装的话 tmux-whistle 命令找不到
+ln -sfn ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle ~/.local/bin/tmux-whistle
 ```
 
-`install.sh` 只往 `tmux.conf.local` 追加一段带 marker 的配置，卸载用 `./install.sh --uninstall`。
-先看会改什么：`./install.sh --dry-run`。
+### 方式二：手动安装（不用 tpm）
 
-> 不要把它手动链接进 `~/.config/tmux/plugins/`：oh-my-tmux 重载时会跑 tpm 的
-> `clean_plugins`，没有 `@plugin` 声明的目录会被**直接删掉**。
+```sh
+git clone https://github.com/rich1e/tmux-whistle.git
+cd tmux-whistle
+./install.sh          # 链接 + 写 tmux.conf.local + 装 Claude Code hooks
+```
 
-安装完：
+`install.sh` 做四件事：
+
+1. 把仓库软链到 `~/.local/share/tmux-whistle`
+2. 把 CLI 软链到 `~/.local/bin/tmux-whistle`（hook 与命令行都要能找到它）
+3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块
+4. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`
+
+先看它会改什么：`./install.sh --dry-run`。卸载：`./install.sh --uninstall`。
+
+> **两条路别混用。** `install.sh` 会往 `tmux.conf.local` 写一行加载插件的命令；
+> 如果 tpm 也装了同一个插件，就会加载两份、互相覆盖 `@whistle_root`。选一条即可。
+
+装完重载 tmux：
 
 ```sh
 tmux source-file ~/.config/tmux/tmux.conf    # 或 prefix + r
 tmux-whistle doctor
 ```
 
-### macOS 上额外一步（**必做**，否则系统通知静默失效）
+### macOS：系统通知授权（**必做**，否则系统通知静默失效）
 
 ```sh
 osascript -e 'display notification "tmux-whistle 测试"'
@@ -66,9 +85,65 @@ osascript -e 'display notification "tmux-whistle 测试"'
 `osascript` 的通知是通过系统的 Script Editor 路由的；未授权时它**静默失败，不报错**。
 装了 `terminal-notifier` 的话会优先用它，没有这个问题。
 
-## 用法
+---
 
-### 你在状态栏上会看到什么
+## 配置
+
+所有配置都是 tmux 的 user option，写在 `~/.config/tmux/tmux.conf.local` 里长期生效，
+或者用 `set -g` 临时改。
+
+### 配置项
+
+| option | 默认 | 说明 |
+|---|---|---|
+| **总开关** | | |
+| `@whistle_enabled` | `on` | 总开关 |
+| **投递渠道**（各管各的，互不影响） | | |
+| `@whistle_badge` | `on` | 窗口标签徽章 |
+| `@whistle_border` | `on` | pane 边框变色 |
+| `@whistle_border_status` | `off` | pane 边框状态行：`top` / `bottom`，分屏时按 pane 显示符号 |
+| `@whistle_display` | `on` | 状态栏瞬时提示 |
+| `@whistle_os` | `off` | 桌面系统通知 |
+| **行为** | | |
+| `@whistle_self` | `off` | 是否也提示自己所在的 session |
+| `@whistle_clear_on_focus` | `on` | 切进窗口自动清除 |
+| `@whistle_display_ms` | `0` | 瞬时提示显示时长，`0` = 跟随 tmux 的 `display-time` |
+| **外观** | | |
+| `@whistle_color_done` | `#00af00` | 完成色 |
+| `@whistle_color_wait` | `#af8700` | 等待色 |
+| `@whistle_color_error` | `#d70000` | 错误色 |
+| **调试** | | |
+| `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
+| `@whistle_detect` | `off` | 关键词兜底检测（见下） |
+| `@whistle_detect_interval` | `15` | 兜底检测的轮询间隔（秒） |
+| `@whistle_detect_idle` | `180` | 输出静默多少秒判为完成 |
+
+### 改完怎么生效
+
+- 写在 `tmux.conf.local` 里 → `prefix + r` 重载
+- 命令行临时改 → 立刻生效：
+
+```tmux
+set -g @whistle_badge off          # 关掉窗口徽章，只留全局计数
+set -g @whistle_border off         # 关掉 pane 边框变色
+set -g @whistle_self on            # 也提示自己所在的 session
+set -g @whistle_color_done '#00af00'  # 改色
+set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
+```
+
+**改颜色不需要重载配置** —— 徽章是纯 format，重跑一次 `scripts/setup.sh`（或 `prefix + r`）即可。
+
+### 徽章在 oh-my-tmux 里的位置
+
+徽章走 oh-my-tmux 的官方扩展点 `tmux_conf_theme_window_status_format`，落在 powerline
+芯片**内部**而不是外侧。没配这个扩展点的话，插件会自己 patch `window-status-format`
+兜底 —— 效果一致。
+
+---
+
+## 使用
+
+### 状态栏上会看到什么
 
 三个独立信号，可以各自开关：
 
@@ -102,6 +177,17 @@ osascript -e 'display notification "tmux-whistle 测试"'
 
 `running` 刻意不显示徽章 —— agent 在跑的时候你不需要被打扰。
 
+### 怎么响应
+
+| 操作 | 效果 |
+|---|---|
+| **`prefix + W`** | 弹出待处理菜单，按数字键选中 → 跳过去并清除 |
+| **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
+| `prefix + W` 之外还想要列表 | `tmux-whistle list`（含消息与已存在时长） |
+| 都不想做 | `tmux-whistle clear -a` 全清 |
+
+**典型流程**：在 B 看到 🔔2 → `prefix + W` → 按 `1` → 落到 A 的那个窗口，徽章自己消失。
+
 ### 场景一：Claude Code —— 装上就能用，无需任何操作
 
 hooks 装好后自动工作：
@@ -126,17 +212,6 @@ long_job.sh && tmux-whistle done "备份完成" || tmux-whistle error "备份失
 tmux-whistle wait "需要你选数据库"
 ```
 
-### 怎么响应
-
-| 操作 | 效果 |
-|---|---|
-| **`prefix + W`** | 弹出待处理菜单，按数字键选中 → 跳过去并清除 |
-| **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
-| `prefix + W` 之外还想要列表 | `tmux-whistle list`（含消息与已存在时长） |
-| 都不想做 | `tmux-whistle clear -a` 全清 |
-
-**典型流程**：在 B 看到 🔔2 → `prefix + W` → 按 `1` → 落到 A 的那个窗口，徽章自己消失。
-
 ### 命令速查
 
 ```sh
@@ -156,7 +231,9 @@ tmux-whistle doctor                # 自检
 
 不给 `-t` 时默认作用于当前 pane（`$TMUX_PANE`）；也支持 `-t %3` / `-t other:api`。
 
-### 桌面通知（可选，默认关）
+---
+
+## 桌面通知（可选，默认关）
 
 开了之后离开 tmux 也能收到：
 
@@ -170,78 +247,6 @@ set -g @whistle_os on                          # ② 确认能弹窗后再开
 ```
 
 不先授权就开，它会**静默失败** —— 你以为开了，其实什么都收不到。
-
-### 调优
-
-```tmux
-set -g @whistle_badge   off          # 关掉窗口徽章，只留全局计数
-set -g @whistle_border  off          # 关掉 pane 边框变色
-set -g @whistle_self    on           # 也提示自己所在的 session
-set -g @whistle_color_done '#00af00' # 改色
-set -g @whistle_display_ms 3000      # 瞬时提示显示 3 秒
-```
-
-改完 `prefix + r` 生效，不用重启。
-
-### 出问题时
-
-```sh
-tmux-whistle doctor                  # 逐项自检：版本 / 注入 / 渠道 / hooks / 失效绑定
-tmux-whistle list                    # 状态确实写进去了吗
-```
-
-还查不出来就开调试日志：
-
-```tmux
-set -g @whistle_debug on
-# 日志写到 ${TMPDIR:-/tmp}/tmux-whistle.log
-```
-
-
-## Claude Code 集成
-
-`install-hooks` 会往 `~/.claude/settings.json` **追加**四条 hook（`async: true`，不阻塞 agent）：
-
-| 事件 | 变成 | 消息来自 |
-|---|---|---|
-| `Stop` | `done`（工作完成） | `last_assistant_message` |
-| `Notification` / `permission_prompt` | `wait`（等你批准） | `message` |
-| `Notification` / `agent_needs_input` | `wait` | `message` |
-| `Notification` / `agent_completed` | `done` | `message` |
-| `UserPromptSubmit`、`SessionStart` | `running`（熄灭徽章） | — |
-
-`auth_success` / `quota_*` / `plugin_notification` 等无关通知会被忽略，不会刷屏状态栏。
-
-**你已有的 hooks 不会被覆盖** —— 合并前自动备份到 `settings.json.bak.<时间戳>`，
-只增删带 `tmux-whistle` 标记的条目。
-
-```sh
-tmux-whistle install-hooks --dry-run    # 先看合并结果
-tmux-whistle install-hooks --uninstall  # 精确摘除
-```
-
-## 配置
-
-写在 tmux 里（`set -g ...`），或放进 `.tmux.conf.local`：
-
-| option | 默认 | 说明 |
-|---|---|---|
-| `@whistle_enabled` | `on` | 总开关 |
-| `@whistle_badge` | `on` | 窗口标签徽章 |
-| `@whistle_border` | `on` | pane 边框变色 |
-| `@whistle_border_status` | `off` | pane 边框状态行：`top` / `bottom`，分屏时按 pane 显示符号 |
-| `@whistle_display` | `on` | 状态栏瞬时提示 |
-| `@whistle_os` | `off` | 桌面系统通知 |
-| `@whistle_self` | `off` | 是否也提示自己所在的 session |
-| `@whistle_clear_on_focus` | `on` | 切进窗口自动清除 |
-| `@whistle_color_done` | `#00af00` | 完成色 |
-| `@whistle_color_wait` | `#af8700` | 等待色 |
-| `@whistle_color_error` | `#d70000` | 错误色 |
-| `@whistle_display_ms` | `0` | `0` = 跟随 tmux 的 `display-time` |
-| `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
-| `@whistle_detect` | `off` | 关键词兜底检测（见下） |
-
-改颜色后重跑 `scripts/setup.sh`（或 `prefix r`）即刻生效，不用重启。
 
 ## 兜底检测（可选，默认关）
 
@@ -260,7 +265,7 @@ set -g @whistle_detect_interval 15
 
 ```zsh
 # ~/.zshrc
-source ~/.local/share/tmux-whistle/share/whistle.zsh    # 或插件目录下的 share/whistle.zsh
+source /path/to/tmux-whistle/share/whistle.zsh
 ```
 
 ## 兼容性
@@ -271,30 +276,21 @@ source ~/.local/share/tmux-whistle/share/whistle.zsh    # 或插件目录下的 
 - tpm / tpack：标准插件布局（`*.tmux` 入口）
 - 运行时零第三方依赖；只有 `osascript` / `notify-send` / `terminal-notifier` 这些系统工具，缺失则静默跳过
 
-## 开发
+## 出问题时
 
 ```sh
-make deps     # 装 bats-core / shellcheck / shfmt
-make check    # lint + 格式检查 + 全部测试
-make fmt      # shfmt 格式化
+tmux-whistle doctor                  # 逐项自检：版本 / 注入 / 渠道 / hooks / 失效绑定
+tmux-whistle list                    # 状态确实写进去了吗
 ```
 
-测试全程在 `tmux -L whistle-test-*` 隔离 server 上跑，**不会碰你正在用的 tmux**。
+还查不出来就开调试日志：
 
-```
-lib/core.sh          状态机（唯一写入点，纯函数可单测）
-lib/status-line.sh   徽章 format 生成 + 幂等注入
-lib/deliver.sh       四渠道投递
-lib/detect.sh        关键词兜底
-hooks/claude-code.sh Claude Code hook 适配器
+```tmux
+set -g @whistle_debug on
+# 日志写到 ${TMPDIR:-/tmp}/tmux-whistle.log
 ```
 
-开发命令见 `make help`。
+## 文档
 
-## 已知边界
-
-- 状态存在 tmux server 内存里，**不跨 tmux 重启**。通知本就不该有陈旧残留。
-- 不在 tmux 里运行时 hook 静默退出（没有状态栏可显示）。
-- `osascript` 通知归属显示为 "Script Editor"，这是系统行为，不是 bug。
-- 徽章的"已读清除"依赖 `after-select-window`。极端多 client 场景下由 tmux
-  决定该 hook 的窗口上下文；测试覆盖了单 client 与"读别的窗口不影响本窗口"。
+- [开发文档](docs/development.md) —— 本地开发、测试、目录结构、贡献
+- [需求分析](docs/requirements-analysis.md) —— 需求来源与竞品调研
