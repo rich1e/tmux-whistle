@@ -25,6 +25,7 @@
 - [x] **TODO-5** `@whistle_badge` 没有任何代码读
 - [x] **TODO-6** `@whistle_self` 的行为与名字/文档相反
 - [x] **TODO-9** `-t` 写在消息前面时会静默写到别的 pane
+- [x] **TODO-10** `running` 被当成要打扰用户的状态扇出到所有 session
 
 ---
 
@@ -398,6 +399,63 @@ dispatch 相应简化为 `cmd_set "$@"`。
 （第 4 条是防「修过头」的护栏，两边都过）。
 
 **相关代码**：`bin/tmux-whistle` 的 `cmd_set` 与分派处。
+
+---
+
+## TODO-10 · `running` 被当成要打扰用户的状态扇出到所有 session
+
+✅ 已修复（`lib/deliver.sh` 的 `whistle_deliver`）
+
+**现象**：你每敲一次 prompt（`UserPromptSubmit`）或新开会话（`SessionStart`），
+**其它所有 attached session 的状态栏都会弹一条 `[sess] running`**；开了
+`@whistle_os` 还会同时弹一条桌面通知。
+
+**触发**：在某个 session 里发一条 prompt，看别的 session。
+
+**原因**：`whistle_deliver` 对**所有**状态无条件调用 `whistle_display_fanout`
+与 `whistle_os_notify`：
+
+```sh
+whistle_border_paint "$1" "$2"   # 内部按状态取色，running 得到空色 → 不动
+whistle_refresh_sessions "$1"
+whistle_display_fanout "$1" "$2" "$3"   # ← 无条件
+whistle_os_notify "$1" "$2" "$3"        # ← 无条件
+```
+
+徽章通道早就为 running 做了屏蔽（`whistle_mark_build` 里原本没有 running 分支），
+另外两个渠道漏了。而 running 恰恰是**频率最高**的状态 —— 每个 turn 都来一次。
+
+**修复**：用 `whistle_is_notified`（即 `WHISTLE_NOTIFIED_STATES`）把「打扰型渠道」
+门控起来。running 仍然更新状态、刷新状态栏，只是不发瞬时提示、不弹桌面通知：
+
+```sh
+if whistle_is_notified "$2"; then
+  whistle_display_fanout "$1" "$2" "$3"
+  whistle_os_notify "$1" "$2" "$3"
+fi
+```
+
+**回归测试**（`test/integration/deliver.bats` 3 条）：running 不产生任何
+`display-message` 扇出；running 不改边框；`done` 仍然扇出（防「修过头」）。
+
+**相关代码**：`lib/deliver.sh` 的 `whistle_deliver`。
+
+---
+
+## 本轮新增（2026-10-22）
+
+三条功能，不是缺陷：
+
+1. **`error` 接上自动来源** —— 订阅 Claude Code 的 `StopFailure` 事件
+   （回合因 API 错误结束时**替代** `Stop` 触发，两者互斥）。消息取
+   `last_assistant_message`（该字段在这个事件里就是渲染出来的错误文本，
+   如 `API Error: Rate limit reached`），缺失时回落到错误类型名。
+2. **`running` 显示 `●`** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
+   徽章条件式从三层变四层。它仍不计入 `🔔N`、不算待处理。
+3. **`prefix + W` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
+   取 rank 最高的一行）。待处理项带编号可跳转，running 项以 `-` 开头
+   （`display-menu` 的 disabled 语义：tmux 绘制时会剥掉那个 `-` 并置暗，选中与
+   鼠标路径都会跳过），没有快捷键。
 
 ---
 

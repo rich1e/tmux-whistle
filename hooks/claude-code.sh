@@ -83,6 +83,18 @@ Stop)
   _msg=$(whistle_json_get "$_input" last_assistant_message)
   _state='done'
   ;;
+StopFailure)
+  # 回合因 API 错误结束（限流 / 过载 / 认证失败 / 服务端错误 ...）。
+  # 官方文档：StopFailure 在 API 错误时**替代** Stop 触发 —— 两者互斥，
+  # 所以这里不会和上面的 done 打架。
+  # 这个事件里的 last_assistant_message 是"渲染出来的错误文本本身"
+  # （如 "API Error: Rate limit reached"），不是 agent 的回复；
+  # 取不到时回落到错误类型名，至少能看出是哪一类故障。
+  _err=$(whistle_json_get "$_input" error)
+  _msg=$(whistle_json_get "$_input" last_assistant_message)
+  [ -n "$_msg" ] || _msg="API 错误${_err:+: ${_err}}"
+  _state='error'
+  ;;
 Notification)
   _ntype=$(whistle_json_get "$_input" notification_type)
   _state=$(whistle_notify_state "$_ntype")

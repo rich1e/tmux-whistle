@@ -59,7 +59,7 @@ teardown() {
     assert_contains "$output" 'w1✗'
 }
 
-@test "KP-1: running 不显示徽章（它不是待处理状态）" {
+@test "KP-1: running 显示 ● 徽章（不是待处理，但要让窗口列表看出有 agent）" {
     wt_load core
     wt_load status-line
     whistle_mark_publish
@@ -67,8 +67,31 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "running"
     run wt_render_windows
-    assert_contains "$output" 'w1▌'
+    assert_contains "$output" 'w1●'
+    # running 只亮 ●，不该串到其余三个状态的符号上
     assert_not_contains "$output" '✔'
+    assert_not_contains "$output" '⏳'
+    assert_not_contains "$output" '✗'
+}
+
+@test "KP-1: 四种状态各自渲染自己的符号，互不串台" {
+    wt_load core
+    wt_load status-line
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+
+    for pair in 'done ✔' 'wait ⏳' 'error ✗' 'running ●'; do
+        local st="${pair% *}" sym="${pair#* }"
+        wt set -w -t w1 @whistle_win "$st"
+        run wt_render_windows
+        assert_contains "$output" "w1${sym}"
+        # 只断言本状态该有的符号：其余三个不该同时出现
+        local other
+        for other in ✔ ⏳ ✗ ●; do
+            [ "$other" = "$sym" ] && continue
+            assert_not_contains "$output" "$other"
+        done
+    done
 }
 
 # -- 开关：@whistle_badge ------------------------------------------------------
@@ -271,6 +294,19 @@ teardown() {
   run wt_render_windows
   assert_contains "$output" 'w1✓'
   assert_not_contains "$output" '✔'
+}
+
+@test "图标: running 也可改成任意符号" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_icon_running '▶'
+  whistle_mark_publish
+  whistle_format_patch window-status-format
+
+  wt set -w -t w1 @whistle_win "running"
+  run wt_render_windows
+  assert_contains "$output" 'w1▶'
+  assert_not_contains "$output" '●'
 }
 
 @test "图标: wait 与 error 也各自可改" {

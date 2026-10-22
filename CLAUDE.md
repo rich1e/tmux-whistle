@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats      # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 155 项测试（24 单测 + 131 集成/e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 194 项测试（24 单测 + 170 集成/e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -86,7 +86,7 @@ publish，不用重载 tmux 配置。
 - **socket 定位优先级**：`$WHISTLE_TMUX_SOCKET` > `$TMUX` > `$TMUX_SOCKET`。`$TMUX_SOCKET`
   会被子进程跨 server 继承，可能指向用户正在用的另一个 server；`$TMUX` 才是 tmux 按 server
   写好的权威值。加载时还要把 `#{socket_path}` 显式钉死传给 `scripts/setup.sh`。
-- 嵌套 `#{?...}` 条件式的大括号必须配平（`whistle_mark_build` 是三层，结尾 `}}}`）。
+- 嵌套 `#{?...}` 条件式的大括号必须配平（`whistle_mark_build` 是四层，结尾 `}}}}`）。
   畸形 format 会被 tmux **静默渲染成空字符串**，不报错 —— 有配平单测守着。
 
 **消息消毒**：任何进入 tmux format 的文本都要过 `whistle_sanitize` —— 剔掉 `# { } |`

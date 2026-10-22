@@ -67,9 +67,89 @@ pane_of() {
 3"
 }
 
-@test "menu-args: 没有待处理项时输出为空" {
+@test "menu-args: 一条 agent 都没有时输出为空" {
   run "$CLI" --menu-args
   assert_eq "$output" ''
+}
+
+# -- 菜单：running 也列出来（灰显、不可选） ---------------------------------
+
+@test "menu-args: running 项也列出，以 - 开头灰显且没有快捷键" {
+  # display-menu 里名称以 '-' 开头 = disabled：tmux 绘制时会剥掉这个 '-' 并置暗
+  # （screen-write.c 的 screen_write_menu），选中路径与鼠标路径都跳过它。
+  wt new-window -d -n w2
+  local p1 p2
+  p1=$(wt display -p -t w1 '#{pane_id}')
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  "$CLI" "done" '做完了' -t "$p1"
+  "$CLI" running -t "$p2"
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '6'
+
+  assert_contains "$(printf '%s\n' "$output" | sed -n 1p)" '完成'
+  assert_eq "$(printf '%s\n' "$output" | sed -n 2p)" '1'
+
+  local label key cmd
+  label=$(printf '%s\n' "$output" | sed -n 4p)
+  key=$(printf '%s\n' "$output" | sed -n 5p)
+  cmd=$(printf '%s\n' "$output" | sed -n 6p)
+
+  case "$label" in
+  '- 运行中'*) ;;
+  *)
+    printf '期望以 "- 运行中" 开头，实际: [%s]\n' "$label" >&2
+    return 1
+    ;;
+  esac
+  assert_eq "$key" ''
+  assert_contains "$cmd" 'display-message'
+}
+
+@test "menu-args: 待处理项的编号不因 running 项而错位" {
+  wt new-window -d -n w2
+  wt new-window -d -n w3
+  local p1 p2 p3
+  p1=$(wt display -p -t w1 '#{pane_id}')
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  p3=$(wt display -p -t w3 '#{pane_id}')
+  "$CLI" running -t "$p1"
+  "$CLI" "done" 'a' -t "$p2"
+  "$CLI" "wait" 'b' -t "$p3"
+
+  run "$CLI" --menu-args
+  # 顺序：先两个待处理（key 1、2），再 running（空 key）—— 共三组九行
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '9'
+  assert_eq "$(printf '%s\n' "$output" | sed -n '2p;5p')" "1
+2"
+  assert_eq "$(printf '%s\n' "$output" | sed -n 8p)" ''
+}
+
+@test "menu-args: 只有 running 时也列出来，而不是当作『没东西』" {
+  "$CLI" running
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '3'
+  assert_contains "$output" '运行中'
+}
+
+@test "menu: 没有任何 agent 时报『没有 agent 上报过状态』" {
+  run "$CLI" menu
+  assert_eq "$status" 0
+  assert_contains "$output" '没有 agent 上报过状态'
+}
+
+@test "menu: 依赖 tmux 的双横线来放行以 - 开头的条目名" {
+  # disabled 条目（running 项）的名称以 '-' 开头，而 tmux 的参数解析会把它
+  # 当 flag：没有 `--` 时报 "invalid flag -"，整个菜单弹不出来。
+  # 这条用例把 tmux 侧的这条行为钉住 —— 哪天它变了，cmd_menu 的写法要跟着改。
+  run wt display-menu -T t -- '- 运行中 main:w2' '' "display-message ''"
+  assert_not_contains "$output" 'invalid flag'
+
+  run wt display-menu -T t '- 运行中 main:w2' '' "display-message ''"
+  assert_contains "$output" 'invalid flag'
 }
 
 # -- 键位（回归：第 10 项起曾算成空） ---------------------------------------

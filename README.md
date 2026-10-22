@@ -14,7 +14,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 ## 功能特性
 
 - **推送而非轮询**：agent 通过 hook 主动上报状态，tmux 不去 `capture-pane` 猜提示符 —— 没有扫描成本，也没有误报
-- **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`、`running` 四态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
+- **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`（回合被 API 错误中断）、`running`（在跑）四态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
 - **跨 session 且粘性**：通知出现在你正看着的那个 session，一直保留到你切进去处理完
 - **六个独立信号**：窗口徽章、全局计数 `🔔N`、边框变色、边框状态行、瞬时提示、桌面通知，各管各的，可单独关闭
 - **任何 agent 都能接入**：Claude Code 装上 hooks 即用；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
@@ -86,6 +86,10 @@ tmux source-file ~/.config/tmux/tmux.conf    # 或 prefix + r
 tmux-whistle doctor
 ```
 
+> **升级插件后要重跑一次 `tmux-whistle install-hooks`。** hooks 是快照式写进
+> `settings.json` 的，新增的事件（比如 `StopFailure`）不会自己出现 —— 不重跑的话
+> agent 因 API 错误中断时不会亮 `✗`。该命令是幂等的，其它 hook 原样保留。
+
 ### macOS：系统通知授权（**必做**，否则系统通知静默失效）
 
 ```sh
@@ -123,10 +127,12 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_color_done` | `#00af00` | 完成色 |
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
+| `@whistle_color_running` | `#5f87af` | 运行中色 |
 | `@whistle_icon_pending` | `🔔` | 全局计数前面的图标 |
 | `@whistle_icon_done` | `✔` | 完成符号 |
 | `@whistle_icon_wait` | `⏳` | 等待符号 |
 | `@whistle_icon_error` | `✗` | 错误符号 |
+| `@whistle_icon_running` | `●` | 运行中符号 |
 | **调试** | | |
 | `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
@@ -147,11 +153,12 @@ set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
 ```tmux
-# 换图标（默认 🔔 / ✔ / ⏳ / ✗）
+# 换图标（默认 🔔 / ✔ / ⏳ / ✗ / ●）
 set -g @whistle_icon_pending '●'
 set -g @whistle_icon_done    '✓'
 set -g @whistle_icon_wait    '⏸'
 set -g @whistle_icon_error   '⚠'
+set -g @whistle_icon_running '▶'
 
 # 显式设成空串 = 不要图标，只留颜色和数字
 set -g @whistle_icon_pending ''
@@ -214,20 +221,21 @@ set -g @whistle_icon_pending ''
 
 | 状态 | 徽章 | 计入 🔔 | 什么时候出现 |
 |---|---|---|---|
-| `running` | 无 | 否 | agent 开始干活 |
+| `running` | `●` | 否 | agent 开始干活 |
 | `done` | `✔` | 是 | 一轮工作结束 |
 | `wait` | `⏳` | 是 | 等你批准 / 等你输入 |
-| `error` | `✗` | 是 | 出错 |
+| `error` | `✗` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
-`running` 刻意不显示徽章 —— agent 在跑的时候你不需要被打扰。
+`running` 不计入 `🔔N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
+session 推一条「运行中」纯属噪声。它只是让窗口列表能看出「这个窗口有 agent 在跑」。
 
 ### 怎么响应
 
 | 操作 | 效果 |
 |---|---|
-| **`prefix + W`** | 弹出待处理菜单，按数字键选中 → 跳过去并清除 |
+| **`prefix + W`** | 弹出 agent 菜单：待处理项带编号，按数字键选中 → 跳过去并清除；运行中的项灰显、不可选，只用来告诉你「哪些窗口有 agent」 |
 | **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
-| `prefix + W` 之外还想要列表 | `tmux-whistle list`（含消息与已存在时长） |
+| `prefix + W` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
 | 都不想做 | `tmux-whistle clear -a` 全清 |
 
 **典型流程**：在 B 看到 🔔2 → `prefix + W` → 按 `1` → 落到 A 的那个窗口，徽章自己消失。
@@ -238,9 +246,10 @@ hooks 装好后自动工作：
 
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
-| 发一条 prompt | — | `running`，无徽章 |
+| 发一条 prompt | — | `●`，不计入 🔔 |
 | agent 跑完一轮 | `Stop` hook | `✔` + 🔔 + 提示 |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `⏳` + 🔔 + 提示 |
+| 回合因 API 错误中断 | `StopFailure` hook | `✗` + 🔔 + 提示（消息就是错误文本） |
 
 ### 场景二：任何 agent / 脚本
 
@@ -262,7 +271,7 @@ tmux-whistle wait "需要你选数据库"
 tmux-whistle done    "重构完成"     # 标记完成
 tmux-whistle wait    "等你批准"     # 标记等待
 tmux-whistle error   "构建失败"     # 标记出错
-tmux-whistle running               # 开始干活（清掉之前的徽章）
+tmux-whistle running               # 开始干活（亮 ●，不计入 🔔）
 
 tmux-whistle list                  # 看所有待处理项
 tmux-whistle menu                  # = prefix + W

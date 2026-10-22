@@ -59,10 +59,12 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_color_done #00af00
 @whistle_color_wait #af8700
 @whistle_color_error #d70000
+@whistle_color_running #5f87af
 @whistle_icon_pending 🔔
 @whistle_icon_done ✔
 @whistle_icon_wait ⏳
 @whistle_icon_error ✗
+@whistle_icon_running ●
 @whistle_display_ms 0
 @whistle_debug off
 @whistle_detect off
@@ -316,6 +318,30 @@ whistle_list_lines() {
     fi
     printf '%s|%s|%s|%s|%s|%s\n' "$_ls" "$_lwn" "$_lpid" "$_lst" "$_lmsg" "$_lage"
   done
+}
+
+# 所有上报过状态的 (session, window_id, window_name, window_index, state, msg)
+#
+# 与 whistle_pending_windows 的区别：**不过滤** whistle_is_notified，
+# 所以 running 也在内 —— 菜单要能列出「哪些窗口有 agent」，而不只是「哪些在等我」。
+#
+# 按 window_id 去重，保留 rank 最高的那一行：list-panes -a 是 pane 粒度，
+# 一个窗口开了多个 pane 时同一窗口会出现多次，菜单里就是重复条目。
+whistle_agent_windows() {
+  whistle_tmux list-panes -a \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle}|#{@whistle_msg}' \
+    2> /dev/null | awk -F'|' '
+    $5 == "" { next }
+    {
+      r = ($5 == "error") ? 4 : ($5 == "wait") ? 3 : ($5 == "done") ? 2 : 1
+      if (!($2 in best)) order[++n] = $2
+      if (!($2 in best) || r > best[$2]) {
+        best[$2] = r
+        line[$2] = $0
+      }
+    }
+    END { for (i = 1; i <= n; i++) print line[order[i]] }
+  '
 }
 
 # 待处理的 (session, window_id, window_name, window_index, state, msg)

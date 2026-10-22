@@ -70,6 +70,50 @@ EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" ''
 }
 
+# -- StopFailure -----------------------------------------------------------
+#
+# 官方文档：StopFailure 在回合因 API 错误结束时**替代** Stop 触发（两者互斥）。
+# 它是 error 状态唯一的自动来源 —— 在此之前 error 只能靠手工
+# `tmux-whistle error`，agent 因限流挂掉时状态栏毫无反应。
+
+@test "e2e: StopFailure → error，消息取 last_assistant_message（错误文本本身）" {
+  feed <<'EOF'
+{"hook_event_name":"StopFailure","session_id":"s1","cwd":"/tmp",
+ "error":"rate_limit","error_details":"429 Too Many Requests",
+ "last_assistant_message":"API Error: Rate limit reached"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'error'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" 'API Error: Rate limit reached'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_src)" 'hook'
+}
+
+@test "e2e: StopFailure 缺 last_assistant_message 时回落到错误类型" {
+  feed <<'EOF'
+{"hook_event_name":"StopFailure","error":"overloaded"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'error'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" 'API 错误: overloaded'
+}
+
+@test "e2e: 各种错误类型都落成 error，不会被误判为 done" {
+  local e
+  for e in rate_limit overloaded authentication_failed server_error unknown; do
+    feed <<EOF
+{"hook_event_name":"StopFailure","error":"$e"}
+EOF
+    assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'error'
+    assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" "API 错误: $e"
+  done
+}
+
+@test "e2e: StopFailure 计入待处理计数（它需要你处理）" {
+  feed <<'EOF'
+{"hook_event_name":"StopFailure","error":"billing_error",
+ "last_assistant_message":"API Error: Billing issue"}
+EOF
+  assert_eq "$(opt '@whistle_pending')" '1'
+}
+
 # -- Notification ----------------------------------------------------------
 
 @test "e2e: permission_prompt → wait（等待下一步）" {

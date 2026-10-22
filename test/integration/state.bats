@@ -217,6 +217,39 @@ pane_of() {
   assert_eq "$(printf '%s\n' "$output" | awk -F'|' '{print NF}')" '6'
 }
 
+# -- agent_windows：菜单要列出「所有有 agent 的窗口」，不只是待处理 --------------
+
+@test "agent_windows: 包含 running，而 pending_windows 不含" {
+  whistle_state_set "running" '在跑'
+
+  run whistle_agent_windows
+  assert_contains "$output" 'running'
+  assert_contains "$output" '在跑'
+
+  run whistle_pending_windows
+  assert_eq "$output" ''
+}
+
+@test "agent_windows: 从未上报过状态的 pane 不出现" {
+  run whistle_agent_windows
+  assert_eq "$output" ''
+}
+
+@test "agent_windows: 同窗口多 pane 只出一行，取 rank 最高的状态" {
+  # list-panes -a 是 pane 粒度；不去重的话菜单里同一个窗口会出现两次。
+  wt split-window -t w1
+  local p1 p2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  whistle_state_set "running" '在跑' "$p1"
+  whistle_state_set "done" '做完了' "$p2"
+
+  run whistle_agent_windows
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '1'
+  assert_contains "$output" 'done'
+  assert_contains "$output" '做完了'
+}
+
 @test "conf: 未设置的 option 回落到默认表" {
   run whistle_conf '@whistle_color_done'
   assert_eq "$output" '#00af00'

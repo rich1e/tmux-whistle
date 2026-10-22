@@ -37,8 +37,12 @@ whistle_icon() {
 # #{@whistle_win} 在 window-status-format 的 item 上下文里解析为
 # "当前窗口自己的" option。
 #
-# 三层嵌套条件式，结尾必须补齐三个 '}' —— 少一个就是畸形 format，
+# 四层嵌套条件式，结尾必须补齐四个 '}' —— 少一个就是畸形 format，
 # tmux 会静默渲染成空字符串（这个坑被 test/integration/badge.bats 抓到过）。
+#
+# 嵌套顺序只是书写顺序：@whistle_win 存的是单个状态字符串，只有一个分支会命中，
+# 所以这里没有「优先级」语义 —— 真正的优先级在 whistle_aggregate 里。
+# running 排最后，因为它不计入 🔔N，作用只是让窗口列表能看出「这个窗口有 agent」。
 #
 # @whistle_badge off 时生成空串：哨兵照常注入，但渲染为空 —— 状态栏格式保持
 # 原样。走「注入空串」而不是「注入后再移除」，是因为移除会和主题重算打架
@@ -49,14 +53,17 @@ whistle_mark_build() {
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
+  _c_run=$(whistle_conf '@whistle_color_running')
   _s_done=$(whistle_icon '@whistle_icon_done')
   _s_wait=$(whistle_icon '@whistle_icon_wait')
   _s_err=$(whistle_icon '@whistle_icon_error')
+  _s_run=$(whistle_icon '@whistle_icon_running')
 
   _w='#{@whistle_win}'
   printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_c_done" "$_s_done"
   printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_c_wait" "$_s_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_w" "$_c_err" "$_s_err"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_w" "$_c_err" "$_s_err"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_w" "$_c_run" "$_s_run"
 }
 
 # whistle_status_right_build → 状态栏右侧的全局待处理计数
@@ -111,14 +118,17 @@ whistle_pane_mark_build() {
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
+  _c_run=$(whistle_conf '@whistle_color_running')
   _s_done=$(whistle_icon '@whistle_icon_done')
   _s_wait=$(whistle_icon '@whistle_icon_wait')
   _s_err=$(whistle_icon '@whistle_icon_error')
+  _s_run=$(whistle_icon '@whistle_icon_running')
 
   _p='#{@whistle}'
   printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$_s_done"
   printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$_s_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],}}}' "$_p" "$_c_err" "$_s_err"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_p" "$_c_err" "$_s_err"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_p" "$_c_run" "$_s_run"
 }
 
 whistle_pane_mark_publish() {

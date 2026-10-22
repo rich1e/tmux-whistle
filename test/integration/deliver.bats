@@ -154,6 +154,51 @@ stub_display_targets() {
   assert_eq "$(count_occurrences "$output" '-t other-sess')" 1
 }
 
+# -- running 不打扰 ---------------------------------------------------------
+#
+# 回归：whistle_deliver 曾经对所有状态无条件扇出。而 SessionStart /
+# UserPromptSubmit 都会置 running —— 于是每敲一次 prompt，其它 session 就收到
+# 一条「运行中」。徽章早就屏蔽了 running，另外两个渠道漏了。
+
+@test "deliver: running 不发瞬时提示（每敲一次 prompt 不该刷屏）" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/run_no_display"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess
+
+  whistle_deliver "$w" "running" ''
+
+  run cat "$calls"
+  assert_eq "$output" ''
+}
+
+@test "deliver: running 不改边框（边框只为待处理状态着色）" {
+  wt set -g @whistle_border on
+  local w
+  w=$(win_of)
+  wt set -w -t "$w" pane-border-style 'fg=#123456'
+
+  whistle_deliver "$w" "running" ''
+
+  assert_eq "$(wt show -wv -t "$w" pane-border-style)" 'fg=#123456'
+}
+
+@test "deliver: done 仍然扇出（防止把正常通知一并关掉）" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/done_still_display"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess
+
+  whistle_deliver "$w" "done" 'x'
+
+  run cat "$calls"
+  assert_contains "$output" '-t other-sess'
+}
+
 # -- 状态栏重画门控（KP-15） -----------------------------------------------
 
 @test "KP-15: 只刷新受影响 session 的 client，且带 -S（只刷状态栏）" {

@@ -166,6 +166,7 @@ whistle_state_label() {
   done) printf '完成' ;;
   wait) printf '等待' ;;
   error) printf '错误' ;;
+  running) printf '运行中' ;;
   *) printf '%s' "${1:-}" ;;
   esac
 }
@@ -262,6 +263,12 @@ whistle_deliver() {
   whistle_border_paint "$1" "$2"
   whistle_border_status_apply "$1"
   whistle_refresh_sessions "$1"
-  whistle_display_fanout "$1" "$2" "$3"
-  whistle_os_notify "$1" "$2" "$3"
+
+  # 只有待处理状态才"打扰"用户：瞬时提示与桌面通知都会打断注意力。
+  # running 是「agent 刚开始干活」，徽章亮一下就够了 —— 每敲一次 prompt
+  # 就朝所有 session 推一条「运行中」纯属噪声。
+  if whistle_is_notified "$2"; then
+    whistle_display_fanout "$1" "$2" "$3"
+    whistle_os_notify "$1" "$2" "$3"
+  fi
 }

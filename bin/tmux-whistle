@@ -40,7 +40,7 @@ $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
   $WHISTLE_PROG <状态> [消息]        置状态：done | wait | error | running
   $WHISTLE_PROG clear [-a]           清除当前窗口 / 全部待处理状态
   $WHISTLE_PROG list                 列出所有待处理项
-  $WHISTLE_PROG menu                 打开待处理菜单（等同 prefix + W）
+  $WHISTLE_PROG menu                 打开 agent 菜单（等同 prefix + W）
   $WHISTLE_PROG jump <n|sess:win>    跳到指定项并清除
   $WHISTLE_PROG on | off             当前 session 的开关
   $WHISTLE_PROG doctor               环境自检
@@ -60,8 +60,8 @@ Claude Code 集成：
   @whistle_os on|off                 桌面系统通知（默认 off）
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
-  @whistle_color_done|wait|error     徽章与边框颜色
-  @whistle_icon_done|wait|error      各状态的图标（默认 ✔ / ⏳ / ✗）
+  @whistle_color_done|wait|error|running   徽章与边框颜色
+  @whistle_icon_done|wait|error|running    各状态的图标（默认 ✔ / ⏳ / ✗ / ●）
   @whistle_icon_pending              全局计数前的图标（默认 🔔；空串 = 不显示）
 EOF
 }
@@ -208,16 +208,26 @@ whistle_menu_key() {
 }
 
 cmd_menu() {
-  _items=$(whistle_pending_windows)
+  _items=$(whistle_agent_windows)
   if [ -z "$_items" ]; then
-    whistle_tmux display-message '没有待处理的 whistle'
+    # 两条路都要说一声：交互时 stdout 会被 run-shell -b 丢掉，只能靠
+    # display-message 落到状态行；脚本里没有 client，则只能靠 stdout。
+    printf '没有 agent 上报过状态。\n'
+    whistle_tmux display-message '没有 agent 上报过状态' 2> /dev/null || true
     return 0
   fi
 
   # 用 set -- 累积 argv：菜单 label 里有空格，靠单词切分传参会散架。
+  #
+  # 两遍扫描同一份数据：
+  #   第一遍 —— 待处理项，编号 1..26，选中即跳转并清除
+  #   第二遍 —— running 项，名称以 '-' 开头 = tmux 的 disabled 语义
+  #             （screen-write.c 绘制时剥掉那个 '-' 并置暗），key 传空串、
+  #             命令永远不会执行。它只是一份「哪些窗口有 agent」的清单。
   set --
   _i=0
   while IFS='|' read -r s wid wn _wi st msg; do
+    whistle_is_notified "$st" || continue
     _i=$((_i + 1))
     [ "$_i" -gt 26 ] && break
     _label=" $(whistle_state_label "$st") $s:$wn $msg"
@@ -227,27 +237,62 @@ cmd_menu() {
 $_items
 EOF
 
+  _i=0
+  while IFS='|' read -r s wid wn _wi st msg; do
+    whistle_is_notified "$st" && continue
+    _i=$((_i + 1))
+    [ "$_i" -gt 10 ] && break
+    set -- "$@" "- $(whistle_state_label "$st") $s:$wn $msg" '' "display-message ''"
+  done << EOF
+$_items
+EOF
+
   # display-menu 需要一个 attached client；在脚本里调用（无头 server）时
   # 它会报 "no current client"。这时降级成纯文本列表，而不是静默失败。
-  if ! whistle_tmux display-menu -T 'tmux-whistle 待处理' "$@" 2> /dev/null; then
+  #
+  # `--` 不能省：disabled 条目的名称以 '-' 开头，而 tmux 的参数解析会在
+  # 遇到第一个非选项参数后才停止把 '-' 当 flag（tmux 3.2 用 getopt，
+  # 3.8 用 arguments.c，两者都认 '--'）。少了它会报 "invalid flag -"。
+  if ! whistle_tmux display-menu -T 'tmux-whistle' -- "$@" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + W 打开菜单。\n\n'
-    cmd_list
+    while IFS='|' read -r s wid wn _wi st msg; do
+      if whistle_is_notified "$st"; then
+        printf '  %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
+      else
+        printf '  - %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
+      fi
+    done << EOF
+$_items
+EOF
   fi
 }
 
 # 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
 # 用于在不依赖 attached client 的情况下验证参数构造。
 cmd_menu_args() {
-  _items=$(whistle_pending_windows)
+  _items=$(whistle_agent_windows)
   [ -n "$_items" ] || return 0
 
   _i=0
   while IFS='|' read -r s wid wn _wi st msg; do
+    whistle_is_notified "$st" || continue
     _i=$((_i + 1))
     [ "$_i" -gt 26 ] && break
     printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
     printf '%s\n' "$(whistle_menu_key "$_i")"
     printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+  done << EOF
+$_items
+EOF
+
+  _i=0
+  while IFS='|' read -r s wid wn _wi st msg; do
+    whistle_is_notified "$st" && continue
+    _i=$((_i + 1))
+    [ "$_i" -gt 10 ] && break
+    printf '%s\n' "- $(whistle_state_label "$st") $s:$wn $msg"
+    printf '%s\n' ''
+    printf '%s\n' "display-message ''"
   done << EOF
 $_items
 EOF
