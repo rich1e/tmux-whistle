@@ -73,12 +73,18 @@ whistle_die() {
 
 # -- 置状态 ----------------------------------------------------------------
 
+# cmd_set <state> [选项...] [消息...]
+#
+# 消息与选项的顺序无关 —— 早期版本直接把 $2 当消息，于是
+# `done -t %3 "消息"`（git 那种习惯）会把 -t 吃进消息、写错 pane。
+# 现在统一走一个循环：-t 收下一个参数，-- 之后全是消息，其余逐词拼消息。
 cmd_set() {
   _state="$1"
-  _msg="${2:-}"
-  shift 2 2> /dev/null || shift $#
+  shift
 
+  _msg=''
   _target=''
+  _dry=0
   while [ $# -gt 0 ]; do
     case "$1" in
     -t | --target)
@@ -86,18 +92,30 @@ cmd_set() {
       shift 2 2> /dev/null || shift
       ;;
     --dry-run)
-      printf '将置 %s = "%s"（目标 %s）\n' "$_state" "$_msg" "${_target:-$TMUX_PANE}"
-      return 0
+      _dry=1
+      shift
+      ;;
+    --)
+      shift
+      while [ $# -gt 0 ]; do
+        _msg="${_msg:+$_msg }$1"
+        shift
+      done
       ;;
     -*)
       whistle_die "未知选项 [$1]"
       ;;
     *)
-      _msg="$_msg $1"
+      _msg="${_msg:+$_msg }$1"
       shift
       ;;
     esac
   done
+
+  if [ "$_dry" = 1 ]; then
+    printf '将置 %s = "%s"（目标 %s）\n' "$_state" "$_msg" "${_target:-${TMUX_PANE:-当前 pane}}"
+    return 0
+  fi
 
   _pane=$(whistle_state_set "$_state" "$_msg" "$_target") || exit 1
   _win=$(whistle_pane_window "$_pane")
@@ -432,10 +450,7 @@ cmd_doctor() {
 
 case "$1" in
 done | wait | error | running)
-  _state="$1"
-  _msg="${2:-}"
-  shift 2 2> /dev/null || shift $#
-  cmd_set "$_state" "$_msg" "$@"
+  cmd_set "$@"
   ;;
 clear)
   shift

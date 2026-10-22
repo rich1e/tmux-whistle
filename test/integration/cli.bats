@@ -236,6 +236,79 @@ menu_keys() {
   assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
 }
 
+# -- 参数顺序（消息与选项谁在前都行）-----------------------------------------
+
+@test "参数: -t 写在消息前面也能正确落到目标 pane" {
+  # 回归：早先直接把 $2 当消息，于是 `done -t %3 "消息"` 会把 -t 吃进消息、
+  # 目标退化成 $TMUX_PANE，最终写到**别的 pane**上去，且不报错。
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  "$CLI" "done" -t "$p2" '目标明确'
+
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'done'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '目标明确'
+  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
+}
+
+@test "参数: -t 与消息两种顺序结果一致" {
+  wt new-window -d -n w2
+  wt new-window -d -n w3
+  local p2 p3
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  p3=$(wt display -p -t w3 '#{pane_id}')
+
+  "$CLI" "done" '同样的消息' -t "$p2"
+  "$CLI" "done" -t "$p3" '同样的消息'
+
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" "$(wt show -pqv -t "$p3" @whistle_msg)"
+}
+
+@test "参数: 无消息也能带 -t（running 最常用）" {
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  run "$CLI" "running" -t "$p2"
+  assert_eq "$status" 0
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" ''
+}
+
+@test "参数: 不带引号的多词消息仍然拼成一句" {
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  "$CLI" "done" 重构 完成 -t "$p2"
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '重构 完成'
+}
+
+@test "参数: -- 之后的内容一律当消息，以 - 开头也不当选项" {
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  "$CLI" "done" -t "$p2" -- '-开头也是消息'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '-开头也是消息'
+}
+
+@test "参数: 未知选项报错而不是被当成消息" {
+  run "$CLI" "done" -x 'foo'
+  assert_eq "$status" 1
+  assert_contains "$output" '未知选项'
+}
+
+@test "参数: --dry-run 顺序无关，且报出解析后的目标与消息" {
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+
+  run "$CLI" "done" --dry-run -t "$p2" '预览'
+  assert_eq "$status" 0
+  assert_contains "$output" '预览'
+  assert_contains "$output" "$p2"
+  # 只打印，不落盘
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" ''
+}
+
 @test "--dry-run: 只打印不执行" {
   run "$CLI" "done" 'x' --dry-run
   assert_eq "$status" 0

@@ -24,6 +24,7 @@
 - [x] **TODO-4** `make fmt-check` 实际没有检查 bash 测试文件
 - [x] **TODO-5** `@whistle_badge` 没有任何代码读
 - [x] **TODO-6** `@whistle_self` 的行为与名字/文档相反
+- [x] **TODO-9** `-t` 写在消息前面时会静默写到别的 pane
 
 ---
 
@@ -339,6 +340,64 @@ whistle_conf '@whistle_detect_wait-re' 2> /dev/null \
 
 **相关代码**：`lib/detect.sh` 的 `whistle_detect_default_*`；`lib/core.sh` 的
 `WHISTLE_DEFAULTS`。
+
+---
+
+## TODO-9 · `-t` 写在消息前面时会静默写到别的 pane
+
+✅ 已修复（`bin/tmux-whistle` 的 `cmd_set`）
+
+**现象**：参数顺序敏感 —— 消息必须写在 `-t` 前面。写成 git 那种习惯
+（选项在前、消息在后）时，**不报错，只是把状态写到别的 pane 上**，消息还被
+污染成 `-t %1 我要去 w2`。
+
+**触发**（在 w1 里执行，目标是 w2）：
+
+```sh
+tmux-whistle done '我要去 w2' -t %1     # ✓ 落到 w2
+tmux-whistle done -t %1 '我要去 w2'     # ✗ 落到 w1，消息变成 "-t %1 我要去 w2"
+```
+
+实测两种顺序的结果：
+
+```
+正确顺序 → w2|done|我要去 w2
+自然顺序 → w1|done|-t %1 我要去 w2
+```
+
+**原因**：`cmd_set` 把 `$2` 直接当消息，没看它是不是选项：
+
+```sh
+_state="$1"
+_msg="${2:-}"          # ← $2 是 -t 也照收
+shift 2 2> /dev/null || shift $#
+```
+
+于是 `-t` 被吃进消息，后面的 `%1` 又被 `*) _msg="$_msg $1"` 拼进去，
+`_target` 始终为空 → 落到 `$TMUX_PANE` 上。
+
+同一个原因还让 `tmux-whistle running -t %3`（不带消息）完全不可用 ——
+这是最别扭的一处，因为 `running` 恰恰是最常省略消息的状态。
+
+**为什么一直没被发现**：README 只示范了「消息在前」的写法，测试也只覆盖了
+那一种。而错误形态是「写到了另一个 pane」，不是「命令失败」—— 在单 pane
+场景下甚至看不出异样。
+
+**修复**：`cmd_set` 改成统一的参数循环，`$1` 只取状态，其余全部解析：
+
+- `-t` / `--target` 收下一个参数
+- `--dry-run` 置标志，解析完再打印（顺带能看到解析后的真实目标）
+- `--` 之后一律当消息（让以 `-` 开头的消息可表达）
+- 其余逐词拼消息；未知的 `-*` 报错
+
+dispatch 相应简化为 `cmd_set "$@"`。
+
+**回归测试**（`test/integration/cli.bats` 7 条）：`-t` 在前能落到目标 pane、
+两种顺序结果一致、无消息也能带 `-t`、无引号多词仍拼成一句、`--` 之后不被当
+选项、未知选项报错、`--dry-run` 顺序无关且不落盘。旧代码上 7 条红了 6 条
+（第 4 条是防「修过头」的护栏，两边都过）。
+
+**相关代码**：`bin/tmux-whistle` 的 `cmd_set` 与分派处。
 
 ---
 
