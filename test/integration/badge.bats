@@ -71,6 +71,49 @@ teardown() {
     assert_not_contains "$output" '✔'
 }
 
+# -- 开关：@whistle_badge ------------------------------------------------------
+
+@test "开关: @whistle_badge off 时不渲染徽章" {
+    wt_load core
+    wt_load status-line
+    wt set -g @whistle_badge off
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+
+    wt set -w -t w1 @whistle_win "done"
+    run wt_render_windows
+    # 哨兵仍在格式里（幂等注入不受开关影响），但渲染为空
+    assert_contains "$output" 'w1'
+    assert_not_contains "$output" '✔'
+}
+
+@test "开关: @whistle_badge 从 off 改回 on 后徽章恢复" {
+    wt_load core
+    wt_load status-line
+    wt set -g @whistle_badge off
+    whistle_mark_publish
+
+    wt set -g @whistle_badge on
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+
+    wt set -w -t w1 @whistle_win "done"
+    run wt_render_windows
+    assert_contains "$output" 'w1✔'
+}
+
+@test "开关: @whistle_badge 只关窗口徽章，全局计数不受影响" {
+    wt_load core
+    wt_load status-line
+    wt set -g @whistle_badge off
+    whistle_status_right_publish
+    whistle_status_right_patch
+    wt set -g @whistle_pending 2
+
+    run opt 'status-right'
+    assert_contains "$output" 'whistle_status_right'
+}
+
 # -- KP-2: #{E:@whistle_mark} 二次展开保留窗口上下文 -------------------------
 
 @test "KP-2: 经 global option 间接一层后，窗口上下文仍保留" {

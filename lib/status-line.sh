@@ -22,11 +22,18 @@ WHISTLE_SYM_error='✗'
 # whistle_mark_build → 打印徽章 format 串
 #
 # 纯 format：#{?cond,a,b} 做分支，#{==:x,y} 做字符串比较，
-# #{@whistle} 在 window-status-format 的 item 上下文里解析为"当前窗口自己的" option。
+# #{@whistle_win} 在 window-status-format 的 item 上下文里解析为
+# "当前窗口自己的" option。
 #
 # 三层嵌套条件式，结尾必须补齐三个 '}' —— 少一个就是畸形 format，
 # tmux 会静默渲染成空字符串（这个坑被 test/integration/badge.bats 抓到过）。
+#
+# @whistle_badge off 时生成空串：哨兵照常注入，但渲染为空 —— 状态栏格式保持
+# 原样。走「注入空串」而不是「注入后再移除」，是因为移除会和主题重算打架
+# （见 whistle_ensure_status_line 的自愈逻辑），空串则天然与两种顺序兼容。
 whistle_mark_build() {
+  [ "$(whistle_conf '@whistle_badge')" = off ] && return 0
+
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
