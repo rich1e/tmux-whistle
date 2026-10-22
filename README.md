@@ -293,4 +293,5 @@ set -g @whistle_debug on
 ## 文档
 
 - [开发文档](docs/development.md) —— 本地开发、测试、目录结构、贡献
+- [功能待办](docs/todo.md) —— 已知问题与限制
 - [需求分析](docs/requirements-analysis.md) —— 需求来源与竞品调研

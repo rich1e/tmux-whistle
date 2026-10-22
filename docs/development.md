@@ -116,7 +116,8 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 │       └── whistle.bash        # Bats 公共 helper：隔离 server + 断言
 ├── docs/
 │   ├── development.md          # 本文档
-│   └── requirements-analysis.md
+│   ├── requirements-analysis.md
+│   └── todo.md                 # 已知问题与功能待办
 ├── tmux-whistle.tmux           # tpm / tpack 入口（可执行文件，tpm 不 source 它）
 ├── .tmux-whistle.conf          # tmux conf：prefix + W 绑定 + 调 setup.sh
 ├── install.sh                  # 手动安装 / 卸载

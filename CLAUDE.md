@@ -151,6 +151,7 @@ helper（`test/test_helper/whistle.bash`）的约定：
 
 - **开发文档**：`docs/development.md` —— 仓库内的开发指南（命令、目录结构、红线、测试约定）。
   README 只面向使用者，不写开发内容。
+- **功能待办**：`docs/todo.md` —— 已知问题与限制，含现象 / 触发方式 / 原因。
 - 需求来源：`docs/requirements-analysis.md`
 - 使用说明：`README.md`
 - 设计记录（含时序图、API 映射、16 个技术点、实施记录与踩过的坑）在本机的 plan 文件里，
