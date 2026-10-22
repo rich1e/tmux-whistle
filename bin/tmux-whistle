@@ -359,6 +359,27 @@ cmd_read_pane() {
   whistle_refresh_sessions "$_win"
 }
 
+# agent 退出（SessionEnd hook）时清掉该 pane 的 running。
+#
+# running 是「正在干活」的临时标记，agent 走了就该灭 —— 否则窗口会一直亮 ●。
+# 只清 running：done/wait/error 是待处理通知，agent 退出不代表你已经看过。
+cmd_forget_running() {
+  _pane="${1:-}"
+  [ -z "$_pane" ] && _pane=$(whistle_resolve_pane '')
+  [ -z "$_pane" ] && return 0
+
+  _win=$(whistle_clear_pane_state "$_pane" running) || return 0
+  [ -n "$_win" ] || return 0
+
+  # 窗口清空后才还原边框。若还剩别的待处理状态，边框已经是它的颜色，别动。
+  _left=$(whistle_tmux show -wv -t "$_win" @whistle_win 2> /dev/null) || _left=''
+  if [ -z "$_left" ]; then
+    whistle_border_release "$_win"
+    whistle_border_status_release "$_win"
+  fi
+  whistle_refresh_sessions "$_win"
+}
+
 cmd_print_status_line() {
   whistle_print_status_line
 }
@@ -535,6 +556,10 @@ install-hooks)
 --read-pane)
   shift
   cmd_read_pane "${1:-}"
+  ;;
+--clear-pane)
+  shift
+  cmd_forget_running "${1:-}"
   ;;
 --recompute)
   shift

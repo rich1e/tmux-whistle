@@ -157,6 +157,48 @@ EOF
 
 # -- 交互开始 --------------------------------------------------------------
 
+# -- SessionEnd ------------------------------------------------------------
+#
+# SessionEnd 是 running 的"灭灯"信号：agent 退出了，窗口不该继续亮 ●。
+
+@test "e2e: SessionEnd 清掉该 pane 的 running" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "e2e: SessionEnd 不动待处理状态（done 留着等你处理）" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"做完了"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+  assert_eq "$(opt '@whistle_pending')" '1'
+}
+
+@test "e2e: SessionEnd 重复触发是幂等的" {
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"other"}
+EOF
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"other"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+}
+
 @test "e2e: UserPromptSubmit → running，之前点亮的徽章被压掉" {
   feed <<'EOF'
 {"hook_event_name":"Stop","last_assistant_message":"做完了"}

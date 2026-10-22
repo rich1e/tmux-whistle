@@ -71,7 +71,7 @@ sequenceDiagram
     alt 任一关卡失败
         gate-->>Dev: ✗ 就地停住，报出文件与行号
     else 四关全绿
-        gate-->>Dev: ✓ 194 项通过
+        gate-->>Dev: ✓ 199 项通过
         Dev->>git: git commit
     end
 ```

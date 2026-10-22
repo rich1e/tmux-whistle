@@ -396,6 +396,37 @@ menu_keys() {
   assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
 }
 
+# -- 内部：--clear-pane（SessionEnd 用） -------------------------------------
+
+@test "--clear-pane: 只清 running，待处理状态原样保留" {
+  wt new-window -d -n w2
+  local p1 p2
+  p1=$(wt display -p -t w1 '#{pane_id}')
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  "$CLI" running -t "$p1"
+  "$CLI" "done" 'x' -t "$p2"
+
+  run "$CLI" --clear-pane "$p1"
+  assert_eq "$status" 0
+  assert_eq "$(wt show -pqv -t "$p1" @whistle)" ''
+
+  # done 是待处理通知：agent 退出不代表用户已经看过
+  run "$CLI" --clear-pane "$p2"
+  assert_eq "$status" 0
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'done'
+}
+
+@test "--clear-pane: 清掉后窗口聚合与全局计数一起回落" {
+  "$CLI" running
+  assert_eq "$(opt '@whistle_pending')" '0'
+
+  run "$CLI" --clear-pane "$(pane_of)"
+  assert_eq "$status" 0
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
 # -- doctor ----------------------------------------------------------------
 
 @test "doctor: 能跑完并报告 tmux 版本" {

@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats      # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 194 项测试（24 单测 + 170 集成/e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 199 项测试（24 单测 + 175 集成/e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -99,6 +99,10 @@ publish，不用重载 tmux 配置。
 
 **绝不覆盖别人的东西**：`lib/install-hooks.sh` 往 `~/.claude/settings.json` 合并时只增删
 带 `tmux-whistle` marker 的条目，用户已有的 hook 原样保留；改前先备份。
+
+**SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
+异步的清除可能被杀在半路，留下一个永远灭不掉的 `●`。其余 hook 都是 `async: true`，
+只有这一个例外，`our_entry()` 里按事件名判断。
 
 ## 测试约定
 

@@ -235,6 +235,31 @@ whistle_state_clear() {
   printf '%s' "$_pane"
 }
 
+# 只清除指定 pane 上指定的那一个状态（不匹配就什么都不做），并重算
+#
+# 用途：SessionEnd —— agent 退出了，`running` 这个"正在干活"的标记就该灭，
+# 否则窗口会一直亮 ● 。**只清 running**：done/wait/error 是待处理通知，
+# agent 退出不代表你已经看过。
+#
+# 返回值：真的清了就打印所属 window id（调用方据此释放边框/重绘），否则返回 1。
+whistle_clear_pane_state() {
+  _cps_pane=$(whistle_resolve_pane "${1:-}")
+  [ -z "$_cps_pane" ] && return 1
+  _cps_want="${2:-}"
+  [ -n "$_cps_want" ] || return 1
+
+  _cps_have=$(whistle_tmux show -pqv -t "$_cps_pane" @whistle 2> /dev/null) || _cps_have=''
+  [ "$_cps_have" = "$_cps_want" ] || return 1
+
+  whistle_state_clear "$_cps_pane" > /dev/null
+  _cps_win=$(whistle_pane_window "$_cps_pane")
+  [ -n "$_cps_win" ] && whistle_recompute_window "$_cps_win"
+  whistle_recompute_global
+
+  printf '%s' "$_cps_win"
+  return 0
+}
+
 # 清除整个 window 内所有处于"待处理"状态的 pane（已读语义），并重算
 #
 # 分层约定：core 只管状态，不碰边框与重绘（那属于 deliver 层）。

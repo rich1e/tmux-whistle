@@ -68,18 +68,19 @@ PY
   assert_contains "$(jqf "d['statusLine']['command']")" 'statusline.sh'
 }
 
-@test "install: 装上五个事件，且都带 async true" {
+@test "install: 装上六个事件；除 SessionEnd 外都带 async true" {
   "$INSTALLER" --settings "$SETTINGS"
 
   python3 - "$SETTINGS" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 hooks = data["hooks"]
-events = ("Stop", "StopFailure", "Notification", "SessionStart", "UserPromptSubmit")
+events = ("Stop", "StopFailure", "Notification", "SessionStart", "UserPromptSubmit", "SessionEnd")
 for event in events:
     ours = [h for e in hooks[event] for h in e["hooks"] if "tmux-whistle" in h["command"]]
     assert len(ours) == 1, f"{event} 应恰好有一个我们的 hook，实际 {len(ours)}"
-    assert ours[0].get("async") is True, f"{event} 缺 async: true"
+    want_async = event != "SessionEnd"
+    assert bool(ours[0].get("async")) is want_async, f"{event} 的 async 应为 {want_async}"
 # StopFailure 必须订阅全部错误类型：不能有 matcher 把某些类型挡在外面
 sf = [e for e in hooks["StopFailure"] if any("tmux-whistle" in h["command"] for h in e["hooks"])][0]
 assert "matcher" not in sf, f"StopFailure 不该设 matcher，实际 {sf.get('matcher')!r}"

@@ -105,6 +105,16 @@ SessionStart | UserPromptSubmit)
   # 用户开始交互 → 之前那条"完成"徽章该熄了
   _state=running
   ;;
+SessionEnd)
+  # agent 退出了：`running` 这个"正在干活"的标记必须灭掉，否则窗口会一直亮 ●。
+  # 只清 running —— done/wait/error 是待处理通知，agent 退出不代表你已经看过，
+  # 那几条要留到你切进去处理。
+  #
+  # 这里直接 exit：下面的公共出口是按状态写 CLI，而这条走的是清除入口。
+  [ -n "${TMUX_PANE:-}" ] || exit 0
+  WHISTLE_SRC=hook "$WHISTLE_CLI" --clear-pane "$TMUX_PANE" > /dev/null 2>&1 || true
+  exit 0
+  ;;
 *)
   exit 0
   ;;

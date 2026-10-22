@@ -87,8 +87,9 @@ tmux-whistle doctor
 ```
 
 > **升级插件后要重跑一次 `tmux-whistle install-hooks`。** hooks 是快照式写进
-> `settings.json` 的，新增的事件（比如 `StopFailure`）不会自己出现 —— 不重跑的话
-> agent 因 API 错误中断时不会亮 `✗`。该命令是幂等的，其它 hook 原样保留。
+> `settings.json` 的，新增的事件（`StopFailure` / `SessionEnd`）不会自己出现 ——
+> 不重跑的话 agent 因 API 错误中断时不会亮 `✗`，退出后 `●` 也不会自己灭。
+> 该命令是幂等的，其它 hook 原样保留。
 
 ### macOS：系统通知授权（**必做**，否则系统通知静默失效）
 
@@ -227,7 +228,8 @@ set -g @whistle_icon_pending ''
 | `error` | `✗` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
 `running` 不计入 `🔔N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
-session 推一条「运行中」纯属噪声。它只是让窗口列表能看出「这个窗口有 agent 在跑」。
+session 推一条「运行中」纯属噪声。它只是让窗口列表能看出「这个窗口有 agent 在跑」，
+agent 退出（`SessionEnd`）时自动熄灭。
 
 ### 怎么响应
 
@@ -250,6 +252,7 @@ hooks 装好后自动工作：
 | agent 跑完一轮 | `Stop` hook | `✔` + 🔔 + 提示 |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `⏳` + 🔔 + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `✗` + 🔔 + 提示（消息就是错误文本） |
+| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`✔`/`⏳`/`✗` 保留，等你处理） |
 
 ### 场景二：任何 agent / 脚本
 

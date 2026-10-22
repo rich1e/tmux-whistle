@@ -26,6 +26,7 @@
 - [x] **TODO-6** `@whistle_self` 的行为与名字/文档相反
 - [x] **TODO-9** `-t` 写在消息前面时会静默写到别的 pane
 - [x] **TODO-10** `running` 被当成要打扰用户的状态扇出到所有 session
+- [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
 
 ---
 
@@ -442,6 +443,52 @@ fi
 
 ---
 
+## TODO-11 · `running` 没有清除路径，agent 退出后 `●` 永远亮着
+
+✅ 已修复（`hooks/claude-code.sh` 的 `SessionEnd` + `bin/tmux-whistle --clear-pane`）
+
+**现象**：窗口跑过一次 Claude Code 之后就一直显示 `●`，哪怕 agent 早就退出了。
+running 变成徽章之前这个洞不影响观感（它本来不显示），一旦可见就成了永久残留。
+
+**触发**：在某个 pane 里跑一次 Claude Code（`SessionStart` 置 running），退出，
+窗口仍然亮 `●`。
+
+**原因**：`running` 没有任何清除路径 ——
+
+- `whistle_clear_window` / `whistle_clear_all` 都带 `whistle_is_notified` 过滤，
+  只清 `WHISTLE_NOTIFIED_STATES`（done/wait/error），running 被跳过；
+- 已读钩子（`after-select-window` / `after-select-pane`）同理；
+- 没有订阅 `SessionEnd` —— agent 退出这件事插件根本不知道。
+
+`running` 只会在下一次 `SessionStart` / `UserPromptSubmit` 时被重新覆盖，
+所以「退出后一直亮」是稳定复现的。
+
+**修复**：
+
+1. 订阅 `SessionEnd`（`lib/install-hooks.sh` 的 `EVENTS`），hook 里调
+   `tmux-whistle --clear-pane "$TMUX_PANE"`。
+2. `lib/core.sh` 新增 `whistle_clear_pane_state <pane> <state>`：**只在当前值
+   恰好等于目标状态时才清**，清完重算 window 与全局计数，并返回 window id。
+3. CLI 的 `--clear-pane` 在窗口被清空时释放边框，然后刷新状态栏。
+
+**只清 running**：done/wait/error 是待处理通知，agent 退出不代表你已经看过，
+那几条要留到你切进去处理。所以 `--clear-pane` 对 done 是空操作。
+
+**SessionEnd 是唯一的例外，不能用 async**：Claude Code 退出会带走后台子进程，
+异步的清除可能跑到一半就被杀，留下一个永远灭不掉的 `●`。官方给 SessionEnd
+1.5 秒预算，而这个操作只有几十毫秒，同步不会拖慢退出。`our_entry()` 里为此
+单独判断了事件名。
+
+**回归测试**：`test/e2e/claude_hook.bats` 3 条（SessionEnd 清 running；
+done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
+（`--clear-pane` 只清 running；清完窗口聚合回落）、
+`test/integration/install_hooks.bats` 扩成六个事件并断言 SessionEnd 不带 async。
+
+**相关代码**：`hooks/claude-code.sh`、`lib/core.sh`、`bin/tmux-whistle`、
+`lib/install-hooks.sh`。
+
+---
+
 ## 本轮新增（2026-10-22）
 
 三条功能，不是缺陷：
@@ -456,6 +503,8 @@ fi
    取 rank 最高的一行）。待处理项带编号可跳转，running 项以 `-` 开头
    （`display-menu` 的 disabled 语义：tmux 绘制时会剥掉那个 `-` 并置暗，选中与
    鼠标路径都会跳过），没有快捷键。
+4. **`running` 有了灭灯信号** —— 订阅 `SessionEnd`，agent 退出时清掉该 pane 的 running
+   （见 TODO-11）。
 
 ---
 

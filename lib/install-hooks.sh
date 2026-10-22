@@ -85,14 +85,22 @@ marker = os.environ["WHISTLE_MARKER"]
 cmd = os.environ["WHISTLE_HOOK_CMD"]
 action = os.environ["WHISTLE_ACTION"]
 
-# 我们管理的五个事件。
+# 我们管理的六个事件。
 #   Stop             agent 一轮结束
 #   StopFailure      回合因 API 错误结束（限流 / 过载 / 认证失败 ...）
 #                    —— 它**替代** Stop 触发，两者互斥；error 唯一的自动来源
 #   Notification     等授权 / 后台 agent 要输入 / 后台 agent 完成
-#   SessionStart     会话开始
-#   UserPromptSubmit 用户开始交互
-EVENTS = ["Stop", "StopFailure", "Notification", "SessionStart", "UserPromptSubmit"]
+#   SessionStart     会话开始（→ running）
+#   UserPromptSubmit 用户开始交互（→ running）
+#   SessionEnd       会话结束（→ 清掉 running，否则窗口会一直亮 ●）
+EVENTS = [
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "SessionStart",
+    "UserPromptSubmit",
+    "SessionEnd",
+]
 
 # Notification 只订阅"需要用户做点什么"的类型。
 # auth_success / elicitation_complete / quota_* / plugin_notification 与本插件无关，
@@ -112,7 +120,13 @@ def is_ours(entry):
 
 
 def our_entry(event):
-    entry = {"hooks": [{"type": "command", "command": cmd, "async": True}]}
+    hook = {"type": "command", "command": cmd}
+    # SessionEnd 必须同步：它要清掉 running，而 Claude Code 退出时会带走后台
+    # 子进程 —— async 的清除可能跑到一半就被杀，留下一个永远灭不掉的 ●。
+    # 这个操作只有几十毫秒，同步不会拖慢退出（官方给 SessionEnd 1.5s 预算）。
+    if event != "SessionEnd":
+        hook["async"] = True
+    entry = {"hooks": [hook]}
     if event == "Notification":
         entry["matcher"] = NOTIFY_MATCHER
     return entry
