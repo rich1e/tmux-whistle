@@ -8,8 +8,17 @@
 
 ## 待处理
 
+### 功能缺陷
+
 - [ ] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [ ] **TODO-2** 菜单超过 26 项时静默截断
+- [ ] **TODO-5** `@whistle_badge` 没有任何代码读，设 `off` 无效
+- [ ] **TODO-6** `@whistle_self` 的行为与名字/文档相反
+
+### 文档缺陷
+
+- [ ] **TODO-7** `--help` 说 `on | off` 是「当前 session 的开关」，实际是全局
+- [ ] **TODO-8** `@whistle_detect_wait-re` / `done-re` 代码在读，但文档里没有
 
 ## 已修复
 
@@ -135,6 +144,181 @@ posix 方言解析失败 → shfmt 报错到 stderr、stdout 为空 → 脚本�
 **修复**：按 `make fmt` 的做法拆成两次调用，各用对应方言。
 
 **验证**：追加未格式化代码后，旧版 `rc=0` 通过，新版 `rc=2` 并列出文件名。
+
+---
+
+## TODO-5 · `@whistle_badge` 没有任何代码读
+
+⬜ 待处理
+
+**现象**：README 配置表写着 `@whistle_badge off` = 关掉窗口徽章，但设成 `off`
+之后徽章照常出现。
+
+**触发**：
+
+```sh
+tmux set -g @whistle_badge off
+tmux-whistle done 'x'          # 徽章仍然注入
+tmux show -gwv window-status-format
+# → X#{E:@whistle_mark}▌        哨兵仍在
+```
+
+**原因**：全仓搜 `whistle_badge` 只有两处命中 —— `lib/core.sh` 的默认值表，
+和 `bin/tmux-whistle` 的 usage 字符串。**没有任何代码读它**，
+`whistle_conf '@whistle_badge'` 从未被调用。
+
+对照其余渠道：`@whistle_border` / `@whistle_border_status` / `@whistle_display` /
+`@whistle_os` 都在 `lib/deliver.sh` 的对应函数里有开关判断，唯独徽章漏了。
+
+**修复方向**：在 `whistle_format_patch`（或 `whistle_deliver`）里加开关判断。
+注意语义有两种，取哪种要定清楚：
+
+- **不注入**：`@whistle_badge off` 时不往 `window-status-format` 插哨兵
+  （若已注入则回滚移除）
+- **注入但渲染为空**：`whistle_mark_build` 在值为 `off` 时生成一个恒为空的
+  format，这样状态栏格式保持原样、不需要事后回滚
+
+后者更简单也更符合「幂等注入」的设计，倾向选它。
+
+**回归测试**：设 `off` 后 `whistle_deliver` 跑一遍，断言
+`window-status-format` 里哨兵要么不存在、要么渲染为空；再设回 `on` 断言徽章恢复。
+
+**相关代码**：`lib/status-line.sh` 的 `whistle_format_patch` / `whistle_mark_build`。
+
+---
+
+## TODO-6 · `@whistle_self` 的行为与名字相反
+
+⬜ 待处理 · **语义已定**：`on` = 提示自己所在的 session，`off` = 不提示
+
+**现象**：文档与选项名都说「是否**也**提示自己所在的 session」，默认 `off`，
+但实际行为是反的。实测（打桩记录 `display-message` 的目标）：
+
+```
+@whistle_self=off （默认） →  origin + other    ← 自己**也**收到了
+@whistle_self=on           →  origin            ← 反而收窄成只提示自己
+```
+
+也就是说：默认配置下你**总是**在自己的 session 看到瞬时提示；
+而打开这个选项反而**不再通知其它 session**。
+
+**触发**：任意状态下让一个 session 内的 agent 报状态，然后看发起方 session
+有没有弹出 `display-message`。
+
+**原因**：`lib/deliver.sh` 的 `whistle_display_fanout` 里，
+发往 origin 的那一条是**无条件**执行的，只有后续的扇出循环才看 `@whistle_self`：
+
+```sh
+whistle_tmux display-message -t "$_origin" "$_body"   # ← 无条件，永远发
+[ "$(whistle_conf '@whistle_self')" = on ] && return 0 # ← on：不再扇出
+for _s in $(... list-clients ...); do
+  [ "$_s" = "$_origin" ] && continue                  # ← off：扇出给其它 session
+done
+```
+
+按选项名与文档，`self` 应该只管 **origin 那一条**；现在的代码把它接到了
+「是否继续扇出」上，于是 on/off 的效果正好与字面意思相反。
+
+**修复方向**：把开关移到 origin 那一条上，扇出循环改为无条件执行 ——
+
+```sh
+# 发往 origin 的那条由 @whistle_self 决定
+if [ "$(whistle_conf '@whistle_self')" = on ]; then
+  display_message_to "$_origin" "$_body"
+fi
+# 扇出给其它 attached session，与 self 无关
+for _s in $(... list-clients ...); do
+  [ "$_s" = "$_origin" ] && continue
+  display_message_to "$_s" "$_body"
+done
+```
+
+**行为变更提醒**：修完之后**默认行为会变** —— 改前默认会提示自己所在 session，
+改后默认不再提示。这是往「不打扰自己」的预期靠拢，但对已有用户是可见变化，
+建议在 README 的调优小节里说明一句。
+
+**回归测试**：目前 `deliver.bats` 里那条 `@whistle_self on` 的用例只断言了
+`status == 0`，**完全没有断言目标 session**。需要打桩 `whistle_tmux` 记录
+`display-message` 的 `-t` 参数，分别断言 on/off 两种取值下的目标集合。
+
+**相关代码**：`lib/deliver.sh` 的 `whistle_display_fanout`。
+
+---
+
+## TODO-7 · `--help` 说 `on | off` 是「当前 session 的开关」
+
+⬜ 待处理
+
+**现象**：`tmux-whistle --help` 输出
+
+```
+$WHISTLE_PROG on | off             当前 session 的开关
+```
+
+但实现是 `set -g`，即**全局**开关。任何 session 里执行都会影响整个 server。
+
+**触发**：在 session A 执行 `tmux-whistle off`，然后到 session B 置状态 ——
+B 也被关掉了。
+
+**原因**：`bin/tmux-whistle` 的 `cmd_toggle`：
+
+```sh
+whistle_tmux set -g @whistle_enabled "$_v"
+```
+
+`-g` 就是 global。另外 `whistle_conf` 用 `show -gqv` 读取，**所有**
+`@whistle_*` 配置都只认全局值 —— 即使手动 `set -w` 设了 session 级配置也不会生效。
+
+**修复方向**：最小改动是把 usage 文字改成「全局开关」，与 README 一致。
+（README 命令速查里写的已经是「总开关」，只有 CLI 帮助是错的。）
+
+若确实想要 per-session 开关，那是另一件事：需要 `cmd_toggle` 改成 `set`（session
+作用域）、`whistle_conf` 改成 `show -qv` 并按 pane→window→session→global 顺序回退。
+范围明显更大，不建议顺手做。
+
+**相关代码**：`bin/tmux-whistle` 的 `whistle_usage` / `cmd_toggle`。
+
+---
+
+## TODO-8 · `@whistle_detect_wait-re` / `done-re` 未文档化
+
+⬜ 待处理
+
+**现象**：兜底检测的两个正则选项代码在读，但 `README.md` 和默认值表里都查不到，
+用户无从得知可以自定义。
+
+**触发**：
+
+```sh
+tmux set -g '@whistle_detect_wait-re' '需要输入|请选择'
+# 能生效，但没有任何文档提到这两个选项叫什么
+```
+
+**原因**：`lib/detect.sh` 读这两个值：
+
+```sh
+whistle_conf '@whistle_detect_wait-re' 2> /dev/null \
+  || printf 'esc to interrupt|Do you want to|❯ 1\\. Yes|waiting for your input'
+```
+
+而 `lib/core.sh` 的 `WHISTLE_DEFAULTS` 表里没有它们，README 的配置表也没有。
+它们还有两处小问题：
+
+1. **兜底逻辑其实走不到 `||`**。`whistle_conf` 在选项不在默认值表时打印空串但
+   **返回 0**，所以 `|| printf '...'` 那条兜底分支永远不会执行。真正兜底的是
+   调用方里的 `[ -n "$_wait_re" ] || _wait_re=$(whistle_detect_default_wait_re)`。
+2. **命名不一致**：其它选项全是下划线（`@whistle_detect_interval`），
+   只有这两个是连字符（`@whistle_detect_wait-re`）。tmux 的 option 名允许连字符，
+   但和邻居不一致容易让人以为写错了。
+
+**修复方向**：补进 `WHISTLE_DEFAULTS` 与 README 配置表；顺手把命名统一成
+`@whistle_detect_wait_re` / `@whistle_detect_done_re`（若改名，需要兼容旧的
+连字符写法，否则已有配置会静默失效 —— 加一条「旧名仍被识别」的读取即可）。
+
+兜底那段 `|| printf` 是死代码，也可以一并清掉。
+
+**相关代码**：`lib/detect.sh` 的 `whistle_detect_default_*`；`lib/core.sh` 的
+`WHISTLE_DEFAULTS`。
 
 ---
 
