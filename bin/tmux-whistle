@@ -1,0 +1,481 @@
+#!/bin/sh
+# tmux-whistle — tmux 内跨 session 的 agent 状态通知
+#
+# 唯一状态写入点。agent 调它写状态，状态栏与各渠道读它渲染。
+
+# 解析符号链接后再定位 lib/。
+# 安装时 bin/tmux-whistle 被链接到 ~/.local/bin，此时 $0 是链接路径，
+# 直接 dirname 会得到 ~/.local/lib —— 找不到模块，整个 CLI 不可用。
+# macOS 的 readlink 没有 -f，所以自己循环解析。
+_whistle_self="$0"
+while [ -L "$_whistle_self" ]; do
+  _whistle_link=$(readlink "$_whistle_self") || break
+  case "$_whistle_link" in
+  /*) _whistle_self="$_whistle_link" ;;
+  *) _whistle_self="$(dirname -- "$_whistle_self")/$_whistle_link" ;;
+  esac
+done
+WHISTLE_BIN_DIR=$(CDPATH='' cd -- "$(dirname -- "$_whistle_self")" && pwd)
+WHISTLE_LIB_DIR=$(CDPATH='' cd -- "$WHISTLE_BIN_DIR/../lib" && pwd)
+unset _whistle_self _whistle_link
+
+for _m in core status-line deliver; do
+  if [ ! -f "$WHISTLE_LIB_DIR/$_m.sh" ]; then
+    printf 'tmux-whistle: 缺少 lib/%s.sh（安装不完整？）\n' "$_m" >&2
+    exit 1
+  fi
+  # shellcheck source=lib/core.sh
+  . "$WHISTLE_LIB_DIR/$_m.sh"
+done
+unset _m
+
+WHISTLE_PROG=$(basename "$0")
+WHISTLE_SELF=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/$WHISTLE_PROG
+
+whistle_usage() {
+  cat << EOF
+$WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
+
+用法：
+  $WHISTLE_PROG <状态> [消息]        置状态：done | wait | error | running
+  $WHISTLE_PROG clear [-a]           清除当前窗口 / 全部待处理状态
+  $WHISTLE_PROG list                 列出所有待处理项
+  $WHISTLE_PROG menu                 打开待处理菜单（等同 prefix + W）
+  $WHISTLE_PROG jump <n|sess:win>    跳到指定项并清除
+  $WHISTLE_PROG on | off             当前 session 的开关
+  $WHISTLE_PROG doctor               环境自检
+
+选项：
+  -t, --target <pane|window>        指定目标（默认当前 pane）
+      --dry-run                     只打印会做什么，不执行
+
+Claude Code 集成：
+  $WHISTLE_PROG install-hooks [--dry-run] [--uninstall]
+
+配置（tmux 里 set -g @whistle_xxx）：
+  @whistle_enabled on|off            总开关（默认 on）
+  @whistle_badge on|off              窗口标签徽章（默认 on）
+  @whistle_border on|off             面板边框变色（默认 on）
+  @whistle_display on|off            状态栏瞬时提示（默认 on）
+  @whistle_os on|off                 桌面系统通知（默认 off）
+  @whistle_self on|off               是否也提示自己所在的 session（默认 off）
+  @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
+  @whistle_color_done|wait|error     徽章与边框颜色
+EOF
+}
+
+whistle_die() {
+  printf '%s: %s\n' "$WHISTLE_PROG" "$*" >&2
+  exit 1
+}
+
+# -- 置状态 ----------------------------------------------------------------
+
+cmd_set() {
+  _state="$1"
+  _msg="${2:-}"
+  shift 2 2> /dev/null || shift $#
+
+  _target=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -t | --target)
+      _target="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    --dry-run)
+      printf '将置 %s = "%s"（目标 %s）\n' "$_state" "$_msg" "${_target:-$TMUX_PANE}"
+      return 0
+      ;;
+    -*)
+      whistle_die "未知选项 [$1]"
+      ;;
+    *)
+      _msg="$_msg $1"
+      shift
+      ;;
+    esac
+  done
+
+  _pane=$(whistle_state_set "$_state" "$_msg" "$_target") || exit 1
+  _win=$(whistle_pane_window "$_pane")
+  [ -n "$_win" ] || whistle_die "拿不到 pane $_pane 所属窗口"
+
+  whistle_recompute_window "$_win"
+  whistle_recompute_global
+  whistle_deliver "$_win" "$_state" "$(whistle_sanitize "$_msg")"
+}
+
+# -- 清除 ------------------------------------------------------------------
+
+cmd_clear() {
+  _all=0
+  _target=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -a | --all)
+      _all=1
+      shift
+      ;;
+    -t | --target)
+      _target="$2"
+      shift 2
+      ;;
+    *)
+      _target="$1"
+      shift
+      ;;
+    esac
+  done
+
+  if [ "$_all" = 1 ]; then
+    whistle_clear_all
+    whistle_border_release_all
+    whistle_border_status_release_all
+    whistle_refresh_all
+    return 0
+  fi
+
+  _win=$(whistle_tmux display-message -p -t "${_target:-}" '#{window_id}' 2> /dev/null)
+  [ -n "$_win" ] || _win=$(whistle_pane_window "$(whistle_resolve_pane "$_target")")
+  [ -n "$_win" ] || whistle_die "找不到目标窗口"
+  whistle_clear_window "$_win"
+  whistle_border_release "$_win"
+  whistle_border_status_release "$_win"
+  whistle_refresh_sessions "$_win"
+}
+
+# -- 列表 ------------------------------------------------------------------
+
+cmd_list() {
+  _rows=$(whistle_list_lines)
+  if [ -z "$_rows" ]; then
+    printf '没有待处理的 whistle。\n'
+    return 0
+  fi
+
+  printf '%-14s %-12s %-5s %-8s %-8s %s\n' SESSION WINDOW PANE STATE MSG AGE
+  # here-doc 重定向而非管道：管道会把循环塞进子 shell
+  while IFS='|' read -r s w p st m a; do
+    printf '%-14s %-12s %-5s %-8s %-8s %s\n' "$s" "$w" "$p" "$st" "$m" "$a"
+  done << EOF
+$_rows
+EOF
+  _n=$(printf '%s\n' "$_rows" | wc -l | tr -d ' ')
+  printf '\n共 %s 项待处理。按 prefix + W 打开菜单跳转。\n' "$_n"
+}
+
+# -- 菜单 / 跳转 -----------------------------------------------------------
+
+# display-menu 的键位是单字符：1-9 之后接字母，最多 26 项
+whistle_menu_key() {
+  case "$1" in
+  [1-9]) printf '%s' "$1" ;;
+  *) printf '%s' "$(printf '%s' abcdefghijklmnopqrstuvwxyz | cut -c "$(($1 - 10)))" 2> /dev/null)" ;;
+  esac
+}
+
+cmd_menu() {
+  _items=$(whistle_pending_windows)
+  if [ -z "$_items" ]; then
+    whistle_tmux display-message '没有待处理的 whistle'
+    return 0
+  fi
+
+  # 用 set -- 累积 argv：菜单 label 里有空格，靠单词切分传参会散架。
+  set --
+  _i=0
+  while IFS='|' read -r s wid wn _wi st msg; do
+    _i=$((_i + 1))
+    [ "$_i" -gt 26 ] && break
+    _label=" $(whistle_state_label "$st") $s:$wn $msg"
+    set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
+      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+  done << EOF
+$_items
+EOF
+
+  # display-menu 需要一个 attached client；在脚本里调用（无头 server）时
+  # 它会报 "no current client"。这时降级成纯文本列表，而不是静默失败。
+  if ! whistle_tmux display-menu -T 'tmux-whistle 待处理' "$@" 2> /dev/null; then
+    printf '没有可用的客户端。在 tmux 会话里按 prefix + W 打开菜单。\n\n'
+    cmd_list
+  fi
+}
+
+# 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
+# 用于在不依赖 attached client 的情况下验证参数构造。
+cmd_menu_args() {
+  _items=$(whistle_pending_windows)
+  [ -n "$_items" ] || return 0
+
+  _i=0
+  while IFS='|' read -r s wid wn _wi st msg; do
+    _i=$((_i + 1))
+    [ "$_i" -gt 26 ] && break
+    printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
+    printf '%s\n' "$(whistle_menu_key "$_i")"
+    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+  done << EOF
+$_items
+EOF
+}
+
+cmd_jump() {
+  [ -n "${1:-}" ] || whistle_die "用法：$WHISTLE_PROG jump <n|session:window>"
+  _target="$1"
+
+  # 匹配 session:window_name、session:window_index 或纯 window_index
+  _wid=$(whistle_tmux list-windows -a \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}' 2> /dev/null \
+    | awk -F'|' -v t="$_target" '$1 ":" $3 == t || $1 ":" $4 == t || $4 == t { print $2; exit }')
+  [ -n "$_wid" ] || whistle_die "找不到 [$_target]"
+
+  whistle_tmux switch-client -t "$_wid" 2> /dev/null || true
+  whistle_clear_window "$_wid"
+}
+
+# -- 开关 ------------------------------------------------------------------
+
+cmd_toggle() {
+  _v=$1
+  case "$_v" in
+  on | off) ;;
+  *) whistle_die "用法：$WHISTLE_PROG on|off" ;;
+  esac
+  whistle_tmux set -g @whistle_enabled "$_v"
+  whistle_tmux display-message "whistle: $_v"
+}
+
+# -- 内部子命令（供 hook / 绑定调用） ---------------------------------------
+
+cmd_recompute() {
+  _wins=$(whistle_tmux list-windows -a -F '#{window_id}' 2> /dev/null)
+  for _w in $_wins; do
+    whistle_recompute_window "$_w"
+  done
+  whistle_recompute_global
+}
+
+cmd_read_window() {
+  _win="${1:-}"
+  [ -n "$_win" ] || return 0
+  whistle_read_window "$_win" || return 0
+  whistle_border_release "$_win"
+  whistle_border_status_release "$_win"
+  whistle_refresh_sessions "$_win"
+}
+
+cmd_read_pane() {
+  _pane="${1:-}"
+  [ -z "$_pane" ] && _pane=$(whistle_resolve_pane '')
+  [ -z "$_pane" ] && return 1
+
+  # 先看是否真的待处理，避免无谓的重算与重绘
+  _s=$(whistle_tmux show -pqv -t "$_pane" @whistle 2> /dev/null)
+  whistle_is_notified "$_s" || return 0
+
+  whistle_read_pane "$_pane" || return 0
+  _win=$(whistle_pane_window "$_pane")
+  whistle_border_release "$_win"
+  whistle_border_status_release "$_win"
+  whistle_refresh_sessions "$_win"
+}
+
+cmd_print_status_line() {
+  whistle_print_status_line
+}
+
+# -- doctor ----------------------------------------------------------------
+
+cmd_doctor() {
+  _ok=0
+  _warn=0
+
+  _ok_line() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+  _warn_line() {
+    printf '  \033[33m!\033[0m %s\n' "$1"
+    _warn=$((_warn + 1))
+  }
+  _bad_line() {
+    printf '  \033[31m✗\033[0m %s\n' "$1"
+    _ok=1
+  }
+
+  printf '\ntmux-whistle doctor\n\n'
+
+  printf 'tmux\n'
+  if ! command -v tmux > /dev/null 2>&1; then
+    _bad_line 'tmux 不在 PATH'
+  else
+    _ver=$(tmux -V | awk '{print $2}')
+    _ok_line "tmux $_ver"
+    _maj=${_ver%%.*}
+    _min=$(printf '%s' "$_ver" | cut -d. -f2)
+    if [ "$_maj" -lt 3 ] || { [ "$_maj" -eq 3 ] && [ "$_min" -lt 2 ]; }; then
+      _bad_line '需要 tmux >= 3.2（run-shell -b / refresh-client -S / pane-border-status）'
+    fi
+    if ! whistle_tmux display-message -p '#{session_id}' > /dev/null 2>&1; then
+      _bad_line '连不上 tmux server（在 tmux 内运行，或设置 TMUX_SOCKET）'
+    fi
+  fi
+
+  printf '\n状态栏\n'
+  _fmt=$(whistle_tmux show -gwv window-status-format 2> /dev/null)
+  _n=$(printf '%s' "$_fmt" | grep -o -F "$WHISTLE_MARK_SENTINEL" | wc -l | tr -d ' ')
+  if [ "$_n" = 1 ]; then
+    _ok_line '徽章已注入 window-status-format'
+  elif [ "$_n" -gt 1 ]; then
+    _bad_line "哨兵出现 $_n 次（重复注入了）—— 跑 install.sh --uninstall 后重装"
+  else
+    _warn_line '未注入。跑 make install，或手动加 tmux_conf_theme_window_status_format'
+  fi
+
+  printf '\n投递渠道\n'
+  for _c in badge border display os; do
+    _v=$(whistle_conf "@whistle_$_c")
+    printf '  %-8s %s\n' "$_c" "$_v"
+  done
+
+  if [ "$(whistle_conf '@whistle_os')" = on ]; then
+    if command -v terminal-notifier > /dev/null 2>&1; then
+      _ok_line 'terminal-notifier 可用'
+    elif command -v osascript > /dev/null 2>&1; then
+      osascript -e 'display notification "tmux-whistle doctor 测试" with title "tmux-whistle"' \
+        > /dev/null 2>&1 || true
+      _warn_line '已发 osascript 测试通知。没看到弹窗 → 系统设置 > 通知 > Script Editor 打开"允许通知"'
+    elif command -v notify-send > /dev/null 2>&1; then
+      notify-send 'tmux-whistle' 'doctor 测试' > /dev/null 2>&1 || true
+      _ok_line 'notify-send 可用'
+    else
+      _bad_line '没有可用的桌面通知命令'
+    fi
+  else
+    _warn_line '@whistle_os 是 off。要开：set -g @whistle_os on'
+  fi
+
+  printf '\n已读钩子\n'
+  for _h in after-select-window after-select-pane window-pane-changed; do
+    if whistle_tmux show-hooks -gw "$_h" 2> /dev/null | grep -q whistle; then
+      _ok_line "$_h 已注册"
+    else
+      _warn_line "$_h 未注册"
+    fi
+  done
+
+  printf '\nClaude Code hooks\n'
+  _settings="${HOME}/.claude/settings.json"
+  if [ -f "$_settings" ]; then
+    if grep -q 'tmux-whistle' "$_settings" 2> /dev/null; then
+      _ok_line "$_settings 已配置"
+    else
+      _warn_line '未配置。跑 tmux-whistle install-hooks'
+    fi
+  else
+    _warn_line "找不到 $_settings"
+  fi
+
+  printf '\n失效的旧绑定\n'
+  # list-keys 的输出是多空格对齐的（"bind-key    -T prefix C-m     ..."），
+  # 所以模式必须容忍任意空白，不能用单个空格。
+  _stale=0
+  for _k in C-m M-m M; do
+    _cmd=$(whistle_tmux list-keys -T prefix 2> /dev/null \
+      | grep -E "prefix +${_k} +" | grep -F 'tmux-notify' || true)
+    [ -n "$_cmd" ] || continue
+
+    # 从命令里抠出脚本路径
+    _path=$(printf '%s' "$_cmd" | grep -oE '/[^ "'"'"']*tmux-notify[^ "'"'"']*' | head -1)
+    _dir=${_path%/*}
+    if [ -n "$_dir" ] && [ -d "$_dir" ]; then
+      printf '  - prefix %s → tmux-notify（目录存在）\n' "$_k"
+    else
+      printf '  \033[33m!\033[0m prefix %s → tmux-notify，但脚本已不存在。跑 install.sh --cleanup 清理。\n' "$_k"
+      _warn=$((_warn + 1))
+      _stale=1
+    fi
+  done
+  [ "$_stale" = 1 ] || printf '  - 无\n'
+
+  printf '\n'
+  if [ "$_ok" = 1 ]; then
+    printf '有问题项请先修掉再继续。\n\n'
+    exit 1
+  fi
+  if [ "$_warn" -gt 0 ]; then
+    printf '%s 项提醒（非致命）。\n\n' "$_warn"
+  else
+    printf '一切正常。\n\n'
+  fi
+}
+
+# -- 分派 ------------------------------------------------------------------
+
+[ $# -gt 0 ] || {
+  whistle_usage
+  exit 1
+}
+
+case "$1" in
+done | wait | error | running)
+  _state="$1"
+  _msg="${2:-}"
+  shift 2 2> /dev/null || shift $#
+  cmd_set "$_state" "$_msg" "$@"
+  ;;
+clear)
+  shift
+  cmd_clear "$@"
+  ;;
+list | ls)
+  shift
+  cmd_list "$@"
+  ;;
+menu)
+  shift
+  cmd_menu "$@"
+  ;;
+jump)
+  shift
+  cmd_jump "$@"
+  ;;
+on | off)
+  # 必须先用 $1 再 shift —— 先 shift 会把子命令本身吃掉
+  cmd_toggle "$1"
+  ;;
+doctor)
+  shift
+  cmd_doctor "$@"
+  ;;
+install-hooks)
+  shift
+  exec "$WHISTLE_BIN_DIR/../lib/install-hooks.sh" "$@"
+  ;;
+-h | --help | help)
+  whistle_usage
+  ;;
+--read-window)
+  shift
+  cmd_read_window "${1:-}"
+  ;;
+--read-pane)
+  shift
+  cmd_read_pane "${1:-}"
+  ;;
+--recompute)
+  shift
+  cmd_recompute
+  ;;
+--print-status-line)
+  shift
+  cmd_print_status_line
+  ;;
+--menu-args)
+  shift
+  cmd_menu_args
+  ;;
+*)
+  whistle_usage
+  exit 1
+  ;;
+esac

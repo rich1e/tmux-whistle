@@ -1,0 +1,24 @@
+# tmux-whistle ShellCheck 配置
+#
+# 目标 shell：macOS 自带 /bin/sh 与 Linux 的 dash。
+# 测试脚本与 Bats 文件在文件头用 `# shellcheck shell=bash` 单独覆盖。
+#
+# 注意：本文件的 directive 不接受 "=" 两侧的空格（带空格会解析失败报 SC1134）。
+
+shell=sh
+
+# local 未被 POSIX 规定，但 dash / bash / zsh / busybox ash 全都支持，我们依赖它是安全的。
+disable=SC3043
+
+# SC2312 会对 "$(f)" 这种写法提示"返回值被掩盖"。本项目里这些位置要么在
+# 赋值后立刻校验取值（[ -n "$x" ]）、要么返回值确实无关（printf/cut/sanitize），
+# 拆成两行只会增加噪音。真正的返回值检查我们用显式的 || exit/return 做。
+disable=SC2312
+
+# 跟随 source 到外部脚本，否则 lib/*.sh 里的函数引用会被当成未定义。
+external-sources=true
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/lib
+
+enable=quote-safe-variables
+enable=check-extra-masked-returns

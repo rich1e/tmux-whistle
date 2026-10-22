@@ -1,0 +1,321 @@
+#!/bin/sh
+# tmux-whistle 核心状态机。
+#
+# 由 bin/tmux-whistle 与 hooks/claude-code.sh source，不单独执行。
+#
+# 唯一状态写入点。所有 pane / window / global 的 user option 变更都从这里出去，
+# 渲染（status-line.sh）与投递（deliver.sh）只读不写。
+#
+# 可测性约束：§4.0 的三个纯函数不得出现任何 tmux 调用。
+
+# -- tmux 调用包装 ---------------------------------------------------------
+#
+# 优先级：显式 WHISTLE_TMUX_SOCKET（测试用）> $TMUX > $TMUX_SOCKET > 默认 socket。
+#
+# 为什么 $TMUX 排在 $TMUX_SOCKET 前面：TMUX_SOCKET 是 oh-my-tmux 写进 tmux
+# 全局环境变量的，会被子进程**跨 server 继承**。在一个新起的隔离 server 里，
+# 它可能仍指向用户正在用的那个 server —— 拿它定位会写错地方。
+# $TMUX 由 tmux 在每个 pane 的进程环境里按 server 写好，是权威值
+# （格式：<socket-path>,<pid>,<session-index>）。
+
+whistle_tmux() {
+  if [ -n "${WHISTLE_TMUX_SOCKET:-}" ]; then
+    tmux -S "$WHISTLE_TMUX_SOCKET" "$@"
+  elif [ -n "${TMUX:-}" ]; then
+    tmux -S "${TMUX%%,*}" "$@"
+  elif [ -n "${TMUX_SOCKET:-}" ]; then
+    tmux -S "$TMUX_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
+whistle_now() {
+  date +%s
+}
+
+# -- 状态常量 --------------------------------------------------------------
+
+WHISTLE_STATES='running done wait error'
+
+# window 聚合优先级：error > wait > done > running > ''
+# 已读通知 = done / wait / error 三种
+WHISTLE_NOTIFIED_STATES='done wait error'
+
+# 消息进入 tmux format 前的最大长度（字符）
+WHISTLE_MSG_MAX=80
+
+# 默认配置。option 未被显式设置时回落到这里；
+# 用户用 `set -g @whistle_xxx` 覆盖后即以用户值为准。
+# 派生值（@whistle_mark / @whistle_pending）不在表内，由插件生成。
+WHISTLE_DEFAULTS='@whistle_enabled on
+@whistle_badge on
+@whistle_border on
+@whistle_border_status off
+@whistle_display on
+@whistle_os off
+@whistle_self off
+@whistle_clear_on_focus on
+@whistle_color_done #00af00
+@whistle_color_wait #af8700
+@whistle_color_error #d70000
+@whistle_display_ms 0
+@whistle_debug off
+@whistle_detect off
+@whistle_detect_interval 15
+@whistle_detect_idle 180'
+
+# whistle_conf <option 名> → 生效值（option 优先，缺省回落默认表）
+whistle_conf() {
+  _cv=$(whistle_tmux show -gqv "$1" 2> /dev/null) || _cv=''
+  if [ -n "$_cv" ]; then
+    printf '%s' "$_cv"
+    return 0
+  fi
+  printf '%s\n' "$WHISTLE_DEFAULTS" | grep "^$1 " | head -1 | cut -d' ' -f2-
+}
+
+# -- 纯函数（§4.0：不碰 tmux） ---------------------------------------------
+
+# whistle_sanitize <任意字符串>
+#
+# 消息会被塞进 tmux format（display-menu 条目、window-status-format），
+# 所以必须剔掉会破坏 format 的字符：
+#   # { }   —— "#{...}" 会被二次展开；"{" "}" 在条件式里截断参数
+#   |       —— 聚合时它是字段分隔符
+#   控制字符 —— 会破坏状态栏单行渲染
+# 逗号保留：它在 display-menu 的引号标签内是安全的，而消息里很常用。
+#
+# 输出最多 WHISTLE_MSG_MAX 个字符（依赖 UTF-8 locale 下 cut -c 按字符切）。
+whistle_sanitize() {
+  printf '%s' "${1:-}" \
+    | tr '\n\r\t' '   ' \
+    | tr -d '[:cntrl:]' \
+    | tr -d '#{}|' \
+    | tr -s ' ' \
+    | cut -c "1-$WHISTLE_MSG_MAX" \
+    | sed -e 's/^ *//' -e 's/ *$//'
+}
+
+# whistle_rank <状态> → 0..4
+# 未知状态一律当 0（等价于"无状态"），这样脏数据不会把徽章顶到高优先级。
+whistle_rank() {
+  case "${1:-}" in
+  error) printf '4' ;;
+  wait) printf '3' ;;
+  done) printf '2' ;;
+  running) printf '1' ;;
+  *) printf '0' ;;
+  esac
+}
+
+# 注意：POSIX sh 没有局部变量，函数里的临时变量会覆盖调用方的同名变量。
+# 所以这里的循环变量用 _ws 前缀，与其它函数里读出来的 _s/_state 等隔离开。
+whistle_is_state() {
+  for _ws in $WHISTLE_STATES; do
+    [ "$_ws" = "${1:-}" ] && return 0
+  done
+  unset _ws
+  return 1
+}
+
+# whistle_is_notified <状态> → 该状态算不算"待用户处理"
+whistle_is_notified() {
+  for _ws in $WHISTLE_NOTIFIED_STATES; do
+    [ "$_ws" = "${1:-}" ] && return 0
+  done
+  unset _ws
+  return 1
+}
+
+# whistle_aggregate
+#
+# stdin  = tmux list-panes -F '#{pane_id}|#{@whistle}|#{@whistle_msg}' 的输出
+# stdout = "<聚合态>|<消息>|<待处理数>"
+#
+# 分隔符用 '|'（非空白），否则 read 会把连续分隔符折叠掉，
+# 导致 @whistle 为空时后面的字段整体错位。消息在最后一列，
+# 所以即便含 '|' 也只会污染最后一个字段的尾部——而 sanitize 已经剔掉了它。
+#
+# 聚合规则：取 rank 最高的 pane 的状态与消息；全部为空时输出空状态。
+whistle_aggregate() {
+  _best_rank=0
+  _best_state=''
+  _best_msg=''
+  _pending=0
+  while IFS='|' read -r _pane_id _state _msg || [ -n "${_pane_id:-}" ]; do
+    # 合法 pane id 以 % 开头；跳过空行与解析失败的行
+    case "${_pane_id:-}" in
+    '%'*) ;;
+    *) continue ;;
+    esac
+    _rank=$(whistle_rank "$_state")
+    if whistle_is_notified "$_state"; then
+      _pending=$((_pending + 1))
+    fi
+    if [ "$_rank" -gt "$_best_rank" ]; then
+      _best_rank=$_rank
+      _best_state=$_state
+      _best_msg=$_msg
+    fi
+  done
+  printf '%s|%s|%s\n' "$_best_state" "$_best_msg" "$_pending"
+}
+
+# -- 状态读写 --------------------------------------------------------------
+
+# 解析目标 pane：显式 -t > $TMUX_PANE > 当前 client 的活动 pane
+whistle_resolve_pane() {
+  if [ -n "${1:-}" ]; then
+    printf '%s' "$1"
+    return 0
+  fi
+  if [ -n "${TMUX_PANE:-}" ]; then
+    printf '%s' "$TMUX_PANE"
+    return 0
+  fi
+  whistle_tmux display-message -p '#{pane_id}' 2> /dev/null
+}
+
+# pane 所属窗口 id
+whistle_pane_window() {
+  whistle_tmux display-message -p -t "$1" '#{window_id}' 2> /dev/null
+}
+
+# whistle_state_set <state> <msg> [pane]
+#
+# 一次 tmux 调用写完 4 个 pane option（KP-16：这条链里不能出现 run-shell，
+# 否则会阻塞 tmux 命令队列）。
+#
+# stdout = 目标 pane id。诊断信息一律走 stderr，方便调用方做命令替换。
+# 重算与投递由调用方编排（CLI），本函数只负责写。
+whistle_state_set() {
+  _state="$1"
+  _msg=$(whistle_sanitize "$2")
+  _pane=$(whistle_resolve_pane "$3")
+
+  if [ -z "$_pane" ]; then
+    printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
+    return 1
+  fi
+  if ! whistle_is_state "$_state"; then
+    printf 'tmux-whistle: 未知状态 [%s]（可选：%s）\n' "$_state" "$WHISTLE_STATES" >&2
+    return 1
+  fi
+
+  whistle_tmux set -p -t "$_pane" @whistle "$_state" \
+    \; set -p -t "$_pane" @whistle_msg "$_msg" \
+    \; set -p -t "$_pane" @whistle_at "$(whistle_now)" \
+    \; set -p -t "$_pane" @whistle_src "${WHISTLE_SRC:-manual}" || return 1
+
+  printf '%s' "$_pane"
+}
+
+# whistle_state_clear <pane> → stdout = pane id
+whistle_state_clear() {
+  _pane=$(whistle_resolve_pane "$1")
+  [ -z "$_pane" ] && return 1
+
+  whistle_tmux set -p -t "$_pane" -u @whistle \
+    \; set -p -t "$_pane" -u @whistle_msg \
+    \; set -p -t "$_pane" -u @whistle_at \
+    \; set -p -t "$_pane" -u @whistle_src || return 1
+
+  printf '%s' "$_pane"
+}
+
+# 清除整个 window 内所有处于"待处理"状态的 pane（已读语义），并重算
+#
+# 分层约定：core 只管状态，不碰边框与重绘（那属于 deliver 层）。
+# 所以这里不调 whistle_border_release / whistle_refresh_*，由调用方补上。
+whistle_clear_window() {
+  _win="${1:-}"
+  [ -z "$_win" ] && return 1
+
+  _pids=$(whistle_tmux list-panes -t "$_win" -F '#{pane_id}' 2> /dev/null)
+  for _p in $_pids; do
+    _s=$(whistle_tmux show -pqv -t "$_p" @whistle 2> /dev/null) || _s=''
+    whistle_is_notified "$_s" && whistle_state_clear "$_p" > /dev/null
+  done
+
+  whistle_recompute_window "$_win"
+  whistle_recompute_global
+}
+
+# 清除整个 server 内所有待处理状态
+whistle_clear_all() {
+  _pids=$(whistle_tmux list-panes -a -F '#{pane_id}' 2> /dev/null)
+  for _p in $_pids; do
+    _s=$(whistle_tmux show -pqv -t "$_p" @whistle 2> /dev/null) || _s=''
+    whistle_is_notified "$_s" && whistle_state_clear "$_p" > /dev/null
+  done
+
+  _wins=$(whistle_tmux list-windows -a -F '#{window_id}' 2> /dev/null)
+  for _w in $_wins; do
+    whistle_recompute_window "$_w"
+  done
+  whistle_recompute_global
+}
+
+# -- 聚合重算 --------------------------------------------------------------
+
+whistle_recompute_window() {
+  _win="$1"
+  _lines=$(whistle_tmux list-panes -t "$_win" \
+    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}' 2> /dev/null)
+
+  _agg=$(printf '%s' "$_lines" | whistle_aggregate)
+  _state=${_agg%%|*}
+  _rest=${_agg#*|}
+  _msg=${_rest%%|*}
+  _count=${_rest#*|}
+
+  # window 级刻意用与 pane 级不同的名字（@whistle_win vs @whistle）。
+  # 同名会造成影子遮蔽：清掉 pane 的 @whistle 后，查找会回退到 window 上的
+  # 聚合值，于是 pane 看起来"清不掉"。
+  whistle_tmux setw -t "$_win" @whistle_win "$_state" \
+    \; setw -t "$_win" @whistle_win_msg "$_msg" \
+    \; setw -t "$_win" @whistle_win_count "$_count"
+}
+
+whistle_recompute_global() {
+  # 必须带 pane_id：whistle_aggregate 会跳过不以 '%' 开头的行，
+  # 只传 @whistle 的话每一行都被丢掉，计数恒为 0。
+  # 全局计数用不到消息，消息列留空。
+  _n=$(whistle_tmux list-panes -a -F '#{pane_id}|#{@whistle}' 2> /dev/null \
+    | whistle_aggregate | cut -d'|' -f3)
+  whistle_tmux set -g @whistle_pending "${_n:-0}"
+}
+
+# -- 查询 ------------------------------------------------------------------
+
+# whistle_list_lines：输出 "<session>|<window>|<pane>|<state>|<msg>|<age>"
+#
+# 分隔符一律用 '|'（非空白）。若用 TAB/空格，read 会折叠连续分隔符，
+# 消息为空时后面的列会整体前移一格。消息在倒数第二列且末列 age 恒有值，
+# 仍不如 '|' 稳妥。
+whistle_list_lines() {
+  # 临时变量一律用 _l 前缀：whistle_is_notified 等被调函数也会用通用短名，
+  # POSIX sh 里同名会被覆盖（曾经把 session 名覆盖成状态名）。
+  whistle_tmux list-panes -a \
+    -F '#{session_name}|#{window_name}|#{pane_id}|#{@whistle}|#{@whistle_msg}|#{@whistle_at}' \
+    2> /dev/null | while IFS='|' read -r _ls _lwn _lpid _lst _lmsg _lat; do
+    whistle_is_notified "$_lst" || continue
+    _lage='-'
+    if [ -n "${_lat:-}" ]; then
+      _lage=$(($(whistle_now) - _lat))s
+    fi
+    printf '%s|%s|%s|%s|%s|%s\n' "$_ls" "$_lwn" "$_lpid" "$_lst" "$_lmsg" "$_lage"
+  done
+}
+
+# 待处理的 (session, window_id, window_name, window_index, state, msg)
+# 供 display-menu 与 jump 使用。
+whistle_pending_windows() {
+  whistle_tmux list-panes -a \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle}|#{@whistle_msg}' \
+    2> /dev/null | while IFS='|' read -r _ps _pwid _pwn _pwi _pst _pmsg; do
+    whistle_is_notified "$_pst" || continue
+    printf '%s|%s|%s|%s|%s|%s\n' "$_ps" "$_pwid" "$_pwn" "$_pwi" "$_pst" "$_pmsg"
+  done
+}

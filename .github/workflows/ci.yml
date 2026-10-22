@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装测试工具
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install bats-core shellcheck mvdan/sh/shfmt tmux
+          else
+            sudo apt-get update
+            sudo apt-get install -y bats shellcheck tmux
+            # shfmt 不在 apt 里，用官方二进制
+            curl -sSL -o /usr/local/bin/shfmt \
+              "https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64"
+            sudo chmod +x /usr/local/bin/shfmt
+          fi
+
+      - name: 打印版本
+        run: |
+          tmux -V
+          bats --version
+          shellcheck --version | head -2
+          shfmt --version
+
+      - name: make check
+        run: make check
+
+      # ubuntu 上没有 notify-send 的桌面会话，正好验证降级路径不报错。
+      # 这里额外跑一遍显式确认：缺失通知命令时投递不炸。
+      - name: 验证通知命令缺失时的降级
+        if: runner.os == 'Linux'
+        run: |
+          command -v notify-send || echo "notify-send 不存在（预期）"
+          make test-integration
