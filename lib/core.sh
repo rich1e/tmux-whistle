@@ -458,6 +458,13 @@ whistle_recompute_global() {
     \; set -g @whistle_count_done "${_cd:-0}" \
     \; set -g @whistle_count_wait "${_cw:-0}" \
     \; set -g @whistle_count_error "${_ce:-0}"
+
+  # 帧推进器的启停跟着计数走 —— 挂在这里而不是 deliver / setup.sh 里，
+  # 因为**这里是唯一改 @whistle_count_running 的地方**。
+  # 挂在调用方就会漏：--recompute（由 pane-exited / window-pane-changed
+  # 钩子调用）只重算计数，不会走 deliver，于是「running 归零时被停掉的
+  # 推进器」在计数回升后没人重新拉起，状态栏和菜单的帧就一起冻住。
+  whistle_spin_sync
 }
 
 # -- 查询 ------------------------------------------------------------------

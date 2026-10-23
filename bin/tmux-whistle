@@ -365,28 +365,47 @@ whistle_menu_overflow() {
   printf -- '- 还有 %s 项未显示，用 %s list 查看' "${1:-0}" "$WHISTLE_PROG"
 }
 
-# whistle_menu_running_label <状态> <session> <窗口> <消息>
+# whistle_menu_state_icon <状态> → 菜单里该状态的前缀图标
 #
-# running 项的菜单标签，前缀是一个动画帧。
+# 与状态栏用同一套图标与颜色，两个界面看起来才是一回事：
+#   done ◆ / wait ◷ / error ⚠ / running 当前 Braille 帧
 #
-# 菜单是**瞬时弹出**的 —— 弹出那一瞬间拍一张快照就冻结了，不需要 format 在
-# 渲染时求值。所以这里用 shell 直接取当前帧，而不是塞一段
-# `#{?...}` 条件式（display-menu 的条目名是否会展开 format，我们没有验证过，
-# 不拿它冒险）。
-#
-# 颜色取自 @whistle_color_running（默认 #00af00 绿）。想让它换色：
-#   set -g @whistle_color_running '#5faf00'
+# running 的帧在**构造菜单那一刻**取（whistle_spin_char），不塞
+# #{?...} —— 菜单是一次性快照，不需要在渲染时求值；而 display-menu 的
+# 条目名会不会展开 format，我们没有验证过，不拿它冒险。
+whistle_menu_state_icon() {
+  case "${1:-}" in
+  running)
+    if [ "$(whistle_conf '@whistle_spin')" = on ]; then
+      whistle_spin_char
+    else
+      whistle_icon '@whistle_icon_running'
+    fi
+    ;;
+  done) whistle_icon '@whistle_icon_done' ;;
+  wait) whistle_icon '@whistle_icon_wait' ;;
+  error) whistle_icon '@whistle_icon_error' ;;
+  *) printf '%s' '' ;;
+  esac
+}
+
+whistle_menu_state_color() {
+  case "${1:-}" in
+  running) whistle_conf '@whistle_color_running' ;;
+  done) whistle_conf '@whistle_color_done' ;;
+  wait) whistle_conf '@whistle_color_wait' ;;
+  error) whistle_conf '@whistle_color_error' ;;
+  *) printf '%s' '' ;;
+  esac
+}
+
+# whistle_menu_item_label <状态> <session> <窗口> <消息>
 #
 # 抽成函数是因为 cmd_menu 与 cmd_menu_args 必须逐字相同 —— 改一边不改另一边，
 # 测试就会变假绿（这个坑踩过一次）。
-whistle_menu_running_label() {
-  if [ "$(whistle_conf '@whistle_spin')" = on ]; then
-    _mr_icon=$(whistle_spin_char)
-  else
-    _mr_icon=$(whistle_icon '@whistle_icon_running')
-  fi
+whistle_menu_item_label() {
   printf '#[fg=%s]%s#[default] %s %s:%s %s' \
-    "$(whistle_conf '@whistle_color_running')" "$_mr_icon" \
+    "$(whistle_menu_state_color "$1")" "$(whistle_menu_state_icon "$1")" \
     "$(whistle_state_label "$1")" "$2" "$3" "${4:-}"
 }
 
@@ -406,7 +425,7 @@ cmd_menu() {
   # 两类都能点、都能跳。区别只在标记与语义 ——
   #
   #   待处理项   前缀空格，选中后顺带清除（你到现场了 = 已读）
-  #   running   前缀绿色 ▶（whistle_menu_running_label），只是跳过去看看；
+  #   running   前缀是当前 Braille 帧（whistle_menu_item_label）；
   #             clear 对 running 本身是空操作
   #             （whistle_clear_window 只清 whistle_is_notified 的状态）
   #
@@ -423,7 +442,7 @@ cmd_menu() {
     _i=$((_i + 1))
     _total=$((_total + 1))
     [ "$_i" -gt 26 ] && continue
-    _label=" $(whistle_state_label "$st") $s:$wn $msg"
+    _label="$(whistle_menu_item_label "$st" "$s" "$wn" "$msg")"
     set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
       "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
@@ -435,7 +454,7 @@ EOF
     _i=$((_i + 1))
     _total=$((_total + 1))
     [ "$_i" -gt 26 ] && continue
-    _label="$(whistle_menu_running_label "$st" "$s" "$wn" "$msg")"
+    _label="$(whistle_menu_item_label "$st" "$s" "$wn" "$msg")"
     set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
       "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
@@ -456,10 +475,12 @@ EOF
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
     while IFS='|' read -r s wid wn _wi _pid st msg; do
       if whistle_is_notified "$st"; then
-        printf '  %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
+        printf '%s %s  %s:%s  %s\n' "$(whistle_menu_state_icon "$st")" \
+          "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
       else
         # 纯文本降级，没有菜单可选中，所以不带样式转义（那会原样显示出来）
-        printf '▶ %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
+        printf '%s %s  %s:%s  %s\n' "$(whistle_menu_state_icon "$st")" \
+          "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
       fi
     done << EOF
 $_items
@@ -481,7 +502,7 @@ cmd_menu_args() {
     _i=$((_i + 1))
     _total=$((_total + 1))
     [ "$_i" -gt 26 ] && continue
-    printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
+    printf '%s\n' "$(whistle_menu_item_label "$st" "$s" "$wn" "$msg")"
     printf '%s\n' "$(whistle_menu_key "$_i")"
     printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
@@ -493,7 +514,7 @@ EOF
     _i=$((_i + 1))
     _total=$((_total + 1))
     [ "$_i" -gt 26 ] && continue
-    printf '%s\n' "$(whistle_menu_running_label "$st" "$s" "$wn" "$msg")"
+    printf '%s\n' "$(whistle_menu_item_label "$st" "$s" "$wn" "$msg")"
     printf '%s\n' "$(whistle_menu_key "$_i")"
     printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF

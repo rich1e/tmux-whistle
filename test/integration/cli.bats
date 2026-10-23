@@ -119,6 +119,26 @@ pane_of() {
   assert_contains "$output" '#[fg=#00af00]▶'
 }
 
+@test "menu-args: 待处理项也带状态图标，与状态栏用同一套" {
+  # 早先只有 running 项有前缀，done/wait/error 是裸的「 完成 sess:win」，
+  # 两个界面看起来不是一回事。
+  wt set -g @whistle_spin off
+  wt new-window -d -n w2
+  wt new-window -d -n w3
+  local p1 p2 p3
+  p1=$(wt display -p -t w1 '#{pane_id}')
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  p3=$(wt display -p -t w3 '#{pane_id}')
+  "$CLI" "done" 'a' -t "$p1"
+  "$CLI" "wait" 'b' -t "$p2"
+  "$CLI" error 'c' -t "$p3"
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '#[fg=#af5fff]◆#[default] 完成'
+  assert_contains "$output" '#[fg=#af8700]◷#[default] 等待'
+  assert_contains "$output" '#[fg=#d70000]⚠#[default] 错误'
+}
+
 @test "menu-args: @whistle_spin on 时菜单前缀是当前 Braille 帧而不是 ▶" {
   # 菜单是瞬时弹出的快照，所以在**构造菜单那一刻**用 shell 取当前帧，
   # 而不是塞一段 #{?...} —— display-menu 的条目名会不会展开 format 没验证过。

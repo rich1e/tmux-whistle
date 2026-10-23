@@ -140,6 +140,27 @@ spin_wait_pidfile() {
   }
 }
 
+@test "spin: --recompute 把计数改回来时也会重启推进器" {
+  # 回归：--recompute 由 pane-exited / window-pane-changed 钩子调用，它只重算
+  # 计数、不走 deliver。同步逻辑挂在 deliver 上时，「running 归零被停掉的
+  # 推进器」在计数回升后没人拉起 —— 状态栏与菜单的帧一起冻住，界面上
+  # 只是「不转了」，看不出任何异常。
+  # shellcheck disable=SC2030,SC2031
+  export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_interval 0.1
+  # 直接写 pane option，让 recompute 能算出 running >= 1
+  wt set -p -t "$(wt display -p -t w1 '#{pane_id}')" @whistle running
+
+  run "$WHISTLE_ROOT/bin/tmux-whistle" --recompute
+  assert_eq "$status" 0
+
+  spin_wait_pidfile || {
+    echo "--recompute 没有拉起推进器"
+    return 1
+  }
+}
+
 @test "spin: setup.sh 在有 running 时拉起推进器，不依赖状态变化" {
   # 回归：推进器原先只在 whistle_deliver 里启停，而 deliver 只在**状态变化**
   # 时才跑。一个「早就报了 running、之后没人动过」的 pane 不会再有 deliver ——
