@@ -57,6 +57,26 @@ whistle_border_status_release_all
 # 注册读侧 hooks：切进窗口即已读 + pane 增删后重算（原理 4.3）
 whistle_hooks_install "$WHISTLE_ROOT/bin/tmux-whistle"
 
+# 重新应用菜单键绑定（自愈）。
+#
+# 为什么绑定要写两遍：tmux.conf 里可能有 `unbind n` 之类 —— 用 `unbind`
+# 干掉 tmux 默认的 next-window 是常见做法 —— 而它排在 tmux.conf.local
+# **之后**执行，会把 .tmux-whistle.conf 里的绑定解掉。
+# 本脚本是 `run-shell -b -d 0.5` 之后跑的，此时整份配置已经加载完，
+# 在这里重绑一次就绕开了顺序问题。与 whistle_ensure_status_line 同一思路：
+# 与其猜顺序，不如在确定安全的那一刻补一次。
+#
+# ⚠️ 键位必须与 .tmux-whistle.conf 保持一致，两处都要改。
+#
+# ⚠️ `'\;'` 必须是单引号包着的。从 shell 传参时裸 `\;` 会被 shell 吃掉反斜杠，
+#    tmux 收到裸 `;` 就当成**命令分隔符** —— 结果是 `display-message` 被立刻
+#    执行掉、根本没进 binding，按键时只是菜单打开了却不出提示。
+#    在 .tmux-whistle.conf 里写 `\;` 是对的（那是 tmux 自己解析的），
+#    但从 shell 调 tmux 时必须把反斜杠原样送过去。
+whistle_tmux bind-key -T prefix n \
+  run-shell -b "\"$WHISTLE_ROOT/bin/tmux-whistle\" menu" \
+  '\;' display-message 'whistle 菜单' 2> /dev/null || true
+
 # 可选：关键词兜底检测（默认关）
 if [ "$(whistle_conf '@whistle_detect')" = on ]; then
   if [ -f "$WHISTLE_ROOT/lib/detect.sh" ]; then
