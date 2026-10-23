@@ -49,6 +49,76 @@ WHISTLE_MSG_MAX=80
 # 所以可以比标题长得多 —— 但仍是有限额，pane option 不是垃圾桶。
 WHISTLE_BODY_MAX=400
 
+# -- running 的 Braille 动画帧 ------------------------------------------------
+#
+# 为什么需要动画：徽章与 status-right 里的串是**预先算好存在 global option 里**
+# 的纯 format（原理 2：零 fork）。format 本身是静态的，tmux 没有「每 N 帧换一个
+# 字符」的原生能力 —— 所以必须有个东西去改 @whistle_spin 这个帧号，
+# 由 lib/spin.sh 负责（它只在真有 running 时活着，跑完自己退出）。
+#
+# 帧用四个独立变量而不是一个连写字符串：POSIX sh 里从多字节字符串里切出
+# 第 N 个字符很不可靠（cut 按字节还是按字符取决于 locale）。加一帧要同时
+# 加变量、加 whistle_spin_frame 的一支、加 WHISTLE_SPIN_FRAMES 的计数。
+
+WHISTLE_SPIN_FRAMES=4
+WHISTLE_SPIN_FRAME_0='◐'
+WHISTLE_SPIN_FRAME_1='◓'
+WHISTLE_SPIN_FRAME_2='◑'
+WHISTLE_SPIN_FRAME_3='◒'
+
+# whistle_spin_frame <序号> → 该帧的字符。越界一律回落到 0 帧。
+#
+# 纯函数（不碰 tmux）—— L1 单测能直接跑。
+whistle_spin_frame() {
+  case "${1:-0}" in
+  0) printf '%s' "$WHISTLE_SPIN_FRAME_0" ;;
+  1) printf '%s' "$WHISTLE_SPIN_FRAME_1" ;;
+  2) printf '%s' "$WHISTLE_SPIN_FRAME_2" ;;
+  3) printf '%s' "$WHISTLE_SPIN_FRAME_3" ;;
+  *) printf '%s' "$WHISTLE_SPIN_FRAME_0" ;;
+  esac
+}
+
+# whistle_spin_build → 供 tmux format 用的帧选择器
+#
+# ⚠️ 帧号是 **@whistle_spin_frame**，不是 @whistle_spin。
+#    后者是 on/off 开关，用户可配；两者曾经撞成一个名字，结果开关被自己
+#    写成 0、动画被永久判成「关」，而且界面上完全看不出异常。
+#    凡是「用户可配的开关」与「插件自己写的状态」都必须用不同的 option 名。
+#
+# 输出形如：
+#   #{?#{==:#{@whistle_spin_frame},0},◐,#{?#{==:#{@whistle_spin_frame},1},◓,…}}
+#
+# 三层嵌套条件式，结尾必须配平三个 '}' —— 少一个就是畸形 format，
+# tmux 会**静默渲染成空字符串**。badge.bats 有配平用例守着。
+#
+# ⚠️ 这段**不能过 whistle_sanitize**（它会剔掉 # { } |，把整个 format 毁掉）。
+#   输出直接拼进 format 串，不消毒 —— 它不是用户输入。
+whistle_spin_build() {
+  _sb0=$(whistle_spin_frame 0)
+  _sb1=$(whistle_spin_frame 1)
+  _sb2=$(whistle_spin_frame 2)
+  _sb3=$(whistle_spin_frame 3)
+  printf '#{?#{==:#{@whistle_spin_frame},%s},%s,#{?#{==:#{@whistle_spin_frame},%s},%s,#{?#{==:#{@whistle_spin_frame},%s},%s,%s}}}' \
+    "$_sb0" "$_sb0" "$_sb1" "$_sb1" "$_sb2" "$_sb2" "$_sb3"
+}
+
+# 当前的帧号（读 option，非纯函数）
+whistle_spin_index() {
+  _si=$(whistle_tmux show -gqv '@whistle_spin_frame' 2> /dev/null) || _si=''
+  case "$_si" in
+  '' | *[!0-9]*) printf '0' ;;
+  *) printf '%s' "$_si" ;;
+  esac
+}
+
+# 下一个帧号（0 → 1 → 2 → 3 → 0 …）
+whistle_spin_next() {
+  _sn=$(($(whistle_spin_index) + 1))
+  [ "$_sn" -lt "$WHISTLE_SPIN_FRAMES" ] || _sn=0
+  printf '%s' "$_sn"
+}
+
 # 默认配置。option 未被显式设置时回落到这里；
 # 用户用 `set -g @whistle_xxx` 覆盖后即以用户值为准。
 # 派生值（@whistle_mark / @whistle_pending）不在表内，由插件生成。
@@ -63,12 +133,14 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_color_done #00af00
 @whistle_color_wait #af8700
 @whistle_color_error #d70000
-@whistle_color_running #5f87af
+@whistle_color_running #00af00
 @whistle_icon_pending 🔔
 @whistle_icon_done ✓
 @whistle_icon_wait ◷
 @whistle_icon_error ✗
-@whistle_icon_running ●
+@whistle_icon_running ▶
+@whistle_spin on
+@whistle_spin_interval 0.5
 @whistle_display_ms 0
 @whistle_debug off
 @whistle_detect off
@@ -452,4 +524,89 @@ whistle_pending_windows() {
     whistle_is_notified "$_pst" || continue
     printf '%s|%s|%s|%s|%s|%s\n' "$_ps" "$_pwid" "$_pwn" "$_pwi" "$_pst" "$_pmsg"
   done
+}
+
+# -- running 动画帧的启停 ----------------------------------------------------
+#
+# 这些函数由 whistle_deliver 调用（每次状态变化都会经过那里）。
+# 它们**不常驻**：真有 running 才拉起 lib/spin.sh，running 归零时它自己退出。
+#
+# pidfile 路径不含 $(id -u) —— 那是命令替换，会在每次 CLI 调用时 fork 一个进程。
+# 用 $USER（环境变量，零 fork）。
+
+whistle_spin_pidfile() {
+  printf '%s/tmux-whistle-spin-%s.pid' \
+    "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}" "${USER:-whistle}"
+}
+
+# 推进器脚本的位置。优先环境变量（测试用），其次 tmux 的 @whistle_root。
+whistle_spin_script() {
+  if [ -n "${WHISTLE_SPIN_SCRIPT:-}" ]; then
+    printf '%s' "$WHISTLE_SPIN_SCRIPT"
+    return 0
+  fi
+  _sss_root=$(whistle_tmux show -gqv '@whistle_root' 2> /dev/null) || _sss_root=''
+  [ -n "$_sss_root" ] || return 1
+  printf '%s/lib/spin.sh' "$_sss_root"
+}
+
+# 有 running 就确保推进器在跑；没有就停掉并把帧号复位。
+#
+# ⚠️ 复位写的是 **@whistle_spin_frame**（帧号），不是 @whistle_spin（开关）。
+# 曾经写成后者，等于把开关自己置 0 —— 此后 whistle_conf 永远读不到 on，
+# 动画被永久判成「关」，而界面上完全看不出异常（退回静态图标而已）。
+# 「用户可配的开关」与「插件自己写的状态」必须用不同的 option 名。
+whistle_spin_sync() {
+  if [ "$(whistle_conf '@whistle_spin')" != on ]; then
+    whistle_spin_stop
+    whistle_tmux set -g @whistle_spin_frame 0 2> /dev/null || true
+    return 0
+  fi
+
+  _sy_n=$(whistle_tmux show -gqv '@whistle_count_running' 2> /dev/null)
+  case "$_sy_n" in
+  '' | *[!0-9]*) _sy_n=0 ;;
+  esac
+
+  if [ "$_sy_n" -gt 0 ]; then
+    whistle_spin_ensure
+  else
+    whistle_spin_stop
+    # 复位成 0 帧：下次开始转时从头开始，位置可预期
+    whistle_tmux set -g @whistle_spin_frame 0 2> /dev/null || true
+  fi
+}
+
+# 单实例守卫：pidfile 里的进程还活着就什么都不做。
+whistle_spin_ensure() {
+  _se_f=$(whistle_spin_pidfile)
+  if [ -f "$_se_f" ]; then
+    _se_old=''
+    # 用 read 而不是 $(cat ...)：后者每次都要 fork
+    read -r _se_old < "$_se_f" 2> /dev/null || true
+    if [ -n "$_se_old" ] && kill -0 "$_se_old" 2> /dev/null; then
+      return 0
+    fi
+  fi
+
+  _se_script=$(whistle_spin_script) || return 0
+  [ -f "$_se_script" ] || return 0
+  # 把 socket 显式带进去。run-shell 拉起的子进程继承的是 **tmux server 的环境**，
+  # 而 setup.sh 导出的 WHISTLE_TMUX_SOCKET 只对 setup.sh 自己有效 ——
+  # 不带的话 spin.sh 会回落到 $TMUX/$TMUX_SOCKET，可能连到别的 server，
+  # 读不到 @whistle_count_running 就判定「没有 running」，起来即退。
+  _se_sock=$(whistle_tmux display -p '#{socket_path}' 2> /dev/null) || _se_sock=''
+  _se_cmd="sh '$_se_script' loop"
+  [ -z "$_se_sock" ] || _se_cmd="WHISTLE_TMUX_SOCKET='$_se_sock' $_se_cmd"
+  whistle_tmux run-shell -b "$_se_cmd" 2> /dev/null || true
+}
+
+whistle_spin_stop() {
+  _sx_f=$(whistle_spin_pidfile)
+  [ -f "$_sx_f" ] || return 0
+  _sx_pid=''
+  read -r _sx_pid < "$_sx_f" 2> /dev/null || true
+  [ -n "$_sx_pid" ] && kill "$_sx_pid" 2> /dev/null
+  rm -f "$_sx_f" 2> /dev/null || true
+  return 0
 }

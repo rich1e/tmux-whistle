@@ -59,7 +59,7 @@ teardown() {
     assert_contains "$output" 'w1✗'
 }
 
-@test "KP-1: running 显示 ● 徽章（不是待处理，但要让窗口列表看出有 agent）" {
+@test "KP-1: running 显示 ▶ 徽章（不是待处理，但要让窗口列表看出有 agent）" {
     wt_load core
     wt_load status-line
     whistle_mark_publish
@@ -67,8 +67,8 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "running"
     run wt_render_windows
-    assert_contains "$output" 'w1●'
-    # running 只亮 ●，不该串到其余三个状态的符号上
+    assert_contains "$output" 'w1▶'
+    # running 只亮 ▶，不该串到其余三个状态的符号上
     assert_not_contains "$output" '✓'
     assert_not_contains "$output" '◷'
     assert_not_contains "$output" '✗'
@@ -80,14 +80,14 @@ teardown() {
     whistle_mark_publish
     whistle_format_patch window-status-format
 
-    for pair in 'done ✓' 'wait ◷' 'error ✗' 'running ●'; do
+    for pair in 'done ✓' 'wait ◷' 'error ✗' 'running ▶'; do
         local st="${pair% *}" sym="${pair#* }"
         wt set -w -t w1 @whistle_win "$st"
         run wt_render_windows
         assert_contains "$output" "w1${sym}"
         # 只断言本状态该有的符号：其余三个不该同时出现
         local other
-        for other in ✓ ◷ ✗ ●; do
+        for other in ✓ ◷ ✗ ▶; do
             [ "$other" = "$sym" ] && continue
             assert_not_contains "$output" "$other"
         done
@@ -300,14 +300,15 @@ teardown() {
 @test "图标: running 也可改成任意符号" {
   wt_load core
   wt_load status-line
-  wt set -g @whistle_icon_running '▶'
+  # 不能用默认的 ▶ —— 设成和默认值一样就测不出「改没生效」
+  wt set -g @whistle_icon_running '◆'
   whistle_mark_publish
   whistle_format_patch window-status-format
 
   wt set -w -t w1 @whistle_win "running"
   run wt_render_windows
-  assert_contains "$output" 'w1▶'
-  assert_not_contains "$output" '●'
+  assert_contains "$output" 'w1◆'
+  assert_not_contains "$output" '▶'
 }
 
 @test "图标: wait 与 error 也各自可改" {
@@ -433,6 +434,8 @@ teardown() {
 @test "status-right: 四态汇总按各自图标渲染，计数为 0 的也保留" {
   wt_load core
   wt_load status-line
+  # 关掉动画才能断言到静态图标 ▶ —— 开着时那一格渲染出来是 Braille 帧
+  wt set -g @whistle_spin off
   whistle_status_right_publish
   wt set -g status-right ''
   whistle_status_right_patch
@@ -444,7 +447,7 @@ teardown() {
   wt set -g @whistle_count_error 1
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '●1'
+  assert_contains "$output" '▶1'
   assert_contains "$output" '✓1'
   # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
   assert_contains "$output" '◷0'
@@ -453,9 +456,43 @@ teardown() {
   assert_contains "$output" '🔔2'
 }
 
+@test "status-right: running 用绿色渲染" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_spin off
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  # ▶ 是绿色（#00af00），与 ✓ 同色 —— 形状不同所以仍能分辨
+  assert_contains "$output" '#[fg=#00af00]▶'
+}
+
+@test "status-right: @whistle_spin on 时 running 那格变成 Braille 帧选择器" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_contains "$output" '#{@whistle_spin_frame}'
+  assert_contains "$output" '◐'
+  assert_not_contains "$output" '▶'
+}
+
+@test "status-right: @whistle_spin off 时退回静态图标" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_spin off
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_not_contains "$output" '#{@whistle_spin_frame}'
+  assert_contains "$output" '▶'
+}
+
 @test "status-right: 只有 running 时也显示汇总（窗口徽章看不到别的 session）" {
   wt_load core
   wt_load status-line
+  wt set -g @whistle_spin off
   whistle_status_right_publish
   wt set -g status-right ''
   whistle_status_right_patch
@@ -467,7 +504,7 @@ teardown() {
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '●2'
+  assert_contains "$output" '▶2'
 }
 
 @test "status-right: 没有任何 agent 活动时整段不出现" {

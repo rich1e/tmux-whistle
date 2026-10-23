@@ -250,7 +250,21 @@ tmux hooks** —— 有人往 pane 里敲命令不会触发通知。
 
 **其它**
 
+- **用户可配的开关**与**插件自己写的状态**必须用不同的 option 名。
+  `@whistle_spin`（开关，用户配）与 `@whistle_spin_frame`（帧号，插件写）曾经撞成
+  一个名字：插件在「没有 running」时把帧号写进去，等于把开关自己置成 `0`，
+  此后 `whistle_conf` 永远读不到 `on`，动画被**永久判成关**。
+  症状不是报错，只是**退回默认行为** —— 界面上看不出任何异常。
+- **只在「状态变化」时触发的同步逻辑，必须在插件加载路径上也跑一次。**
+  `whistle_deliver` 只在状态变化时执行；一个「早就处于某状态、之后没人动过」的
+  场景不会再有 deliver。`scripts/setup.sh` 因此也要调 `whistle_spin_sync`。
+- **`run-shell` 拉起的子进程继承的是 tmux server 的环境**，不是调用方进程的。
+  调用方 `export` 的变量（例如 `WHISTLE_TMUX_SOCKET`）传不进去 ——
+  要把 socket 显式拼进 `run-shell` 的命令串里，否则子进程可能连到别的 server，
+  表现为「起来就立刻退出」。
 - 进入 tmux format 的文本必须过 `whistle_sanitize`（剔掉 `# { } |` 与控制字符，默认截断 80 字符；第二参可改上限，正文用 400）。
+  **例外：插件自己生成的 format 片段不过消毒** —— 例如
+  `whistle_spin_build` 的帧选择器，消毒会把 `#{}` 剔掉、整个 format 变成空串。
 - **不要删 `whistle_deliver` 开头的 `whistle_ensure_status_line`** —— oh-my-tmux 在 source 完
   `tmux.conf.local` 之后才重算主题，会覆盖状态栏补丁；自愈是唯一不依赖加载顺序的时机。
 - `lib/install-hooks.sh` 合并 `settings.json` 时只增删带 marker 的条目，**绝不覆盖用户已有的 hook**。

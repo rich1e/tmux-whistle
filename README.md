@@ -128,12 +128,15 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_color_done` | `#00af00` | 完成色 |
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
-| `@whistle_color_running` | `#5f87af` | 运行中色 |
+| `@whistle_color_running` | `#00af00` | 运行中色（与 `done` 同色，靠图标形状区分；想更开可换 `#5faf00`） |
 | `@whistle_icon_pending` | `🔔` | 全局计数前面的图标 |
 | `@whistle_icon_done` | `✓` | 完成符号 |
 | `@whistle_icon_wait` | `◷` | 等待符号 |
 | `@whistle_icon_error` | `✗` | 错误符号 |
-| `@whistle_icon_running` | `●` | 运行中符号 |
+| `@whistle_icon_running` | `▶` | 运行中符号 |
+| **动画** | | |
+| `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
+| `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
 | **调试** | | |
 | `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
@@ -150,16 +153,17 @@ set -g @whistle_badge off          # 关掉窗口徽章，只留全局计数
 set -g @whistle_border off         # 关掉 pane 边框变色
 set -g @whistle_self on            # 也提示自己所在的 session
 set -g @whistle_color_done '#00af00'  # 改色
+set -g @whistle_color_running '#5faf00'  # 让运行中的 ▶ 换个绿（与 ✓ 区分）
 set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
 ```tmux
-# 换图标（默认 🔔 / ✓ / ◷ / ✗ / ●）
+# 换图标（默认 🔔 / ✓ / ◷ / ✗ / ▶）
 set -g @whistle_icon_pending '●'
 set -g @whistle_icon_done    '★'
 set -g @whistle_icon_wait    '⏸'
 set -g @whistle_icon_error   '⚠'
-set -g @whistle_icon_running '▶'
+set -g @whistle_icon_running '⏵'
 
 # 显式设成空串 = 不要图标，只留颜色和数字
 set -g @whistle_icon_pending ''
@@ -201,19 +205,40 @@ set -g @whistle_icon_pending ''
 
 ```
  1 claude.exe✓            ← ① 窗口徽章
-      ●1 ✓1 ◷0 ✗0   🔔2  ← ② 四态汇总 + 全局待处理计数
+      ▶1 ✓1 ◷0 ✗0   🔔2  ← ② 四态汇总 + 全局待处理计数
  [claude.exe] 完成: 重构完成，抽出了 core.sh   ← ③ 瞬时提示（5 秒）
 ```
 
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **四态汇总** `●1 ✓1 ◷0 ✗0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`●` 在跑 / `✓` 完成 / `◷` 等待 / `✗` 失败） |
+| **四态汇总** `▶1 ✓1 ◷0 ✗0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`▶` 在跑 / `✓` 完成 / `◷` 等待 / `✗` 失败） |
 | **全局计数** `🔔N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 
-汇总段只在真有 agent 活动（`●` 或 `🔔` 非零）时出现；四个格子一起出现、
+汇总段只在真有 agent 活动（`▶` 或 `🔔` 非零）时出现；四个格子一起出现、
 **计数为 0 的也保留**，这样状态栏宽度不会随计数跳动。
+
+### running 的动画
+
+`▶` 那格是动的 —— 有 agent 在跑时会转：
+
+```
+◐1 ✓1 ◷0 ✗0   ◓1 ✓1 ◷0 ✗0   ◑1 …   ◒1 …
+```
+
+四个帧 `◐◓◑◒`，默认每 0.5 秒一帧。
+
+**这是怎么做到的**：状态栏里的串是预先算好存在 global option 里的**纯 format**
+（不 fork 是硬红线），而 format 本身是静态的 —— tmux 没有「每 N 帧换字符」的原生
+能力。所以插件在真有 running 时会拉起一个极小的后台进程（`lib/spin.sh`），
+它只做两件事：帧号加一、重画状态栏。**running 归零时它自己退出，不常驻。**
+
+不想有动画：`set -g @whistle_spin off`（退回静态 `▶`）。调速度改
+`@whistle_spin_interval`。
+
+动画出现在**状态栏汇总的 ▶ 格**和**菜单里的前缀**；窗口徽章保持静态 `▶`
+（徽章一格只有一个字符，转起来反而看不清是哪个窗口）。
 
 跨 session 时只有 status-right 上那几项和瞬时提示可见 —— 你在 B 的窗口列表里
 看不到 A 的窗口。所以汇总和计数才是"别处有事"的常驻信号，窗口徽章是"这个
@@ -227,20 +252,20 @@ session 里的细节"。
 
 | 状态 | 徽章 | 计入 🔔 | 什么时候出现 |
 |---|---|---|---|
-| `running` | `●` | 否 | agent 开始干活 |
+| `running` | `▶` | 否 | agent 开始干活 |
 | `done` | `✓` | 是 | 一轮工作结束 |
 | `wait` | `◷` | 是 | 等你批准 / 等你输入 |
 | `error` | `✗` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
 `running` 不计入 `🔔N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
-session 推一条「运行中」纯属噪声。它只是让窗口列表能看出「这个窗口有 agent 在跑」，
-agent 退出（`SessionEnd`）时自动熄灭。
+session 推一条「运行中」纯属噪声。它出现在状态栏汇总的 `▶N` 里，以及
+`prefix + n` 菜单的绿色 `▶` 前缀上，agent 退出（`SessionEnd`）时自动熄灭。
 
 ### 怎么响应
 
 | 操作 | 效果 |
 |---|---|
-| **`prefix + n`** | 弹出 agent 菜单：**待处理项与运行中的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，运行中的项带 `·` 前缀、只是跳过去看看 |
+| **`prefix + n`** | 弹出 agent 菜单：**待处理项与运行中的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，运行中的项带绿色 `▶` 前缀、只是跳过去看看 |
 | **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
 | `prefix + n` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
 | 都不想做 | `tmux-whistle clear -a` 全清 |

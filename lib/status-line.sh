@@ -66,10 +66,10 @@ whistle_mark_build() {
   printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_w" "$_c_run" "$_s_run"
 }
 
-# whistle_summary_build → 全 server 的四态汇总（纯 format，零 fork）
+# whistle_summary_build → 全 server 的四态分布（纯 format，零 fork）
 #
 # 窗口徽章只在"拥有该窗口的 session"里可见，所以另给一段跨 session 的分布：
-#   ●1 ✓1 ◷0 ✗0
+#   ▶1 ✓1 ◷0 ✗0
 #
 # 整段只在真有 agent 活动时出现（running 或待处理任一非零），否则为空。
 # 四个格子一起出现、包括计数为 0 的 —— 这样状态栏宽度不会随计数跳动，
@@ -79,7 +79,16 @@ whistle_summary_build() {
   _sm_c_done=$(whistle_conf '@whistle_color_done')
   _sm_c_wait=$(whistle_conf '@whistle_color_wait')
   _sm_c_err=$(whistle_conf '@whistle_color_error')
-  _sm_s_run=$(whistle_icon '@whistle_icon_running')
+
+  # running 那格：@whistle_spin on 时用 Braille 帧选择器，否则退回静态图标。
+  # ⚠️ 帧选择器是 format，**不能过 whistle_icon / whistle_sanitize** ——
+  # 它会剔掉 # { } |，整个 format 会被毁成空串（tmux 静默渲染成空白）。
+  if [ "$(whistle_conf '@whistle_spin')" = on ]; then
+    _sm_s_run=$(whistle_spin_build)
+  else
+    _sm_s_run=$(whistle_icon '@whistle_icon_running')
+  fi
+
   _sm_s_done=$(whistle_icon '@whistle_icon_done')
   _sm_s_wait=$(whistle_icon '@whistle_icon_wait')
   _sm_s_err=$(whistle_icon '@whistle_icon_error')

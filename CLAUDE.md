@@ -101,7 +101,7 @@ publish，不用重载 tmux 配置。
 带 `tmux-whistle` marker 的条目，用户已有的 hook 原样保留；改前先备份。
 
 **SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
-异步的清除可能被杀在半路，留下一个永远灭不掉的 `●`。其余 hook 都是 `async: true`，
+异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。
 
 ## 测试约定

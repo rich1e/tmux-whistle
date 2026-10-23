@@ -78,6 +78,7 @@ pane_of() {
   # 早期 running 项是 disabled（名称以 '-' 开头）—— 只能看不能点。
   # 但「跳到正在跑的窗口」是常见需求：想知道那个 agent 在干嘛、
   # 或者只是切过去看看。现在它与待处理项共用同一套键位。
+  wt set -g @whistle_spin off
   wt new-window -d -n w2
   local p1 p2
   p1=$(wt display -p -t w1 '#{pane_id}')
@@ -100,9 +101,47 @@ pane_of() {
   cmd=$(printf '%s\n' "$output" | sed -n 6p)
 
   assert_contains "$label" '运行中'
+  # 前缀带颜色，取自 @whistle_color_running
+  assert_contains "$label" '#[fg='
+  # 本用例关掉了动画，所以是静态的 ▶
+  assert_contains "$label" '▶'
   assert_eq "$key" '2'
   assert_contains "$cmd" 'select-window'
   assert_contains "$cmd" "$p2"
+}
+
+@test "menu-args: running 标记的颜色跟着 @whistle_color_running 走" {
+  wt set -g @whistle_color_running '#00af00'
+  wt set -g @whistle_spin off
+  "$CLI" running
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '#[fg=#00af00]▶'
+}
+
+@test "menu-args: @whistle_spin on 时菜单前缀是当前 Braille 帧而不是 ▶" {
+  # 菜单是瞬时弹出的快照，所以在**构造菜单那一刻**用 shell 取当前帧，
+  # 而不是塞一段 #{?...} —— display-menu 的条目名会不会展开 format 没验证过。
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_frame 2
+  "$CLI" running
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '#[fg=#00af00]◑'
+  assert_not_contains "$output" '▶'
+}
+
+@test "menu-args: 菜单前缀的帧跟着 @whistle_spin_frame 走" {
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_frame 0
+  "$CLI" running
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '◐'
+
+  wt set -g @whistle_spin_frame 3
+  run "$CLI" --menu-args
+  assert_contains "$output" '◒'
 }
 
 @test "menu-args: 待处理在前、running 在后，共用同一串键位且互不重叠" {

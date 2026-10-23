@@ -31,7 +31,7 @@
 - [x] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [x] **TODO-2** 菜单超过 26 项时静默截断
 - [x] **TODO-7** `--help` 说 `on | off` 是「当前 session 的开关」，实际是全局
-- [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
+- [x] **TODO-11** `running` 没有清除路径，agent 退出后 `▶` 永远亮着
 - [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 - [x] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
 - [x] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
@@ -542,15 +542,15 @@ fi
 
 ---
 
-## TODO-11 · `running` 没有清除路径，agent 退出后 `●` 永远亮着
+## TODO-11 · `running` 没有清除路径，agent 退出后 `▶` 永远亮着
 
 ✅ 已修复（`hooks/claude-code.sh` 的 `SessionEnd` + `bin/tmux-whistle --clear-pane`）
 
-**现象**：窗口跑过一次 Claude Code 之后就一直显示 `●`，哪怕 agent 早就退出了。
+**现象**：窗口跑过一次 Claude Code 之后就一直显示 `▶`，哪怕 agent 早就退出了。
 running 变成徽章之前这个洞不影响观感（它本来不显示），一旦可见就成了永久残留。
 
 **触发**：在某个 pane 里跑一次 Claude Code（`SessionStart` 置 running），退出，
-窗口仍然亮 `●`。
+窗口仍然亮 `▶`。
 
 **原因**：`running` 没有任何清除路径 ——
 
@@ -574,7 +574,7 @@ running 变成徽章之前这个洞不影响观感（它本来不显示），一
 那几条要留到你切进去处理。所以 `--clear-pane` 对 done 是空操作。
 
 **SessionEnd 是唯一的例外，不能用 async**：Claude Code 退出会带走后台子进程，
-异步的清除可能跑到一半就被杀，留下一个永远灭不掉的 `●`。官方给 SessionEnd
+异步的清除可能跑到一半就被杀，留下一个永远灭不掉的 `▶`。官方给 SessionEnd
 1.5 秒预算，而这个操作只有几十毫秒，同步不会拖慢退出。`our_entry()` 里为此
 单独判断了事件名。
 
@@ -883,15 +883,16 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
    （回合因 API 错误结束时**替代** `Stop` 触发，两者互斥）。消息取
    `last_assistant_message`（该字段在这个事件里就是渲染出来的错误文本，
    如 `API Error: Rate limit reached`），缺失时回落到错误类型名。
-2. **`running` 显示 `●`** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
+2. **`running` 显示徽章** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
    徽章条件式从三层变四层。它仍不计入 `🔔N`、不算待处理。
+   <br>_（2026-10-23 改动：默认图标由 `●` 换成绿色 `▶`，默认色由 `#5f87af` 换成 `#00af00`。）_
 3. **`prefix + n` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
    取 rank 最高的一行）。待处理项带编号可跳转。
    <br>_（2026-10-23 修正：running 项最初是 `-` 开头的 disabled 条目，只能看不能点。
-   现在它与待处理项共用同一套 1–26 键位，都能跳，只用 `·` 前缀区分。见下方「已修」。）_
+   现在它与待处理项共用同一套 1–26 键位，都能跳，用绿色 `▶` 前缀区分。见下方「已修」。）_
 4. **`running` 有了灭灯信号** —— 订阅 `SessionEnd`，agent 退出时清掉该 pane 的 running
    （见 TODO-11）。
-5. **status-right 增加四态汇总** —— `●1 ✓1 ◷0 ✗0`。`whistle_count_states`（纯函数）
+5. **status-right 增加四态汇总** —— `▶1 ✓1 ◷0 ✗0`。`whistle_count_states`（纯函数）
    从同一份 `list-panes` 输出算四态分布，写入 `@whistle_count_*`；汇总段与 `🔔N`
    共用同一个注入点（`@whistle_status_right`），所以自愈仍然只有一个入口。
    四个格子固定出现（含 0），状态栏宽度不跳动；全零时整段隐藏。

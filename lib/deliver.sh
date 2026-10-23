@@ -260,6 +260,11 @@ whistle_deliver() {
   # 在真正要显示的那一刻确保它在位 —— 这是唯一不依赖加载顺序的可靠时机。
   whistle_ensure_status_line
 
+  # running 动画帧的启停。放在 recompute_global 之后才拿得到准确的
+  # @whistle_count_running；这里与 whistle_ensure_status_line 挨着，
+  # 是同样「显示前的最后准备」位置。
+  whistle_spin_sync
+
   whistle_border_paint "$1" "$2"
   whistle_border_status_apply "$1"
   whistle_refresh_sessions "$1"

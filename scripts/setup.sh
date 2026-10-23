@@ -41,6 +41,15 @@ whistle_format_patch window-status-current-format
 # 跨 session 可见性：不管你在哪个 session，右侧都能看到 🔔N
 whistle_status_right_patch
 
+# 重算一次聚合，然后同步 running 动画帧的启停。
+#
+# **必须在插件加载时就做，不能只靠 whistle_deliver。**
+# deliver 只在**状态变化**时才跑 —— 一个「早就报了 running、之后一直没人动过」
+# 的 pane 不会再有 deliver。只靠 deliver 启停的话，prefix + r 之后动画就永远
+# 转不起来，而界面上看不出任何异常（帧号停在 0，看起来就是「不转」）。
+whistle_recompute_global
+whistle_spin_sync
+
 # prefix r 之后主题已重刷，把上次残留的边框染色清掉（KP-6）
 whistle_border_release_all
 whistle_border_status_release_all
