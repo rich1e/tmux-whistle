@@ -47,7 +47,7 @@ set -g @plugin 'rich1e/tmux-whistle'
 ```
 
 然后按 `prefix + I`。tpm 会 clone 仓库并执行插件入口，徽章、全局计数、
-边框、瞬时提示、`prefix + W` 菜单随即就位。
+边框、瞬时提示、`prefix + w` 菜单随即就位。
 
 **还要补两步**（tpm 路径不会自动做）：
 
@@ -240,12 +240,12 @@ agent 退出（`SessionEnd`）时自动熄灭。
 
 | 操作 | 效果 |
 |---|---|
-| **`prefix + W`** | 弹出 agent 菜单：待处理项带编号，按数字键选中 → 跳过去并清除；运行中的项灰显、不可选，只用来告诉你「哪些窗口有 agent」 |
+| **`prefix + w`** | 弹出 agent 菜单：待处理项带编号，按数字键选中 → 跳过去并清除；运行中的项灰显、不可选，只用来告诉你「哪些窗口有 agent」 |
 | **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
-| `prefix + W` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
+| `prefix + w` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
 | 都不想做 | `tmux-whistle clear -a` 全清 |
 
-**典型流程**：在 B 看到 🔔2 → `prefix + W` → 按 `1` → 落到 A 的那个窗口，徽章自己消失。
+**典型流程**：在 B 看到 🔔2 → `prefix + w` → 按 `1` → 落到 A 的那个窗口，徽章自己消失。
 
 ### 场景一：Claude Code —— 装上就能用，无需任何操作
 
@@ -296,7 +296,7 @@ tmux-whistle run -- npm test       # 包一个命令：按退出码落 ✓ / ✗
 tmux-whistle run '测试' -- npm test # 自定义标签
 
 tmux-whistle list                  # 看所有待处理项
-tmux-whistle menu                  # = prefix + W
+tmux-whistle menu                  # = prefix + w
 tmux-whistle jump other:api        # 跳到 session:window 并清除
                                    # 裸窗口名（api）也可以；撞名会列出候选让你指定
 tmux-whistle clear                 # 清当前窗口
