@@ -12,6 +12,12 @@
 
 - [ ] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [ ] **TODO-2** 菜单超过 26 项时静默截断
+- [ ] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
+- [ ] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
+
+### 缺失能力
+
+- [ ] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
 
 ### 文档缺陷
 
@@ -489,6 +495,154 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
 
 ---
 
+## TODO-12 · 跳转只到窗口，分屏时落不到真正报状态的那个 pane
+
+⬜ 待处理
+
+**现象**：一个窗口切成多格（pane）时，`prefix + W` 选中一项只会切到那个**窗口**，
+窗口里落在哪一格不保证 —— 常常不是正在等你的那一格。
+
+**触发**：
+
+```sh
+tmux-whistle done "等我批准"     # ① 在 pane A 报状态
+tmux split-window                # ② 把窗口切成两格，焦点在 pane B
+prefix + W                       # ③ 选那一项
+# → 落在 pane B（焦点所在的那格），要自己再点回 pane A
+```
+
+**原因**：窗口级聚合没记 pane 身份，菜单命令里也没有 `select-pane`。
+
+```sh
+# lib/core.sh 的 whistle_recompute_window —— 只写三个派生值
+setw @whistle_win "$_state" \; setw @whistle_win_msg "$_msg" \; setw @whistle_win_count "$_count"
+```
+
+`whistle_aggregate` 读进来的第一列就是 `#{pane_id}`（变量名 `_pane_id`），
+但它只在 case 里用来过滤合法行，**读完就丢掉了** —— 输出仍是三列，没有 pane。
+`whistle_agent_windows` 的 format 里也压根没有 pane 列，所以菜单无从知道该选哪一格：
+
+```sh
+-F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle}|#{@whistle_msg}'
+```
+
+最后落到菜单执行的 tmux 命令串上（`bin/tmux-whistle` 的 `cmd_menu`）：
+
+```
+switch-client -t $s ; select-window -t $wid ; run-shell -b '... clear -t $wid'
+```
+
+有 `select-window`，没有 `select-pane`。
+
+**为什么一直没被发现**：单 pane 窗口里 `select-window` 和 `select-pane` 效果一样。
+而且 `whistle_list_lines` 的输出里**是有** pane id 的（第三列），信息在读侧存在、
+只是没被路由到跳转命令上。
+
+`@whistle_border_status` 那个选项本质上是这个缺陷的权宜之计 ——
+把每个 pane 的符号画到顶部，好让你**用眼睛找**。它占掉每格顶部一整行，且默认关。
+
+**修复方向**：
+
+1. `whistle_aggregate` 的输出增加第 4 列 pane id（放**末尾**，这样
+   `whistle_recompute_global` 的 `cut -d'|' -f3` 取待处理数不用改），
+   顺便更新 `test/unit/core.bats` 对输出格式的断言；
+2. `whistle_recompute_window` 多写一个 `@whistle_win_pane`；
+3. `whistle_agent_windows` 的 format 加 pane 列，`cmd_menu` / `cmd_menu_args`
+   按位置读出新的一列，命令串里补 `select-pane -t $pane`；
+4. `whistle_state_clear` 必须一并清 `@whistle_win_pane` —— 否则窗口清空后
+   会残留一个已失效的 pane id。
+
+**风险点**：pane 在菜单弹出之后、命令执行之前被关掉时，`select-pane` 会报错，
+而 tmux 的 `;` 命令链遇错即停，后面的 `clear` 不会执行 → 状态永远清不掉。
+窗口无 pane 时聚合输出空 pane（`list-panes` 无输出 → 四列全空），
+`@whistle_win_pane` 自愈为空，这一侧不用额外兜。
+
+**相关代码**：`lib/core.sh` 的 `whistle_aggregate` / `whistle_recompute_window` /
+`whistle_state_clear`；`bin/tmux-whistle` 的 `cmd_menu` / `cmd_menu_args` / `cmd_jump`；
+`test/unit/core.bats`、`test/integration/cli.bats`。
+
+**开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 1。
+
+---
+
+## TODO-13 · 没有命令包装器，成功/失败要手写 `&&` / `||`
+
+⬜ 待处理
+
+**现象**：想让一个普通命令跑完自动亮徽章，只能手写：
+
+```sh
+pnpm test && tmux-whistle done "测试过了" || tmux-whistle error "测试失败"
+```
+
+漏掉后半截 → 失败时徽章不亮；`&&` / `||` 写反 → 状态正好相反。**两种都不报错**，
+只是徽章不对。而且拿不到「跑了多久」。
+
+**触发**：README「场景二」给的就是这个写法，等于把易错的组合逻辑交给每个用户。
+
+**原因**：CLI 只有 `<状态> [消息]` 一个入口，插件不负责执行命令，
+自然也就不知道退出码和耗时。
+
+**修复方向**：新增 `run` 子命令。
+
+```sh
+tmux-whistle run [-- 标签] -- 命令 参数...
+```
+
+开始时置 `running`，执行完按退出码置 `done`（0）或 `error`（非 0），
+消息里带上耗时（`4m32s`）。**不要用 `exec`** —— 那样 shell 进程被替换掉，
+拿不到退出码；直接跑 `"$@"` 再读 `$?` 即可，不需要 trap。
+
+**边界**：包装器只认退出码，不解析输出；退出码 130（Ctrl-C）按 error 处理。
+
+**相关代码**：`bin/tmux-whistle` 的 `cmd_run` 与分派处；`README.md` 的「场景二」。
+
+**开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 4。
+
+---
+
+## TODO-14 · 消息被截断到 80 字后永久丢失
+
+⬜ 待处理
+
+**现象**：消息最长 80 字符，超了直接砍断，**砍掉的部分没有任何地方能再找到**。
+agent 一轮下来常是几百字的总结，徽章位置只有一行宽，只能看到开头一句。
+
+**触发**：任何一个 `last_assistant_message` 超过 80 字的回合。
+
+**原因**：`whistle_sanitize` 单字段截断，且**只有一个字段**：
+
+```sh
+WHISTLE_MSG_MAX=80
+whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
+```
+
+`@whistle_msg` 同时承担「徽章上显示什么」和「全部内容」两个职责，
+而徽章的宽度约束是真的 —— 问题在于**没有第二处存放完整内容**。
+
+**修复方向**：短标题与长正文分开存，**不改任何 tmux format**。
+
+- `--title` → 写进 `@whistle_msg`（用户自己给短标题，仍受 80 字保护）
+- `--body` → 写进 `@whistle_body`（新上限 400 字）
+- 只给 `--body` 不给 `--title` 时，`@whistle_msg` 取正文前 80 字 —— **完全保持现状**
+- `whistle_state_clear` 必须一并清 `@whistle_body`，否则会留残值
+
+**为什么不改徽章 format**：本来可以让徽章优先渲染 `@whistle_title`，但那要在
+`whistle_mark_build` 已经是四层的条件式里再套一层 `#{?#{@whistle_title},...}` ——
+而嵌套 `#{?...}` 的大括号配平正是本项目最贵的坑之一（配错一格 tmux **静默渲染成空串**）。
+收益（标题可控）不值这个风险，不做。
+
+**当前价值有限、要说清楚**：正文存下来后，**要等事件历史（`notify-design-review.md`
+的 B-1）做完才有界面能看它**。现在它就是「存了不丢、暂不可见」。
+但顺手让 hook 传 `--body` 是有意义的 —— 完整回复从此被留下来，而不是被砍掉就消失。
+
+**相关代码**：`lib/core.sh` 的 `whistle_state_set` / `whistle_state_clear` /
+`WHISTLE_MSG_MAX`；`bin/tmux-whistle` 的 `cmd_set`；`hooks/claude-code.sh`。
+
+**开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 5。
+
+---
+
 ## 本轮新增（2026-10-22）
 
 三条功能，不是缺陷：
@@ -512,7 +666,39 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
 
 ---
 
+## 开发计划 · 通知能力增强（第一批）
+
+来源：[设计方案评审](notify-design-review.md) 的 A 档 —— 五条都能当场改、当场验，
+且**不引入任何新依赖、不新增 UI 层**。B 档（事件历史、两态分离）不在本批，
+它需要新目录与写权限，属于另一批。
+
+计划正文：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md)
+
+| Task | 功能 | 对应 TODO | 状态 |
+|---|---|---|---|
+| 1 | 跳转精确到 pane | TODO-12 | ⬜ 未开始 |
+| 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ⬜ 未开始 |
+| 3 | 菜单截断不再静默 | TODO-2 | ⬜ 未开始 |
+| 4 | `run --` 命令包装器 | TODO-13 | ⬜ 未开始 |
+| 5 | 标题 / 正文分离 | TODO-14 | ⬜ 未开始 |
+
+**执行约定**：
+
+- 每个 Task 走 TDD：先写失败断言 → 跑一遍确认它真的红 → 最小实现 → `make check` 全绿
+- **每个 Task 完成后立刻把对应 TODO 从「待处理」挪到「已修复」并补实施记录**，
+  再提交 —— 不攒到最后一起改文档
+- 提交粒度 = 一个 Task 一个 commit
+
+**为什么串行、不并行**：这五条**两两之间都共用文件** —— 1 与 2 都改 `cmd_jump`，
+1 与 3 都改 `cmd_menu`，1 与 5 都改 `lib/core.sh`，五条都要往
+`test/integration/cli.bats` 追加用例，并且都要跑全量 `make check`。
+并发改同一文件会冲突，`make check` 的红绿也会互相污染（一个 Task 失败会让
+另外几个的验证失去意义）。总量约 70 行 + 测试，串行的代价远小于协调成本。
+
+---
+
 ## 相关
 
+- 设计方案评审：[notify-design-review.md](notify-design-review.md)
 - 开发与测试约定：[development.md](development.md)
 - 使用者文档：[../README.md](../README.md)

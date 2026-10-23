@@ -29,6 +29,9 @@ HANDOFF.md
 # make clean 的输出目录
 .test-tmp/
 
+# 执行计划的 scratch 工作区（ledger / brief / review 包），不是项目资产
+.superpowers/
+
 # 调试日志（@whistle_debug on 时默认写 $TMPDIR，若手动指到仓库里则忽略）
 *.log
 
