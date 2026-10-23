@@ -487,9 +487,9 @@ teardown() {
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
-  # 「没有 agent 在跑」本身是个有意义的信息，不该整格消失
-  assert_contains "$output" '◉'
-  assert_not_contains "$output" '◉0'
+  # 「没有 agent 在跑」本身是个有意义的信息，不该整格消失；
+  # 而且带计数（◉ 0）比光秃秃的 ◉ 更明确 —— 不会让人以为是格子坏了。
+  assert_contains "$output" '◉ 0'
 }
 
 @test "status-right: 有 agent 在跑时显示帧与计数，不显示 ◉" {

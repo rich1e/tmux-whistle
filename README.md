@@ -135,7 +135,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_wait` | `◷` | 等待符号 |
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin off` 时才用；开时是 Braille 帧） |
-| `@whistle_icon_idle` | `◉` | 没有 agent 在跑时 running 那格显示的符号 |
+| `@whistle_icon_idle` | `◉` | 没有 agent 在跑时 running 那格显示的符号（仍带计数，即 `◉ 0`） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
@@ -214,7 +214,7 @@ set -g @whistle_icon_pending ''
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **四态汇总** `⠋ 1 ◆ 1 ◷ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`⠋` 在跑 / `◆` 完成 / `◷` 等待 / `⚠` 失败）：没有 agent 在跑时 `⠋` 那格变成 `◉` |
+| **四态汇总** `⠋ 1 ◆ 1 ◷ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`⠋` 在跑 / `◆` 完成 / `◷` 等待 / `⚠` 失败）：没有 agent 在跑时 `⠋` 那格变成 `◉`，计数照旧 |
 | **全局计数** `✉N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 

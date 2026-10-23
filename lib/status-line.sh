@@ -99,11 +99,12 @@ whistle_summary_build() {
   #
   # #{||:a,b} 的真值判定是"非空且不等于 0"，见 tmux FORMATS。
   printf '#{?#{||:#{@whistle_count_running},#{@whistle_pending}},'
-  # running 那格分两态：有在跑 → 帧 + 计数；没有在跑 → 一个绿色的 ◉。
-  # 「没有 agent 在跑」本身是个有意义的信息，比整格消失更容易读。
+  # running 那格分两态：有在跑 → 帧 + 计数；没有在跑 → ◉ + 计数。
+  # 两态都带计数：格子宽度不随状态跳变，而且「◉ 0」比光秃秃的「◉」更明确
+  # —— 一眼看出是「零个在跑」而不是「这一格坏了 / 没加载」。
   printf '#{?#{@whistle_count_running},'
   printf '#[fg=%s]%s #{@whistle_count_running}#[default] ,' "$_sm_c_run" "$_sm_s_run"
-  printf '#[fg=%s]%s#[default] }' "$_sm_c_run" "$_sm_s_idle"
+  printf '#[fg=%s]%s #{@whistle_count_running}#[default] }' "$_sm_c_run" "$_sm_s_idle"
   printf '#[fg=%s]%s #{@whistle_count_done}#[default] ' "$_sm_c_done" "$_sm_s_done"
   printf '#[fg=%s]%s #{@whistle_count_wait}#[default] ' "$_sm_c_wait" "$_sm_s_wait"
   printf '#[fg=%s]%s #{@whistle_count_error}#[default] ,}' "$_sm_c_err" "$_sm_s_err"
