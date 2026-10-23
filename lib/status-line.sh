@@ -42,7 +42,7 @@ whistle_icon() {
 #
 # 嵌套顺序只是书写顺序：@whistle_win 存的是单个状态字符串，只有一个分支会命中，
 # 所以这里没有「优先级」语义 —— 真正的优先级在 whistle_aggregate 里。
-# running 排最后，因为它不计入 🔔N，作用只是让窗口列表能看出「这个窗口有 agent」。
+# running 排最后，因为它不计入 ✉N，作用只是让窗口列表能看出「这个窗口有 agent」。
 #
 # @whistle_badge off 时生成空串：哨兵照常注入，但渲染为空 —— 状态栏格式保持
 # 原样。走「注入空串」而不是「注入后再移除」，是因为移除会和主题重算打架
@@ -107,12 +107,16 @@ whistle_summary_build() {
 # 状态栏里，你在 B 时看不到 A 的窗口列表。全局计数补上这一块 ——
 # 不管你在哪个 session，都能看到"别处还有 N 件事等着"。
 #
-# 前面接四态汇总：汇总给分布，🔔 给"总共几件要处理"这一眼。
+# 前面接四态汇总：汇总给分布，✉ 给"总共几件要处理"这一眼。
 # 两者共用同一次 status-right 注入，所以自愈只需要一个入口。
+#
+# 颜色用 @whistle_color_pending，**不再借用 @whistle_color_wait** ——
+# 待处理总数与「等待」是两回事（后者已由汇总里的 ◷ 表达），
+# 借用会让改 ◷ 的颜色连带改了总数，而且总数默认是青的、不是琥珀色。
 whistle_status_right_build() {
   whistle_summary_build
   printf '#{?@whistle_pending, #[fg=%s]%s#{@whistle_pending}#[default],}' \
-    "$(whistle_conf '@whistle_color_wait')" \
+    "$(whistle_conf '@whistle_color_pending')" \
     "$(whistle_icon '@whistle_icon_pending')"
 }
 

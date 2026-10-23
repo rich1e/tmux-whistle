@@ -125,7 +125,8 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_color_wait #af8700
 @whistle_color_error #d70000
 @whistle_color_running #00af00
-@whistle_icon_pending 🔔
+@whistle_color_pending #5fd7d7
+@whistle_icon_pending ✉
 @whistle_icon_done ✓
 @whistle_icon_wait ◷
 @whistle_icon_error ✗

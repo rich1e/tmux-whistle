@@ -179,7 +179,7 @@ flowchart LR
     HK["after-select-window<br/>after-select-pane<br/>window-pane-changed / pane-exited"]
   end
 
-  USER["其它 session 的状态栏<br/>徽章 ✓ · 全局计数 🔔N · 瞬时提示"]
+  USER["其它 session 的状态栏<br/>徽章 ✓ · 全局计数 ✉N · 瞬时提示"]
 
   CC --> CLI
   DET --> CLI

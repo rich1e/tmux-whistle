@@ -339,7 +339,7 @@ teardown() {
 
   run wt display -pF '#{E:status-right}'
   assert_contains "$output" '●3'
-  assert_not_contains "$output" '🔔'
+  assert_not_contains "$output" '✉'
 }
 
 @test "图标: 显式设成空串表示不要图标（区别于未设置）" {
@@ -414,10 +414,10 @@ teardown() {
   wt set -g @whistle_pending 0
 
   run wt display -pF '#{E:status-right}'
-  assert_not_contains "$output" '🔔'
+  assert_not_contains "$output" '✉'
 }
 
-@test "status-right: 有待处理项时显示 🔔N" {
+@test "status-right: 有待处理项时显示 ✉N" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish
@@ -426,7 +426,28 @@ teardown() {
   wt set -g @whistle_pending 3
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '🔔3'
+  assert_contains "$output" '✉3'
+}
+
+@test "status-right: ✉ 用的是 @whistle_color_pending，不借用等待色" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_contains "$output" "#[fg=#5fd7d7]✉"
+  # 等待色不该再出现在这个格子上 —— 它只属于汇总里的 ◷
+  assert_not_contains "$output" '#af8700]✉'
+}
+
+@test "status-right: 改 @whistle_color_pending 即生效" {
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_color_pending '#123456'
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_contains "$output" '#[fg=#123456]✉'
 }
 
 # -- status-right 的四态汇总 --------------------------------------------------
@@ -452,8 +473,8 @@ teardown() {
   # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
   assert_contains "$output" '◷0'
   assert_contains "$output" '✗1'
-  # 汇总与 🔔 计数是两个独立的读法，都要在
-  assert_contains "$output" '🔔2'
+  # 汇总与 ✉ 计数是两个独立的读法，都要在
+  assert_contains "$output" '✉2'
 }
 
 @test "status-right: running 用绿色渲染" {
