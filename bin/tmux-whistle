@@ -368,20 +368,18 @@ whistle_menu_overflow() {
 # whistle_menu_state_icon <状态> → 菜单里该状态的前缀图标
 #
 # 与状态栏用同一套图标与颜色，两个界面看起来才是一回事：
-#   done ◆ / wait ◷ / error ⚠ / running 当前 Braille 帧
+#   done ◆ / wait ◷ / error ⚠ / running ◉
 #
-# running 的帧在**构造菜单那一刻**取（whistle_spin_char），不塞
-# #{?...} —— 菜单是一次性快照，不需要在渲染时求值；而 display-menu 的
-# 条目名会不会展开 format，我们没有验证过，不拿它冒险。
+# running 用 ◉ 而不是状态栏那串 Braille 帧：菜单是一次性绘制的静态快照，
+# 帧画上去就冻住了，看起来像渲染错乱而不是动画。用 ◉ 是为了「这一项在跑」
+# 这个信息本身。
+#
+# ⚠️ 语义上要注意：状态栏里 ◉ 表示「一个都没在跑」，菜单里表示「这一项在跑」。
+#    同一个字符在两个界面里的含义相反 —— 因为状态栏说的是全局计数，
+#    菜单说的是单条记录。
 whistle_menu_state_icon() {
   case "${1:-}" in
-  running)
-    if [ "$(whistle_conf '@whistle_spin')" = on ]; then
-      whistle_spin_char
-    else
-      whistle_icon '@whistle_icon_running'
-    fi
-    ;;
+  running) whistle_icon '@whistle_icon_idle' ;;
   done) whistle_icon '@whistle_icon_done' ;;
   wait) whistle_icon '@whistle_icon_wait' ;;
   error) whistle_icon '@whistle_icon_error' ;;

@@ -103,8 +103,8 @@ pane_of() {
   assert_contains "$label" '运行中'
   # 前缀带颜色，取自 @whistle_color_running
   assert_contains "$label" '#[fg='
-  # 本用例关掉了动画，所以是静态的 ▶
-  assert_contains "$label" '▶'
+  # 本用例关掉了动画；菜单的 running 前缀与动画无关，始终是 ◉
+  assert_contains "$label" '◉'
   assert_eq "$key" '2'
   assert_contains "$cmd" 'select-window'
   assert_contains "$cmd" "$p2"
@@ -116,7 +116,7 @@ pane_of() {
   "$CLI" running
 
   run "$CLI" --menu-args
-  assert_contains "$output" '#[fg=#00af00]▶'
+  assert_contains "$output" '#[fg=#00af00]◉'
 }
 
 @test "menu-args: 待处理项也带状态图标，与状态栏用同一套" {
@@ -139,29 +139,29 @@ pane_of() {
   assert_contains "$output" '#[fg=#d70000]⚠#[default] 错误'
 }
 
-@test "menu-args: @whistle_spin on 时菜单前缀是当前 Braille 帧而不是 ▶" {
-  # 菜单是瞬时弹出的快照，所以在**构造菜单那一刻**用 shell 取当前帧，
-  # 而不是塞一段 #{?...} —— display-menu 的条目名会不会展开 format 没验证过。
+@test "menu-args: running 项的前缀是绿色 ◉（不是 Braille 帧）" {
+  # 菜单是一次性绘制的静态快照，Braille 帧画上去就冻住了，看起来像渲染错乱
+  # 而不是动画。用 ◉ 表达「这一项在跑」这个信息本身。
+  #
+  # ⚠️ 语义上要留意：状态栏里 ◉ = 「一个都没在跑」，菜单里 ◉ = 「这一项在跑」。
+  #    同一个字符含义相反 —— 状态栏说的是全局计数，菜单说的是单条记录。
   wt set -g @whistle_spin on
   wt set -g @whistle_spin_char '⠹'
   "$CLI" running
 
   run "$CLI" --menu-args
-  assert_contains "$output" '#[fg=#00af00]⠹'
-  assert_not_contains "$output" '▶'
+  assert_contains "$output" '#[fg=#00af00]◉#[default] 运行中'
+  assert_not_contains "$output" '⠹'
 }
 
-@test "menu-args: 菜单前缀的帧跟着 @whistle_spin_char 走" {
-  wt set -g @whistle_spin on
-  wt set -g @whistle_spin_char '⠋'
+@test "menu-args: @whistle_spin off 时 running 前缀仍是 ◉" {
+  # 动画开关只影响状态栏，不该连带改菜单的图标
+  wt set -g @whistle_spin off
   "$CLI" running
 
   run "$CLI" --menu-args
-  assert_contains "$output" '⠋'
-
-  wt set -g @whistle_spin_char '⠼'
-  run "$CLI" --menu-args
-  assert_contains "$output" '⠼'
+  assert_contains "$output" '#[fg=#00af00]◉#[default] 运行中'
+  assert_not_contains "$output" '▶'
 }
 
 @test "menu-args: 待处理在前、running 在后，共用同一串键位且互不重叠" {
