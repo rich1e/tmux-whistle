@@ -207,6 +207,20 @@ whistle_menu_key() {
   esac
 }
 
+# whistle_menu_overflow <被藏起来的项数> → 菜单里那条灰字提示的名字
+#
+# display-menu 每项一个单字符快捷键：9 个数字 + a~q 17 个字母 = 26 项是硬上限。
+# 截断本身合理，问题是**静默** —— 状态栏写着 🔔28、菜单里只有 26 项，
+# 用户会以为自己记错了，而不是「哦有条目被折叠了」。
+#
+# 提示项以 '-' 开头：tmux 绘制时会剥掉那个 '-' 并置暗（disabled 语义），
+# 选中与鼠标路径都会跳过它；快捷键传空串，命令是空转。
+# **快捷键必须为空** —— 非空的话用户按那个键会选中一条不可跳转的项，
+# 行为上就退化成了「点了没反应」，比原来的静默截断更难查。
+whistle_menu_overflow() {
+  printf -- '- 还有 %s 项未显示，用 %s list 查看' "${1:-0}" "$WHISTLE_PROG"
+}
+
 cmd_menu() {
   _items=$(whistle_agent_windows)
   if [ -z "$_items" ]; then
@@ -224,12 +238,17 @@ cmd_menu() {
   #   第二遍 —— running 项，名称以 '-' 开头 = tmux 的 disabled 语义
   #             （screen-write.c 绘制时剥掉那个 '-' 并置暗），key 传空串、
   #             命令永远不会执行。它只是一份「哪些窗口有 agent」的清单。
+  #
+  # 超出上限时**不静默截断**：一直计数，只在 ≤26 时累积，放不下就在末尾
+  # 追加一条灰字提示。状态栏写着 🔔28 而菜单只有 26 项，用户会以为自己记错了。
   set --
   _i=0
+  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" || continue
     _i=$((_i + 1))
-    [ "$_i" -gt 26 ] && break
+    _total=$((_total + 1))
+    [ "$_i" -gt 26 ] && continue
     _label=" $(whistle_state_label "$st") $s:$wn $msg"
     set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
       "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
@@ -237,15 +256,26 @@ cmd_menu() {
 $_items
 EOF
 
+  if [ "$_total" -gt 26 ]; then
+    set -- "$@" "$(whistle_menu_overflow $((_total - 26)))" '' "display-message ''"
+  fi
+
   _i=0
+  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
-    [ "$_i" -gt 10 ] && break
+    _total=$((_total + 1))
+    [ "$_i" -gt 10 ] && continue
     set -- "$@" "- $(whistle_state_label "$st") $s:$wn $msg" '' "display-message ''"
   done << EOF
 $_items
 EOF
+
+  # running 那段的截断同样不能静默：它们没有快捷键，放不下时更需要说明。
+  if [ "$_total" -gt 10 ]; then
+    set -- "$@" "$(whistle_menu_overflow $((_total - 10)))" '' "display-message ''"
+  fi
 
   # display-menu 需要一个 attached client；在脚本里调用（无头 server）时
   # 它会报 "no current client"。这时降级成纯文本列表，而不是静默失败。
@@ -273,11 +303,14 @@ cmd_menu_args() {
   _items=$(whistle_agent_windows)
   [ -n "$_items" ] || return 0
 
+  # 与 cmd_menu 的两遍扫描逐行对应 —— 改一边不改另一边，测试就会变假绿。
   _i=0
+  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" || continue
     _i=$((_i + 1))
-    [ "$_i" -gt 26 ] && break
+    _total=$((_total + 1))
+    [ "$_i" -gt 26 ] && continue
     printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
     printf '%s\n' "$(whistle_menu_key "$_i")"
     printf '%s\n' "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
@@ -285,17 +318,31 @@ cmd_menu_args() {
 $_items
 EOF
 
+  if [ "$_total" -gt 26 ]; then
+    printf '%s\n' "$(whistle_menu_overflow $((_total - 26)))"
+    printf '%s\n' ''
+    printf '%s\n' "display-message ''"
+  fi
+
   _i=0
+  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
-    [ "$_i" -gt 10 ] && break
+    _total=$((_total + 1))
+    [ "$_i" -gt 10 ] && continue
     printf '%s\n' "- $(whistle_state_label "$st") $s:$wn $msg"
     printf '%s\n' ''
     printf '%s\n' "display-message ''"
   done << EOF
 $_items
 EOF
+
+  if [ "$_total" -gt 10 ]; then
+    printf '%s\n' "$(whistle_menu_overflow $((_total - 10)))"
+    printf '%s\n' ''
+    printf '%s\n' "display-message ''"
+  fi
 }
 
 cmd_jump() {

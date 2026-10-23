@@ -171,6 +171,19 @@ menu_keys() {
   printf '%s\n' "$1" | awk 'NR % 3 == 2'
 }
 
+seed_running_windows() {
+  local n="$1" i p
+  # 注意：seed_pending_windows 能省掉 i=1 是因为 wt_start 已经建了 w1。
+  # 这里用的是自己的 r* 命名，必须从 i=1 建起。
+  for ((i = 1; i <= n; i++)); do
+    wt new-window -d -n "r$i"
+  done
+  for ((i = 1; i <= n; i++)); do
+    p=$(wt display -p -t "r$i" '#{pane_id}')
+    "$CLI" "running" -t "$p"
+  done
+}
+
 @test "menu-args: 第 9 项是数字 9，第 10 项起接字母" {
   # 1-9 用数字，之后接字母表：第 10 项应落在字母表第 1 位。
   # 曾同时踩两个坑：位置算成 $1 - 10（第 10 项得到 0），且算术展开后多写了一个
@@ -208,15 +221,80 @@ menu_keys() {
   assert_eq "$(printf '%s\n' "$keys" | sed -n 26p)" 'q'
 }
 
-@test "menu-args: 超过 26 项时截断到 26" {
+@test "menu-args: 超过 26 项时第 27 组是灰字提示，不是静默丢弃" {
   seed_pending_windows 28
 
   run "$CLI" --menu-args
   assert_eq "$status" 0
 
+  # 27 个三元组 = 26 个可选项 + 1 个提示项
   local total
   total=$(menu_keys "$output" | wc -l | tr -d ' ')
-  assert_eq "$total" 26
+  assert_eq "$total" 27
+
+  # 前 26 个仍然可跳转 —— 提示项不能占用一个名额
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^switch-client')" 26
+
+  assert_contains "$output" '- 还有 2 项未显示'
+  assert_contains "$output" 'tmux-whistle list'
+}
+
+@test "menu-args: 提示项的快捷键为空（否则能被选走，退化成静默失败）" {
+  seed_pending_windows 28
+
+  run "$CLI" --menu-args
+
+  # 最后一个三元组：三行依次是 label / 快捷键 / 命令
+  local last
+  last=$(printf '%s\n' "$output" | tail -n 3)
+  assert_contains "$last" '- 还有'
+  assert_eq "$(printf '%s\n' "$last" | sed -n 2p)" ''      # key 必须是空行
+  assert_contains "$last" "display-message ''"           # 命令是空转
+}
+
+@test "menu-args: 不超 26 项时不加提示项" {
+  seed_pending_windows 5
+
+  run "$CLI" --menu-args
+  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 5
+  assert_not_contains "$output" '未显示'
+}
+
+@test "menu-args: 恰好 26 项时不加提示项（边界）" {
+  seed_pending_windows 26
+
+  run "$CLI" --menu-args
+  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 26
+  assert_not_contains "$output" '未显示'
+}
+
+@test "menu-args: running 那段超过 10 项时同样出提示，不静默截断" {
+  seed_running_windows 13
+
+  run "$CLI" --menu-args
+  # 10 个 running 项 + 1 条提示
+  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 11
+  assert_contains "$output" '- 还有 3 项未显示'
+}
+
+@test "menu-args: 待处理与 running 各自的提示分开计数" {
+  seed_pending_windows 28
+  seed_running_windows 13
+
+  run "$CLI" --menu-args
+  # 26 + 1（待处理提示）+ 10 + 1（running 提示）
+  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 38
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^- 还有 2 项未显示')" 1
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^- 还有 3 项未显示')" 1
+}
+
+@test "menu-args: 提示项不会占用可跳转的名额" {
+  seed_pending_windows 28
+
+  run "$CLI" --menu-args
+  # 28 个窗口全是 done，但只有 26 个能跳
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^switch-client')" 26
+  assert_eq "$(printf '%s\n' "$output" | grep -c 'w27\|w28')" 0
 }
 
 @test "menu-args: 命令里用的是 CLI 绝对路径（不依赖 PATH）" {
