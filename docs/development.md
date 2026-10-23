@@ -109,6 +109,7 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 │   │   ├── deliver.bats
 │   │   ├── hooks.bats
 │   │   ├── install_hooks.bats
+│   │   ├── run.bats
 │   │   └── state.bats
 │   ├── e2e/                    # L3 CLI + hook 端到端
 │   │   └── claude_hook.bats
@@ -116,7 +117,9 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 │       └── whistle.bash        # Bats 公共 helper：隔离 server + 断言
 ├── docs/
 │   ├── development.md          # 本文档
+│   ├── notify-design-review.md # 「事件收件箱」形态的取舍评审
 │   ├── requirements-analysis.md
+│   ├── superpowers/            # 执行计划（plans/），带 checkbox 的步骤清单
 │   └── todo.md                 # 已知问题与功能待办
 ├── tmux-whistle.tmux           # tpm / tpack 入口（可执行文件，tpm 不 source 它）
 ├── .tmux-whistle.conf          # tmux conf：prefix + W 绑定 + 调 setup.sh
