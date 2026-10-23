@@ -264,6 +264,17 @@ hooks 装好后自动工作：
 不需要 Claude Code，在 tmux 的 pane 里直接调：
 
 ```sh
+tmux-whistle run -- long_job.sh          # 跑完自动亮 ✓ 或 ✗，消息带耗时
+tmux-whistle run '备份' -- ./backup.sh    # 也可以自己起个标签
+```
+
+`run` 按**退出码**决定状态（0 → `✓`，非 0 → `✗`），并把子命令的退出码原样透传出来，
+所以 `make && tmux-whistle run -- …` 失败时仍然返回非零。
+它只认退出码、不解析输出 —— 一个退出码 0 的命令是不是「真的完成了」，包装器判断不了。
+
+纯状态上报也行（脚本自己知道该报什么的时候）：
+
+```sh
 long_job.sh && tmux-whistle done "备份完成" || tmux-whistle error "备份失败"
 ```
 
@@ -280,6 +291,9 @@ tmux-whistle done    "重构完成"     # 标记完成
 tmux-whistle wait    "等你批准"     # 标记等待
 tmux-whistle error   "构建失败"     # 标记出错
 tmux-whistle running               # 开始干活（亮 ●，不计入 🔔）
+
+tmux-whistle run -- npm test       # 包一个命令：按退出码落 ✓ / ✗，带耗时
+tmux-whistle run '测试' -- npm test # 自定义标签
 
 tmux-whistle list                  # 看所有待处理项
 tmux-whistle menu                  # = prefix + W

@@ -14,11 +14,10 @@
 
 ### 缺失能力
 
-- [ ] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
+（暂无）
 
 ### 文档缺陷
 
-- [ ] **TODO-7** `--help` 说 `on | off` 是「当前 session 的开关」，实际是全局
 - [ ] **TODO-8** `@whistle_detect_wait-re` / `done-re` 代码在读，但文档里没有
 
 ## 已修复
@@ -31,8 +30,10 @@
 - [x] **TODO-10** `running` 被当成要打扰用户的状态扇出到所有 session
 - [x] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [x] **TODO-2** 菜单超过 26 项时静默截断
+- [x] **TODO-7** `--help` 说 `on | off` 是「当前 session 的开关」，实际是全局
 - [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
 - [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
+- [x] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
 
 ---
 
@@ -389,6 +390,13 @@ whistle_tmux set -g @whistle_enabled "$_v"
 作用域）、`whistle_conf` 改成 `show -qv` 并按 pane→window→session→global 顺序回退。
 范围明显更大，不建议顺手做。
 
+**已修**：走的是最小改动 —— `whistle_usage` 里那句改成「总开关」。
+**没有**做 per-session 开关，那仍然是另一件事（要改 `whistle_conf` 的回退链，
+范围明显更大）。
+
+顺带把同一段 usage 里过时的 `jump <n|sess:win>` 改成
+`jump <窗口|序号|sess:win>`，跟 TODO-1 的四种写法对齐。
+
 **相关代码**：`bin/tmux-whistle` 的 `whistle_usage` / `cmd_toggle`。
 
 ---
@@ -691,7 +699,7 @@ TODO-2（Task 3）会顺带把这条命令串的结构整理一下，届时再�
 
 ## TODO-13 · 没有命令包装器，成功/失败要手写 `&&` / `||`
 
-⬜ 待处理
+✅ 已修复（`bin/tmux-whistle` 的 `cmd_run` + `test/integration/run.bats`）
 
 **现象**：想让一个普通命令跑完自动亮徽章，只能手写：
 
@@ -722,6 +730,50 @@ tmux-whistle run [-- 标签] -- 命令 参数...
 **相关代码**：`bin/tmux-whistle` 的 `cmd_run` 与分派处；`README.md` 的「场景二」。
 
 **开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 4。
+
+**已修**：
+
+```sh
+tmux-whistle run -- npm test          # 按退出码落状态，消息带耗时
+tmux-whistle run '测试' -- npm test   # 自定义标签
+```
+
+三条语义写进了测试：
+
+- **退出码透传**：`run -- sh -c 'exit 7'` 自身也返回 7。否则
+  `make && tmux-whistle run -- …` 在失败时会返回 0，CI 照样绿。
+- **只认退出码，不解析输出**：一个退出码 0 的命令是不是「真的完成了」，
+  包装器判断不了。这是显式包装器的边界，不是缺陷。
+- **参数原样传递**：`"$@"` 直接跑，不 eval、不 word splitting，
+  用户引号怎么写就怎么传。
+
+**顺带把编排抽成 `whistle_finish`**（重算 + 投递），`cmd_set` 与 `cmd_run` 共用 ——
+复制两份必然分叉。加 `run` 时最怕的就是两条路径的投递行为悄悄对不上。
+
+**踩到的坑：`$_rc，` 少写了花括号。** 这正是 CLAUDE.md 里写明的红线 ——
+「`$var` 后面紧跟中文/全角字符必须写 `${var}`」。实测症状很绕：
+
+```
+tr: Illegal byte sequence
+消息被截成「sh 失败（退出码」，退出码的 7 整个消失
+```
+
+`bash` 把全角逗号（`ef bc 8c`）的第一个字节吞进变量名，剩下 `bc 8c` 是非法 UTF-8，
+`tr` 直接报错退出，管道只吐出前半段。同样的字面量走老路径（`done`）却是好的 ——
+所以第一反应完全指错了方向（我先去查 `tr` 的字符类、又去查 locale）。
+**真到现场直接 `od -c` 看字节，比顺着猜快得多。**
+已在该行加注释，并用一条 grep 扫了全仓确认没有第二处。
+
+**回归测试**（`test/integration/run.bats` 13 条，全新文件）：0 → done、
+非 0 → error 且消息带退出码、终态顶掉 running、自定义标签、无标签时用命令名、
+带耗时、命令输出透传、参数不做 word splitting、缺 `--` 与 `--` 后无命令都报错
+且**不写任何状态**、`-t` 指向别的 pane、成功计入待处理、窗口徽章同步。
+
+写测试时另有一处：helper 里**没有 `assert_ne`**（只有 `assert_eq` /
+`assert_contains` / `assert_not_contains`），我第一版用了它，
+三条用例因为「函数不存在」而红 —— 症状和功能缺失一模一样。
+
+`make check` 240 项全绿。
 
 ---
 
@@ -803,7 +855,7 @@ whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
 | 1 | 跳转精确到 pane | TODO-12 | ✅ 已完成 |
 | 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ✅ 已完成 |
 | 3 | 菜单截断不再静默 | TODO-2 | ✅ 已完成 |
-| 4 | `run --` 命令包装器 | TODO-13 | ⬜ 未开始 |
+| 4 | `run --` 命令包装器 | TODO-13 | ✅ 已完成 |
 | 5 | 标题 / 正文分离 | TODO-14 | ⬜ 未开始 |
 
 **执行约定**：

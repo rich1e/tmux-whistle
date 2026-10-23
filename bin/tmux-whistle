@@ -38,11 +38,14 @@ $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
 
 用法：
   $WHISTLE_PROG <状态> [消息]        置状态：done | wait | error | running
+  $WHISTLE_PROG run [-- 标签] -- 命令 [参数...]
+                                     包一个命令：按退出码落 done / error，带耗时
   $WHISTLE_PROG clear [-a]           清除当前窗口 / 全部待处理状态
   $WHISTLE_PROG list                 列出所有待处理项
   $WHISTLE_PROG menu                 打开 agent 菜单（等同 prefix + W）
-  $WHISTLE_PROG jump <n|sess:win>    跳到指定项并清除
-  $WHISTLE_PROG on | off             当前 session 的开关
+  $WHISTLE_PROG jump <窗口|序号|sess:win>
+                                     跳到指定窗口并清除
+  $WHISTLE_PROG on | off             总开关
   $WHISTLE_PROG doctor               环境自检
 
 选项：
@@ -78,6 +81,23 @@ whistle_die() {
 # 消息与选项的顺序无关 —— 早期版本直接把 $2 当消息，于是
 # `done -t %3 "消息"`（git 那种习惯）会把 -t 吃进消息、写错 pane。
 # 现在统一走一个循环：-t 收下一个参数，-- 之后全是消息，其余逐词拼消息。
+# whistle_finish <pane> <状态> <原始消息>
+#
+# 写完状态之后的统一编排：重算窗口与全局计数，然后投递。
+# cmd_set 与 cmd_run 共用 —— 复制两份必然分叉。
+whistle_finish() {
+  _ff_pane="$1"
+  _ff_state="$2"
+  _ff_msg="$3"
+
+  _ff_win=$(whistle_pane_window "$_ff_pane")
+  [ -n "$_ff_win" ] || return 1
+
+  whistle_recompute_window "$_ff_win"
+  whistle_recompute_global
+  whistle_deliver "$_ff_win" "$_ff_state" "$(whistle_sanitize "$_ff_msg")"
+}
+
 cmd_set() {
   _state="$1"
   shift
@@ -118,12 +138,78 @@ cmd_set() {
   fi
 
   _pane=$(whistle_state_set "$_state" "$_msg" "$_target") || exit 1
-  _win=$(whistle_pane_window "$_pane")
-  [ -n "$_win" ] || whistle_die "拿不到 pane $_pane 所属窗口"
+  whistle_finish "$_pane" "$_state" "$_msg" || whistle_die "拿不到 pane $_pane 所属窗口"
+}
 
-  whistle_recompute_window "$_win"
-  whistle_recompute_global
-  whistle_deliver "$_win" "$_state" "$(whistle_sanitize "$_msg")"
+# -- 命令包装器 -------------------------------------------------------------
+
+# cmd_run [-- 标签] [--target <pane>] -- 命令 [参数...]
+#
+# 替手写 `cmd && whistle done "…" || whistle error "…"`：那种写法漏了后半截
+# 或把 && || 写反都**不报错**，只是徽章不对。包装器按退出码决定终态，
+# 顺带把耗时记进消息。
+#
+# 只认退出码，不解析输出 —— 它没法知道一个退出码 0 的命令是不是"真的完成了"。
+# 这是显式包装器的边界，不是缺陷。
+#
+# ⚠️ 不要用 exec：那会替换掉当前 shell 进程，拿不到退出码。
+# 直接跑 "$@" 再读 $? 即可，不需要 trap。
+cmd_run() {
+  _label=''
+  _target=''
+
+  # 解析到 -- 为止：选项归选项，其余逐词拼成标签。
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -t | --target)
+      _target="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      whistle_die "未知选项 [$1]"
+      ;;
+    *)
+      _label="${_label:+$_label }$1"
+      shift
+      ;;
+    esac
+  done
+
+  [ $# -gt 0 ] \
+    || whistle_die "用法：$WHISTLE_PROG run [-- 标签] -- 命令 [参数...]"
+
+  # 没给标签就用命令名。$@ 原样传给 "$@" —— 不 eval、不 word splitting，
+  # 用户引号怎么写就怎么传。
+  _label="${_label:-$1}"
+
+  _pane=$(whistle_state_set running "$_label" "$_target") || exit 1
+  whistle_finish "$_pane" running "$_label" || whistle_die "拿不到 pane $_pane 所属窗口"
+
+  _start=$(whistle_now)
+  "$@"
+  _rc=$?
+  _dur=$(($(whistle_now) - _start))
+
+  if [ "$_rc" -eq 0 ]; then
+    _state='done'
+    _msg="$_label 完成（${_dur}s）"
+  else
+    _state='error'
+    # ${_rc} 必须带括号：$_rc 紧跟全角逗号时 bash 会把「，」的第一个字节
+    # 吞进变量名，字符串变成非法 UTF-8，tr 直接报 Illegal byte sequence
+    # 并把消息截在逗号前。踩过，见 CLAUDE.md 的 POSIX sh 红线。
+    _msg="$_label 失败（退出码 ${_rc}，${_dur}s）"
+  fi
+
+  whistle_state_set "$_state" "$_msg" "$_pane" > /dev/null
+  whistle_finish "$_pane" "$_state" "$_msg"
+
+  # 透传子命令的退出码 —— 否则 `make && tmux-whistle run -- …` 失败时会返回 0。
+  exit "$_rc"
 }
 
 # -- 清除 ------------------------------------------------------------------
@@ -595,6 +681,10 @@ cmd_doctor() {
 case "$1" in
 done | wait | error | running)
   cmd_set "$@"
+  ;;
+run)
+  shift
+  cmd_run "$@"
   ;;
 clear)
   shift
