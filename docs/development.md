@@ -122,7 +122,7 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 │   ├── superpowers/            # 执行计划（plans/），带 checkbox 的步骤清单
 │   └── todo.md                 # 已知问题与功能待办
 ├── tmux-whistle.tmux           # tpm / tpack 入口（可执行文件，tpm 不 source 它）
-├── .tmux-whistle.conf          # tmux conf：prefix + w 绑定 + 调 setup.sh
+├── .tmux-whistle.conf          # tmux conf：prefix + N 绑定 + 调 setup.sh
 ├── install.sh                  # 手动安装 / 卸载
 ├── Makefile                    # 统一开发命令
 ├── README.md                   # 使用者文档

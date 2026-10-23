@@ -42,7 +42,7 @@ $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
                                      包一个命令：按退出码落 done / error，带耗时
   $WHISTLE_PROG clear [-a]           清除当前窗口 / 全部待处理状态
   $WHISTLE_PROG list                 列出所有待处理项
-  $WHISTLE_PROG menu                 打开 agent 菜单（等同 prefix + w）
+  $WHISTLE_PROG menu                 打开 agent 菜单（等同 prefix + N）
   $WHISTLE_PROG jump <窗口|序号|sess:win>
                                      跳到指定窗口并清除
   $WHISTLE_PROG on | off             总开关
@@ -326,7 +326,7 @@ cmd_list() {
 $_rows
 EOF
   _n=$(printf '%s\n' "$_rows" | wc -l | tr -d ' ')
-  printf '\n共 %s 项待处理。按 prefix + w 打开菜单跳转。\n' "$_n"
+  printf '\n共 %s 项待处理。按 prefix + N 打开菜单跳转。\n' "$_n"
 }
 
 # -- 菜单 / 跳转 -----------------------------------------------------------
@@ -428,7 +428,7 @@ EOF
   # 遇到第一个非选项参数后才停止把 '-' 当 flag（tmux 3.2 用 getopt，
   # 3.8 用 arguments.c，两者都认 '--'）。少了它会报 "invalid flag -"。
   if ! whistle_tmux display-menu -T 'tmux-whistle' -- "$@" 2> /dev/null; then
-    printf '没有可用的客户端。在 tmux 会话里按 prefix + w 打开菜单。\n\n'
+    printf '没有可用的客户端。在 tmux 会话里按 prefix + N 打开菜单。\n\n'
     while IFS='|' read -r s wid wn _wi _pid st msg; do
       if whistle_is_notified "$st"; then
         printf '  %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"

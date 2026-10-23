@@ -119,7 +119,7 @@ tmux-whistle: [api] 匹配到 2 个窗口，请写 session:window：
 
 ✅ 已修复（`bin/tmux-whistle` 的 `whistle_menu_overflow` + `cmd_menu` / `cmd_menu_args`）
 
-**现象**：待处理项超过 26 个时，`prefix + w` 只显示前 26 个，
+**现象**：待处理项超过 26 个时，`prefix + N` 只显示前 26 个，
 没有任何「还有 N 项」的提示。用户会以为就这么多。
 
 **触发**：造 28 个待处理窗口，菜单只出 26 项（`--menu-args` 同样只有 26 组）。
@@ -192,7 +192,7 @@ running 超 10 项出提示；两段的提示分开计数；提示项不占用�
 按任何键都选不中。**菜单本身正常弹出**，其余功能（徽章、🔔 计数、瞬时提示、
 桌面通知、`list`、`jump`）完全不受影响。
 
-**触发**：任意 10 个以上窗口处于待处理状态，按 `prefix + w`。
+**触发**：任意 10 个以上窗口处于待处理状态，按 `prefix + N`。
 
 **原因**：两个 bug 叠加，症状相同：
 
@@ -593,7 +593,7 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
 ✅ 已修复（`lib/core.sh` 的 `whistle_aggregate` / `whistle_recompute_window` /
 `whistle_agent_windows` + `bin/tmux-whistle` 的 `cmd_menu` / `cmd_menu_args`）
 
-**现象**：一个窗口切成多格（pane）时，`prefix + w` 选中一项只会切到那个**窗口**，
+**现象**：一个窗口切成多格（pane）时，`prefix + N` 选中一项只会切到那个**窗口**，
 窗口里落在哪一格不保证 —— 常常不是正在等你的那一格。
 
 **触发**：
@@ -601,7 +601,7 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
 ```sh
 tmux-whistle done "等我批准"     # ① 在 pane A 报状态
 tmux split-window                # ② 把窗口切成两格，焦点在 pane B
-prefix + w                       # ③ 选那一项
+prefix + N                       # ③ 选那一项
 # → 落在 pane B（焦点所在的那格），要自己再点回 pane A
 ```
 
@@ -885,7 +885,7 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
    如 `API Error: Rate limit reached`），缺失时回落到错误类型名。
 2. **`running` 显示 `●`** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
    徽章条件式从三层变四层。它仍不计入 `🔔N`、不算待处理。
-3. **`prefix + w` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
+3. **`prefix + N` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
    取 rank 最高的一行）。待处理项带编号可跳转，running 项以 `-` 开头
    （`display-menu` 的 disabled 语义：tmux 绘制时会剥掉那个 `-` 并置暗，选中与
    鼠标路径都会跳过），没有快捷键。
