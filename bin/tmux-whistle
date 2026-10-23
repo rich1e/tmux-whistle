@@ -66,8 +66,8 @@ Claude Code 集成：
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
   @whistle_color_done|wait|error|running   徽章与边框颜色
-  @whistle_icon_done|wait|error|running    各状态的图标（默认 ◆ / ◷ / ⚠ / ▶）
-  @whistle_icon_pending              全局计数前的图标（默认 ✉；空串 = 不显示）
+  @whistle_icon_done|wait|error|running    各状态的图标（默认 ◆ / ◔ / ⚠ / ▶）
+  @whistle_icon_pending              全局计数前的图标（默认 ⚑；空串 = 不显示）
 EOF
 }
 
@@ -179,7 +179,7 @@ cmd_set() {
 #
 # ⚠️ 但必须给 SIGINT 装一个 no-op handler。Ctrl-C 把信号发给**整个前台进程组**，
 # 不装的话 /bin/sh 跑的包装器会在读到 $? 之前就死掉 —— 状态永远停在 running，
-# 而 running 不计入 pending、✉ 不亮，非 Claude Code 的进程更没有 SessionEnd
+# 而 running 不计入 pending、⚑ 不亮，非 Claude Code 的进程更没有 SessionEnd
 # 兜底，那盏 ● 就再也灭不掉了。
 #
 # 必须用 ':'（no-op）而不是 ''（ignore）：被 **trap** 的信号在子进程里复位成
@@ -354,7 +354,7 @@ whistle_menu_key() {
 # whistle_menu_overflow <被藏起来的项数> → 菜单里那条灰字提示的名字
 #
 # display-menu 每项一个单字符快捷键：9 个数字 + a~q 17 个字母 = 26 项是硬上限。
-# 截断本身合理，问题是**静默** —— 状态栏写着 ✉28、菜单里只有 26 项，
+# 截断本身合理，问题是**静默** —— 状态栏写着 ⚑28、菜单里只有 26 项，
 # 用户会以为自己记错了，而不是「哦有条目被折叠了」。
 #
 # 提示项以 '-' 开头：tmux 绘制时会剥掉那个 '-' 并置暗（disabled 语义），
@@ -368,7 +368,7 @@ whistle_menu_overflow() {
 # whistle_menu_state_icon <状态> → 菜单里该状态的前缀图标
 #
 # 与状态栏用同一套图标与颜色，两个界面看起来才是一回事：
-#   done ◆ / wait ◷ / error ⚠ / running ◉
+#   done ◆ / wait ◔ / error ⚠ / running ◉
 #
 # running 用 ◉ 而不是状态栏那串 Braille 帧：菜单是一次性绘制的静态快照，
 # 帧画上去就冻住了，看起来像渲染错乱而不是动画。用 ◉ 是为了「这一项在跑」
@@ -431,7 +431,7 @@ cmd_menu() {
   # 待处理排前面，所以待处理多的时候 running 会先被挤掉 —— 这是对的优先级。
   #
   # 超出上限时**不静默截断**：一直计数，只在 ≤26 时累积，放不下就在末尾
-  # 追加一条灰字提示。状态栏写着 ✉28 而菜单只有 26 项，用户会以为自己记错了。
+  # 追加一条灰字提示。状态栏写着 ⚑28 而菜单只有 26 项，用户会以为自己记错了。
   set --
   _i=0
   _total=0

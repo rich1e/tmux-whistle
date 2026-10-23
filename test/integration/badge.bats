@@ -31,9 +31,9 @@ teardown() {
 
     run wt_render_windows
     assert_contains "$output" 'w1◆'
-    assert_contains "$output" 'w2◷'
+    assert_contains "$output" 'w2◔'
     # 交叉验证：w1 不该出现 wait 的符号，反之亦然
-    assert_not_contains "$output" 'w1◷'
+    assert_not_contains "$output" 'w1◔'
     assert_not_contains "$output" 'w2◆'
 }
 
@@ -70,7 +70,7 @@ teardown() {
     assert_contains "$output" 'w1▶'
     # running 只亮 ▶，不该串到其余三个状态的符号上
     assert_not_contains "$output" '◆'
-    assert_not_contains "$output" '◷'
+    assert_not_contains "$output" '◔'
     assert_not_contains "$output" '⚠'
 }
 
@@ -80,14 +80,14 @@ teardown() {
     whistle_mark_publish
     whistle_format_patch window-status-format
 
-    for pair in 'done ◆' 'wait ◷' 'error ⚠' 'running ▶'; do
+    for pair in 'done ◆' 'wait ◔' 'error ⚠' 'running ▶'; do
         local st="${pair% *}" sym="${pair#* }"
         wt set -w -t w1 @whistle_win "$st"
         run wt_render_windows
         assert_contains "$output" "w1${sym}"
         # 只断言本状态该有的符号：其余三个不该同时出现
         local other
-        for other in ◆ ◷ ⚠ ▶; do
+        for other in ◆ ◔ ⚠ ▶; do
             [ "$other" = "$sym" ] && continue
             assert_not_contains "$output" "$other"
         done
@@ -339,7 +339,7 @@ teardown() {
 
   run wt display -pF '#{E:status-right}'
   assert_contains "$output" '● 3'
-  assert_not_contains "$output" '✉'
+  assert_not_contains "$output" '⚑'
 }
 
 @test "图标: 显式设成空串表示不要图标（区别于未设置）" {
@@ -414,10 +414,10 @@ teardown() {
   wt set -g @whistle_pending 0
 
   run wt display -pF '#{E:status-right}'
-  assert_not_contains "$output" '✉'
+  assert_not_contains "$output" '⚑'
 }
 
-@test "status-right: 有待处理项时显示 ✉N" {
+@test "status-right: 有待处理项时显示 ⚑N" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish
@@ -426,18 +426,18 @@ teardown() {
   wt set -g @whistle_pending 3
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '✉ 3'
+  assert_contains "$output" '⚑ 3'
 }
 
-@test "status-right: ✉ 用的是 @whistle_color_pending，不借用等待色" {
+@test "status-right: ⚑ 用的是 @whistle_color_pending，不借用等待色" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
-  assert_contains "$output" "#[fg=#5fd7d7]✉"
-  # 等待色不该再出现在这个格子上 —— 它只属于汇总里的 ◷
-  assert_not_contains "$output" '#af8700]✉'
+  assert_contains "$output" "#[fg=#5fd7d7]⚑"
+  # 等待色不该再出现在这个格子上 —— 它只属于汇总里的 ◔
+  assert_not_contains "$output" '#af8700]⚑'
 }
 
 @test "status-right: 改 @whistle_color_pending 即生效" {
@@ -447,7 +447,7 @@ teardown() {
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
-  assert_contains "$output" '#[fg=#123456]✉'
+  assert_contains "$output" '#[fg=#123456]⚑'
 }
 
 @test "status-right: 图标与数字之间留一个空格，不紧贴" {
@@ -458,9 +458,9 @@ teardown() {
   run opt '@whistle_status_right'
   # 紧贴的 "◆#{@whistle_count_done}" 会让宽图标看起来像数字的一部分
   assert_contains "$output" '◆ #{@whistle_count_done}'
-  assert_contains "$output" '◷ #{@whistle_count_wait}'
+  assert_contains "$output" '◔ #{@whistle_count_wait}'
   assert_contains "$output" '⚠ #{@whistle_count_error}'
-  assert_contains "$output" '✉ #{@whistle_pending}'
+  assert_contains "$output" '⚑ #{@whistle_pending}'
 }
 
 @test "status-right: done 是紫色 ◆，error 是红色 ⚠" {
@@ -531,10 +531,10 @@ teardown() {
   assert_contains "$output" '▶ 1'
   assert_contains "$output" '◆ 1'
   # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
-  assert_contains "$output" '◷ 0'
+  assert_contains "$output" '◔ 0'
   assert_contains "$output" '⚠ 1'
-  # 汇总与 ✉ 计数是两个独立的读法，都要在
-  assert_contains "$output" '✉ 2'
+  # 汇总与 ⚑ 计数是两个独立的读法，都要在
+  assert_contains "$output" '⚑ 2'
 }
 
 @test "status-right: running 用绿色渲染" {

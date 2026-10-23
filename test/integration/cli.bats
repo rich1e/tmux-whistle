@@ -135,7 +135,7 @@ pane_of() {
 
   run "$CLI" --menu-args
   assert_contains "$output" '#[fg=#af5fff]◆#[default] 完成'
-  assert_contains "$output" '#[fg=#af8700]◷#[default] 等待'
+  assert_contains "$output" '#[fg=#af8700]◔#[default] 等待'
   assert_contains "$output" '#[fg=#d70000]⚠#[default] 错误'
 }
 

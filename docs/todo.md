@@ -189,7 +189,7 @@ running 超 10 项出提示；两段的提示分开计数；提示项不占用�
 ✅ 已修复（`bin/tmux-whistle` 的 `whistle_menu_key`）
 
 **现象**：待处理项 ≥ 10 时，第 10 项及以后的行尾没有 `(快捷键)` 标记，
-按任何键都选不中。**菜单本身正常弹出**，其余功能（徽章、✉ 计数、瞬时提示、
+按任何键都选不中。**菜单本身正常弹出**，其余功能（徽章、⚑ 计数、瞬时提示、
 桌面通知、`list`、`jump`）完全不受影响。
 
 **触发**：任意 10 个以上窗口处于待处理状态，按 `prefix + n`。
@@ -735,7 +735,7 @@ tmux-whistle run [-- 标签] -- 命令 参数...
 
 但「子命令自己吃到 SIGINT」与「用户按 Ctrl-C」是两件事：后者把信号发给**整个前台
 进程组**，不装 handler 的话包装器会在读到 `$?` 之前就死掉，状态永远停在 `running`
-—— 而 `running` 不计入 pending、✉ 不亮，非 Claude Code 的进程更没有 SessionEnd
+—— 而 `running` 不计入 pending、⚑ 不亮，非 Claude Code 的进程更没有 SessionEnd
 兜底。所以 `cmd_run` 开头装了 `trap ':' INT`。
 **必须用 `:` 而不是 `''`**：被 trap 的信号在子进程里复位成默认动作，子命令照样
 能被 Ctrl-C 打断；被 ignore 的会连子命令一起忽略，用户就再也停不掉自己启动的构建。
@@ -884,7 +884,7 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
    `last_assistant_message`（该字段在这个事件里就是渲染出来的错误文本，
    如 `API Error: Rate limit reached`），缺失时回落到错误类型名。
 2. **`running` 显示徽章** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
-   徽章条件式从三层变四层。它仍不计入 `✉N`、不算待处理。
+   徽章条件式从三层变四层。它仍不计入 `⚑N`、不算待处理。
    <br>_（2026-10-23 改动：默认图标由 `●` 换成绿色 `▶`，默认色由 `#5f87af` 换成 `#00af00`。）_
 3. **`prefix + n` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
    取 rank 最高的一行）。待处理项带编号可跳转。
@@ -892,8 +892,8 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
    现在它与待处理项共用同一套 1–26 键位，都能跳，用绿色 `▶` 前缀区分。见下方「已修」。）_
 4. **`running` 有了灭灯信号** —— 订阅 `SessionEnd`，agent 退出时清掉该 pane 的 running
    （见 TODO-11）。
-5. **status-right 增加四态汇总** —— `▶1 ✓1 ◷0 ✗0`。`whistle_count_states`（纯函数）
-   从同一份 `list-panes` 输出算四态分布，写入 `@whistle_count_*`；汇总段与 `✉N`
+5. **status-right 增加四态汇总** —— `▶1 ✓1 ◔0 ✗0`。`whistle_count_states`（纯函数）
+   从同一份 `list-panes` 输出算四态分布，写入 `@whistle_count_*`；汇总段与 `⚑N`
    共用同一个注入点（`@whistle_status_right`），所以自愈仍然只有一个入口。
    四个格子固定出现（含 0），状态栏宽度不跳动；全零时整段隐藏。
 
