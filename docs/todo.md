@@ -10,7 +10,6 @@
 
 ### 功能缺陷
 
-- [ ] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [ ] **TODO-2** 菜单超过 26 项时静默截断
 
 ### 缺失能力
@@ -30,6 +29,7 @@
 - [x] **TODO-6** `@whistle_self` 的行为与名字/文档相反
 - [x] **TODO-9** `-t` 写在消息前面时会静默写到别的 pane
 - [x] **TODO-10** `running` 被当成要打扰用户的状态扇出到所有 session
+- [x] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
 - [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 
@@ -37,7 +37,7 @@
 
 ## TODO-1 · `jump` 不接受裸窗口名
 
-⬜ 待处理
+✅ 已修复（`bin/tmux-whistle` 的 `cmd_jump`）
 
 **现象**：`tmux-whistle list` 的 WINDOW 列显示窗口名（如 `w2`），但直接
 `tmux-whistle jump w2` 会报 `找不到 [w2]`。必须写成 `main:w2` 或 `jump 1`。
@@ -65,6 +65,50 @@ $1 ":" $3 == t || $1 ":" $4 == t || $4 == t
 命中多个时应当报错并列出候选，而不是静默取第一个。
 
 **相关代码**：`bin/tmux-whistle` 的 `cmd_jump`；`README.md` 的命令速查。
+
+**已修**：加了裸窗口名那一支，四种写法都认：
+
+```awk
+$1 ":" $3 == t || $1 ":" $4 == t || $3 == t || $4 == t
+```
+
+**顺带修掉了同一处的第二个问题**：原来 `exit` 让它**静默取 `list-windows`
+里的第一个**。裸序号 `0` 在每个 session 里都存在，裸窗口名也可能重名 ——
+你会被静默送到另一个 session，看见一个干净窗口，根本想不起来
+「哦原来该跳的是另一个」。**跳错窗口比报错难查得多。**
+
+现在撞名会报错并列出候选：
+
+```
+$ tmux-whistle jump api
+tmux-whistle: [api] 匹配到 2 个窗口，请写 session:window：
+  main:api
+  other:api
+```
+
+候选一律显示 `session:窗口名`（而不是序号），用户能直接粘回来用。
+一个窗口最多命中一支 —— 窗口名不可能等于序号，所以不会重复计数。
+
+⚠️ **这是一处行为变更**：原来 `jump 0` 在多个 session 有 0 号窗时会静默跳到
+第一个，现在报错。依赖旧行为的脚本会开始失败，但那是在纠正一个错误行为。
+
+**顺带接上 Task 1 的 `@whistle_win_pane`**：jump 现在会选中报状态的那一格。
+**必须先判 pane 存活**再 `select-pane` —— 对着已死的 pane 会报错，
+而 tmux 的 `;` 命令链遇错即停，后面的 `whistle_clear_window` 就不执行，
+状态永远清不掉。这正是「菜单开着的时候那一格被关掉」的场景，
+用 `display-message -p -t <pane> '#{pane_id}'` 取得到才 select。
+
+**回归测试**（`test/integration/cli.bats` 7 条）：裸窗口名能跳；裸窗口名撞名
+报错且**两边都不动**；裸序号撞名报错；裸窗口名找不到报错；`session:窗口`
+写法在撞名时不受影响；`@whistle_win_pane` 指向死 pane 时仍能清掉窗口；
+`@whistle_win_pane` 为空时跳过 select。
+
+写测试时踩到一个坑：**tmux 给新 session 的首个窗口起的是当前 shell 的名字**
+（zsh / bash / 取决于环境），不是 session 名。断言里写死它会随开发机变化 ——
+第一版就写成了 `other:other`，在 tmux 3.8 上拿到的是 `other:zsh`。
+测试里的窗口名一律显式给（`new-session -d -s other -n svc`）。
+
+`make check` 221 项全绿。
 
 ---
 
@@ -716,7 +760,7 @@ whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
 | Task | 功能 | 对应 TODO | 状态 |
 |---|---|---|---|
 | 1 | 跳转精确到 pane | TODO-12 | ✅ 已完成 |
-| 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ⬜ 未开始 |
+| 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ✅ 已完成 |
 | 3 | 菜单截断不再静默 | TODO-2 | ⬜ 未开始 |
 | 4 | `run --` 命令包装器 | TODO-13 | ⬜ 未开始 |
 | 5 | 标题 / 正文分离 | TODO-14 | ⬜ 未开始 |

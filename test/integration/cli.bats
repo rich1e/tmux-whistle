@@ -255,6 +255,109 @@ menu_keys() {
   assert_contains "$output" '找不到'
 }
 
+@test "jump: 裸窗口名可以跳（list 显示什么就能跳什么）" {
+  wt new-session -d -s other -n api
+  local p w
+  p=$(wt display -p -t other:api '#{pane_id}')
+  w=$(wt display -p -t other:api '#{window_id}')
+  "$CLI" "done" '做完了' -t "$p"
+
+  run "$CLI" jump 'api'
+  assert_eq "$status" 0
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "jump: 裸窗口名撞名时报错列候选，不静默取第一个" {
+  wt new-session -d -s other -n api
+  wt new-window -d -t main -n api
+  local p1 p3
+  p1=$(wt display -p -t other:api '#{pane_id}')
+  p3=$(wt display -p -t main:api '#{pane_id}')
+  "$CLI" "done" 'A session 的' -t "$p1"
+  "$CLI" "done" 'B session 的' -t "$p3"
+
+  run "$CLI" jump 'api'
+  assert_eq "$status" 1
+  assert_contains "$output" 'other:api'
+  assert_contains "$output" 'main:api'
+  # 撞名时**不该**动任何一边
+  assert_contains "$(wt show -pqv -t "$p1" @whistle)" 'done'
+  assert_contains "$(wt show -pqv -t "$p3" @whistle)" 'done'
+}
+
+@test "jump: 裸窗口序号撞名时同样报错" {
+  # 窗口名显式给 —— tmux 给新 session 的首个窗口起的是**当前 shell 的名字**
+  # （zsh / bash / 取决于环境），拿它当断言会随开发机变化。
+  wt new-session -d -s other -n svc
+  local p1 p2
+  p1=$(wt display -p -t other:svc '#{pane_id}')
+  p2=$(wt display -p -t main:w1 '#{pane_id}')
+  "$CLI" "done" 'A 的 0 号窗' -t "$p1"
+  "$CLI" "done" 'B 的 0 号窗' -t "$p2"
+
+  run "$CLI" jump '0'
+  assert_eq "$status" 1
+  # 候选一律显示 session:窗口名 —— 用户能直接粘回来用
+  assert_contains "$output" 'other:svc'
+  assert_contains "$output" 'main:w1'
+}
+
+@test "jump: 裸窗口名找不到时报错退出" {
+  run "$CLI" jump 'nosuch'
+  assert_eq "$status" 1
+  assert_contains "$output" '找不到'
+}
+
+@test "jump: session:窗口 的显式写法在撞名时不受影响" {
+  wt new-session -d -s other -n api
+  wt new-window -d -t main -n api
+  local p w p3
+  p=$(wt display -p -t other:api '#{pane_id}')
+  w=$(wt display -p -t other:api '#{window_id}')
+  p3=$(wt display -p -t main:api '#{pane_id}')
+  "$CLI" "done" 'other 的' -t "$p"
+  "$CLI" "done" 'main 的' -t "$p3"
+
+  run "$CLI" jump 'other:api'
+  assert_eq "$status" 0
+  # 只有 other 那一侧被清掉，main 的原地不动
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  assert_contains "$(wt show -pqv -t "$p3" @whistle)" 'done'
+}
+
+@test "jump: @whistle_win_pane 指向已死的 pane 时仍然清掉窗口" {
+  wt new-session -d -s other -n api
+  local p w
+  p=$(wt display -p -t other:api '#{pane_id}')
+  w=$(wt display -p -t other:api '#{window_id}')
+  "$CLI" "done" '做完了' -t "$p"
+
+  # 把 @whistle_win_pane 指向一个不存在的 pane —— 模拟「菜单开着的时候
+  # 那一格被关掉」。select-pane 对着死 pane 会报错，而 tmux 的 `;` 命令链
+  # 遇错即停，所以必须先判存活再 select，否则 clear 不会执行、状态永远清不掉。
+  wt setw -t "$w" @whistle_win_pane '%999'
+
+  run "$CLI" jump 'other:api'
+  assert_eq "$status" 0
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "jump: @whistle_win_pane 为空时跳过 select-pane" {
+  wt new-session -d -s other -n api
+  local p w
+  p=$(wt display -p -t other:api '#{pane_id}')
+  w=$(wt display -p -t other:api '#{window_id}')
+  "$CLI" "done" '做完了' -t "$p"
+
+  # 没有 agent 在跑时窗口本就没有 pane 身份；jump 仍要能正常清。
+  wt setw -t "$w" @whistle_win_pane ''
+
+  run "$CLI" jump 'other:api'
+  assert_eq "$status" 0
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
 # -- 列表 / 清除 / 开关 -----------------------------------------------------
 
 @test "list: 无待处理时给出友好提示" {

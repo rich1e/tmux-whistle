@@ -284,6 +284,7 @@ tmux-whistle running               # 开始干活（亮 ●，不计入 🔔）
 tmux-whistle list                  # 看所有待处理项
 tmux-whistle menu                  # = prefix + W
 tmux-whistle jump other:api        # 跳到 session:window 并清除
+                                   # 裸窗口名（api）也可以；撞名会列出候选让你指定
 tmux-whistle clear                 # 清当前窗口
 tmux-whistle clear -a              # 全清
 tmux-whistle on | off              # 总开关
