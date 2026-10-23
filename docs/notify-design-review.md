@@ -108,7 +108,7 @@ whistle 把「通知」和「任务」压在同一个字段上，所以焦点进
 | 分屏时能否落到正确 pane | **不能** | 能 |
 
 这是本文档里唯一一个**当下的真缺陷**（其余多是能力缺失）。当前实现里分屏窗口的所有 pane
-聚合成一条窗口徽章，`prefix + N` 跳过去后落在该窗口上一个 pane —— 不保证是那个在等的。
+聚合成一条窗口徽章，`prefix + n` 跳过去后落在该窗口上一个 pane —— 不保证是那个在等的。
 `@whistle_border_status` 这个选项正是这个缺陷的权宜之计（把 pane 符号画到每个 pane 顶上），
 但它占掉一整行、且默认关。
 
@@ -157,8 +157,8 @@ set -g status-interval 2
 文档 §8.2 建议的方案是把这个正解扔掉、退回到 gpakosz 那种写法。
 
 这一条不是「取舍不同」，是**已知的性能回退**。同理 §8.3 的 `bind n` 建议也要注意：
-`n` / `N` 是 tmux 高频常用键。**本仓最终把菜单键定为 `prefix + N`**
-（`N` = Notify，实测在你的 `prefix` 表里是空键），见 §4.7。
+`n` 是 tmux 高频常用键。**本仓最终把菜单键定为 `prefix + n`**
+（n = notify，实测在目标机器的 `prefix` 表里是空键），见 §4.7。
 
 ### 2.8 事件来源
 
@@ -372,7 +372,7 @@ Python TUI 需要：Unicode 宽度处理、终端 resize、颜色主题、macOS 
 超出范围。现有 `@whistle_enabled` + 六个分渠道开关已经足够，
 再加三层作用域会让「为什么我没收到通知」变成一个难排查的问题。
 
-### 4.7 `prefix + n` / `prefix + N` 绑定
+### 4.7 `prefix + n` / `prefix + n` 绑定
 
 `n` / `N` 是 tmux 里高频占用的键。文档 §8.3 自己也提醒了「应避免覆盖已有绑定」，
 但示例用的正是最容易冲突的两个。
@@ -380,8 +380,13 @@ Python TUI 需要：Unicode 宽度处理、终端 resize、颜色主题、macOS 
 > **键位的最终结论。** 评审时这里写的是「现有的 `prefix + W`（W = whistle）应保留」，
 > 理由是 `W` 空着、冲突小。键位后来走过两次弯路 ——
 > 先改成 `w`，而 `w` 是 tmux 的 `choose-tree -Zw` 默认绑定，**会覆盖掉窗口列表**；
-> 再改成 `N`。`N` 在实测的 `prefix` 表里确实是空键，且在空键（`a` `n` `v` /
-> `A B G N O Q R S U V W X Y Z`）里助记最直白（Notify）。
+> 再改成 `n`。`n` 在实测的 `prefix` 表里是空键（oh-my-tmux 已把「下一个窗口」
+> 挪到 `M-n`），在空键（`a` `n` `v` / `A B G N O Q R S U V W X Y Z`）里
+> 助记也最直白（notify）。
+>
+> 一个**残留风险**：`n` 仍是 tmux 内置默认的 `next-window`。在有 oh-my-tmux 的
+> 配置里不冲突，但换到裸默认配置时 `n` 会被这张表覆盖。已在
+> `.tmux-whistle.conf` 注明补救办法（`bind-key -T prefix N next-window`）。
 >
 > 教训：**手动挑键不能靠「看着挺空」**，要跑
 > `tmux list-keys -T prefix` 把占用情况全列出来再选。

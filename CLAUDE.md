@@ -140,7 +140,7 @@ helper（`test/test_helper/whistle.bash`）的约定：
 ## 安装布局与入口链路
 
 入口链路：`tmux-whistle.tmux`（tpm 把 `*.tmux` 当**可执行文件**跑，不是 source）
-→ `.tmux-whistle.conf`（bind `prefix + N` + `run-shell -b -d 0.5` 调 setup）
+→ `.tmux-whistle.conf`（bind `prefix + n` + `run-shell -b -d 0.5` 调 setup）
 → `scripts/setup.sh`（发布 mark、幂等 patch、注册读侧 hooks、清理残留边框）。
 
 - 本地安装落在 `~/.local/share/tmux-whistle`（符号链接到仓库），**不放进
