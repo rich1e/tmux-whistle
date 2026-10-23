@@ -48,7 +48,8 @@ while :; do
   esac
   [ "$_n" -gt 0 ] || break
 
-  whistle_tmux set -g @whistle_spin_frame "$(whistle_spin_next)" 2> /dev/null || break
+  _cur=$(whistle_tmux show -gqv '@whistle_spin_char' 2> /dev/null)
+  whistle_tmux set -g @whistle_spin_char "$(whistle_spin_next_char "$_cur")" 2> /dev/null || break
   whistle_refresh_all
 
   sleep "$(whistle_conf '@whistle_spin_interval')" 2> /dev/null || sleep 1

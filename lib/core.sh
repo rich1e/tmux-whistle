@@ -53,71 +53,62 @@ WHISTLE_BODY_MAX=400
 #
 # 为什么需要动画：徽章与 status-right 里的串是**预先算好存在 global option 里**
 # 的纯 format（原理 2：零 fork）。format 本身是静态的，tmux 没有「每 N 帧换一个
-# 字符」的原生能力 —— 所以必须有个东西去改 @whistle_spin 这个帧号，
-# 由 lib/spin.sh 负责（它只在真有 running 时活着，跑完自己退出）。
+# 字符」的原生能力 —— 所以必须有个东西去改写「当前帧」，由 lib/spin.sh 负责
+# （它只在真有 running 时活着，跑完自己退出）。
 #
-# 帧用四个独立变量而不是一个连写字符串：POSIX sh 里从多字节字符串里切出
-# 第 N 个字符很不可靠（cut 按字节还是按字符取决于 locale）。加一帧要同时
-# 加变量、加 whistle_spin_frame 的一支、加 WHISTLE_SPIN_FRAMES 的计数。
+# 设计：插件把**当前帧字符本身**写进 @whistle_spin_char，format 里只写
+#   #{@whistle_spin_char}
+# 一层都不嵌套。早先的版本存帧号、再用 N 层嵌套条件式把帧号翻成字符 ——
+# 4 帧还勉强，10 帧就要嵌 9 层，大括号必然配错；而配错了 tmux 只会
+# **静默渲染成空字符串**，不报错。存字符而不是序号，帧数随便加。
+#
+# 三个 option 分工（别混，撞过一次名）：
+#   @whistle_spin           on/off 开关，用户可配
+#   @whistle_spin_char      当前帧字符，插件写
+#   @whistle_spin_interval  帧间隔，用户可配
+#
+# 帧表用 for 循环遍历字面量，不切多字节字符串 —— POSIX sh 里从多字节串切
+# 第 N 个字符不可靠（按字节还是按字符取决于 locale）。加帧只需往
+# whistle_spin_next_char 的表里加一个字符。
 
-WHISTLE_SPIN_FRAMES=4
-WHISTLE_SPIN_FRAME_0='◐'
-WHISTLE_SPIN_FRAME_1='◓'
-WHISTLE_SPIN_FRAME_2='◑'
-WHISTLE_SPIN_FRAME_3='◒'
+# 第一帧。表异常时的兜底，也是复位时写入的值。
+whistle_spin_first() {
+  printf '%s' '⠋'
+}
 
-# whistle_spin_frame <序号> → 该帧的字符。越界一律回落到 0 帧。
+# whistle_spin_next_char <当前帧> → 下一帧
+#
+# 不在表里（未初始化 / 被手改坏）→ 回到第一帧；已是最后一帧 → 回到第一帧。
 #
 # 纯函数（不碰 tmux）—— L1 单测能直接跑。
-whistle_spin_frame() {
-  case "${1:-0}" in
-  0) printf '%s' "$WHISTLE_SPIN_FRAME_0" ;;
-  1) printf '%s' "$WHISTLE_SPIN_FRAME_1" ;;
-  2) printf '%s' "$WHISTLE_SPIN_FRAME_2" ;;
-  3) printf '%s' "$WHISTLE_SPIN_FRAME_3" ;;
-  *) printf '%s' "$WHISTLE_SPIN_FRAME_0" ;;
-  esac
+whistle_spin_next_char() {
+  _snc_seen=0
+  for _snc_ch in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
+    if [ "$_snc_seen" = 1 ]; then
+      printf '%s' "$_snc_ch"
+      return 0
+    fi
+    [ "$_snc_ch" = "${1:-}" ] && _snc_seen=1
+  done
+  whistle_spin_first
 }
 
-# whistle_spin_build → 供 tmux format 用的帧选择器
+# 当前帧字符（读 option，非纯函数）
+whistle_spin_char() {
+  _sc=$(whistle_tmux show -gqv '@whistle_spin_char' 2> /dev/null) || _sc=''
+  [ -n "$_sc" ] || _sc=$(whistle_spin_first)
+  printf '%s' "$_sc"
+}
+
+# whistle_spin_build → 供 tmux format 用的片段
 #
-# ⚠️ 帧号是 **@whistle_spin_frame**，不是 @whistle_spin。
-#    后者是 on/off 开关，用户可配；两者曾经撞成一个名字，结果开关被自己
-#    写成 0、动画被永久判成「关」，而且界面上完全看不出异常。
-#    凡是「用户可配的开关」与「插件自己写的状态」都必须用不同的 option 名。
-#
-# 输出形如：
-#   #{?#{==:#{@whistle_spin_frame},0},◐,#{?#{==:#{@whistle_spin_frame},1},◓,…}}
-#
-# 三层嵌套条件式，结尾必须配平三个 '}' —— 少一个就是畸形 format，
-# tmux 会**静默渲染成空字符串**。badge.bats 有配平用例守着。
-#
-# ⚠️ 这段**不能过 whistle_sanitize**（它会剔掉 # { } |，把整个 format 毁掉）。
-#   输出直接拼进 format 串，不消毒 —— 它不是用户输入。
+# 只有一个条件式：option 为空时回落到第一帧，免得整格渲染成空白。
+# ⚠️ 不要过 whistle_sanitize —— 它会剔掉 # { } |，把 format 毁成空串。
 whistle_spin_build() {
-  _sb0=$(whistle_spin_frame 0)
-  _sb1=$(whistle_spin_frame 1)
-  _sb2=$(whistle_spin_frame 2)
-  _sb3=$(whistle_spin_frame 3)
-  printf '#{?#{==:#{@whistle_spin_frame},%s},%s,#{?#{==:#{@whistle_spin_frame},%s},%s,#{?#{==:#{@whistle_spin_frame},%s},%s,%s}}}' \
-    "$_sb0" "$_sb0" "$_sb1" "$_sb1" "$_sb2" "$_sb2" "$_sb3"
+  printf '#{?#{@whistle_spin_char},#{@whistle_spin_char},%s}' "$(whistle_spin_first)"
 }
 
-# 当前的帧号（读 option，非纯函数）
-whistle_spin_index() {
-  _si=$(whistle_tmux show -gqv '@whistle_spin_frame' 2> /dev/null) || _si=''
-  case "$_si" in
-  '' | *[!0-9]*) printf '0' ;;
-  *) printf '%s' "$_si" ;;
-  esac
-}
-
-# 下一个帧号（0 → 1 → 2 → 3 → 0 …）
-whistle_spin_next() {
-  _sn=$(($(whistle_spin_index) + 1))
-  [ "$_sn" -lt "$WHISTLE_SPIN_FRAMES" ] || _sn=0
-  printf '%s' "$_sn"
-}
+# whistle_spin_build → 供 tmux format 用的片段
 
 # 默认配置。option 未被显式设置时回落到这里；
 # 用户用 `set -g @whistle_xxx` 覆盖后即以用户值为准。
@@ -552,14 +543,14 @@ whistle_spin_script() {
 
 # 有 running 就确保推进器在跑；没有就停掉并把帧号复位。
 #
-# ⚠️ 复位写的是 **@whistle_spin_frame**（帧号），不是 @whistle_spin（开关）。
+# ⚠️ 复位写的是 **@whistle_spin_char**（当前帧字符），不是 @whistle_spin（开关）。
 # 曾经写成后者，等于把开关自己置 0 —— 此后 whistle_conf 永远读不到 on，
 # 动画被永久判成「关」，而界面上完全看不出异常（退回静态图标而已）。
 # 「用户可配的开关」与「插件自己写的状态」必须用不同的 option 名。
 whistle_spin_sync() {
   if [ "$(whistle_conf '@whistle_spin')" != on ]; then
     whistle_spin_stop
-    whistle_tmux set -g @whistle_spin_frame 0 2> /dev/null || true
+    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first)" 2> /dev/null || true
     return 0
   fi
 
@@ -573,7 +564,7 @@ whistle_spin_sync() {
   else
     whistle_spin_stop
     # 复位成 0 帧：下次开始转时从头开始，位置可预期
-    whistle_tmux set -g @whistle_spin_frame 0 2> /dev/null || true
+    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first)" 2> /dev/null || true
   fi
 }
 

@@ -3,9 +3,10 @@
 #
 # L1 纯函数：running 的 Braille 帧。
 #
-# 帧定义与帧选择器生成都是纯的（不碰 tmux），所以能放这一层。
-# tmux 不在这里的原因是：格式里能写的只有 #{@whistle_spin} 这个 option 名，
-# 真正的取值发生在 tmux 渲染时，不在本进程。
+# 设计要点：插件把**当前帧字符本身**写进 @whistle_spin_char，format 里只写
+# #{@whistle_spin_char}，一层都不嵌套。早先存帧号 + N 层嵌套条件式，4 帧
+# 还勉强，10 帧就要嵌 9 层 —— 大括号必然配错，而配错了 tmux 只会静默
+# 渲染成空字符串。这里测的就是「字符表怎么走」这一段纯逻辑。
 
 load '../test_helper/whistle'
 
@@ -16,52 +17,66 @@ setup() {
     source "$WHISTLE_ROOT/lib/core.sh"
 }
 
-@test "spin: 四帧就是设计的那四个，顺序固定" {
-    assert_eq "$(whistle_spin_frame 0)" '◐'
-    assert_eq "$(whistle_spin_frame 1)" '◓'
-    assert_eq "$(whistle_spin_frame 2)" '◑'
-    assert_eq "$(whistle_spin_frame 3)" '◒'
-    assert_eq "$WHISTLE_SPIN_FRAMES" '4'
+@test "spin: 第一帧是 ⠋" {
+    assert_eq "$(whistle_spin_first)" '⠋'
 }
 
-@test "spin: 序号越界或非法一律回落到第 0 帧" {
-    # 帧号是 option 的值，可能被手改成任何东西 —— 不能因此崩。
-    assert_eq "$(whistle_spin_frame 4)" '◐'
-    assert_eq "$(whistle_spin_frame 99)" '◐'
-    assert_eq "$(whistle_spin_frame -1)" '◐'
-    assert_eq "$(whistle_spin_frame '')" '◐'
-    assert_eq "$(whistle_spin_frame banana)" '◐'
+@test "spin: 十帧按表依次前进" {
+    local cur
+    cur=$(whistle_spin_first)
+    local expect="⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    local got=''
+    while [ ${#got} -lt 9 ]; do
+        cur=$(whistle_spin_next_char "$cur")
+        got="$got$cur"
+    done
+    assert_eq "$got" "$expect"
 }
 
-@test "spin: 帧选择器的大括号配平（畸形 format 会被 tmux 静默渲染成空）" {
+@test "spin: 最后一帧之后回到第一帧" {
+    assert_eq "$(whistle_spin_next_char '⠏')" '⠋'
+}
+
+@test "spin: 当前值不在表里（未初始化或被改坏）回到第一帧" {
+    # 帧值存在 user option 里，可能被手改成任何东西，不能因此崩。
+    assert_eq "$(whistle_spin_next_char '')" '⠋'
+    assert_eq "$(whistle_spin_next_char 'banana')" '⠋'
+    assert_eq "$(whistle_spin_next_char '◐')" '⠋'
+}
+
+@test "spin: 表里的每一帧都能接上，没有断链" {
+    local cur next
+    cur=$(whistle_spin_first)
+    local i=0
+    while [ "$i" -lt 10 ]; do
+        next=$(whistle_spin_next_char "$cur")
+        [ -n "$next" ] || {
+            echo "第 $i 帧之后接不上了"
+            return 1
+        }
+        cur="$next"
+        i=$((i + 1))
+    done
+    # 转满一圈应当回到起点
+    assert_eq "$cur" '⠋'
+}
+
+@test "spin: format 片段只引用 option，不嵌套条件式" {
     run whistle_spin_build
+    assert_contains "$output" '#{@whistle_spin_char}'
     local open close
     open=$(printf '%s' "$output" | tr -cd '{' | wc -c | tr -d ' ')
     close=$(printf '%s' "$output" | tr -cd '}' | wc -c | tr -d ' ')
     assert_eq "$open" "$close"
+    # 只有一个条件式（#{?）。这是这版设计的核心约束：存字符本身，
+    # 不需要「帧号 → 字符」的 N 层查表，帧数再多也不会加深嵌套。
+    assert_eq "$(count_occurrences "$output" '#{?')" '1'
 }
 
-@test "spin: 帧选择器读 @whistle_spin_frame，三个条件式分支" {
-    run whistle_spin_build
-    # 三个 #{==:#{@whistle_spin_frame},X} —— 第 4 帧是兜底，不需要比较。
-    # ⚠️ 这里必须断言 _frame 而不是 @whistle_spin：后者是 on/off 开关。
-    # 两者曾经撞名，导致开关被自己的帧号覆盖成 0，动画被永久判成「关」。
-    assert_eq "$(count_occurrences "$output" '#{@whistle_spin_frame}')" '3'
-    assert_eq "$(count_occurrences "$output" '#{@whistle_spin},')" '0'
-}
-
-@test "spin: 四个帧字符都出现在选择器里" {
-    run whistle_spin_build
-    assert_contains "$output" '◐'
-    assert_contains "$output" '◓'
-    assert_contains "$output" '◑'
-    assert_contains "$output" '◒'
-}
-
-@test "spin: 帧选择器不过消毒（消毒会剔掉 #{} 把 format 毁掉）" {
+@test "spin: format 片段不过消毒（消毒会剔掉 #{} 把 format 毁掉）" {
     # 这是它与 @whistle_icon_* 最大的不同：图标要过 whistle_sanitize，
-    # 帧选择器**绝不能**过，否则 #{@whistle_spin} 会被剔成空串，
-    # 动画就永远停在同一帧 —— 而且不报错。
+    # 帧片段**绝不能**过，否则 #{@whistle_spin_char} 被剔成空串，
+    # 动画永远停在同一帧 —— 而且不报错。
     run whistle_spin_build
     assert_contains "$output" '#{'
     run whistle_sanitize "$(whistle_spin_build)"

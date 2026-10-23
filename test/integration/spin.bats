@@ -5,7 +5,7 @@
 #
 # 隔离性：默认情况下 @whistle_root 是空的，whistle_spin_script 因此返回失败，
 # whistle_spin_ensure 直接 return —— **测试不会意外拉起后台推进器**。
-# 只有最后那条用例显式给出 WHISTLE_SPIN_SCRIPT 才会真的起进程。
+# 只有需要真进程的用例才显式给出 WHISTLE_SPIN_SCRIPT。
 
 load '../test_helper/whistle'
 
@@ -16,19 +16,15 @@ setup() {
 }
 
 teardown() {
-  # 兜底：万一推进器还活着，别泄漏到后续测试或开发机上
+  # 兜底：万一推进器还活着，别泄漏到后续测试 / 开发机上
   whistle_spin_stop 2> /dev/null || true
   wt_stop
 }
 
-# 轮询直到帧号不再是 0（推进器动过了）。
-#
-# 不用「传一段条件字符串再 eval」的写法：那会触发 SC2016，而且 eval 不该
-# 出现在测试里。两种等待条件各自写一个函数，读起来也更直白。
-spin_wait_frame_moved() {
+spin_wait_char_moved() {
   _w=0
   while [ "$_w" -lt 25 ]; do
-    [ "$(wt show -gqv @whistle_spin_frame)" != "0" ] && return 0
+    [ "$(wt show -gqv @whistle_spin_char)" != "⠋" ] && return 0
     _w=$((_w + 1))
     sleep 0.2
   done
@@ -45,7 +41,7 @@ spin_wait_no_pidfile() {
   return 1
 }
 
-# 等 pidfile 出现（推进器被拉起是异步的，setup.sh 返回时它可能还没写出来）
+# 等 pidfile 出现（推进器是异步拉起的，setup.sh 返回时它可能还没写出来）
 spin_wait_pidfile() {
   _w=0
   while [ "$_w" -lt 25 ]; do
@@ -56,58 +52,52 @@ spin_wait_pidfile() {
   return 1
 }
 
-@test "spin: 帧号轮转 0→1→2→3→0" {
-  wt set -g @whistle_spin_frame 0
-  assert_eq "$(whistle_spin_next)" '1'
-  wt set -g @whistle_spin_frame 3
-  assert_eq "$(whistle_spin_next)" '0'
+@test "spin: 当前帧字符读 option" {
+  wt set -g @whistle_spin_char '⠼'
+  assert_eq "$(whistle_spin_char)" '⠼'
 }
 
-@test "spin: 帧号非法或未设置时当作 0" {
-  # 帧号是 user option，可能被手改成任何东西，不能因此崩。
-  wt set -g @whistle_spin_frame banana
-  assert_eq "$(whistle_spin_index)" '0'
-  wt set -g @whistle_spin_frame ''
-  assert_eq "$(whistle_spin_index)" '0'
+@test "spin: option 未设置时回落第一帧" {
+  assert_eq "$(whistle_spin_char)" '⠋'
 }
 
-@test "spin: 开关与帧号是两个不同的 option（撞名过一次）" {
-  # 回归：曾经两者都叫 @whistle_spin，spin_sync 在「没有 running」时把帧号
-  # 写进开关（set -g @whistle_spin 0），于是开关永远读到 0 ≠ on，
-  # 动画被永久判成「关」—— 界面上只表现为退回静态图标，看不出异常。
+@test "spin: 开关与帧值是两个不同的 option（撞名过一次）" {
+  # 回归：曾经两者都叫 @whistle_spin，spin_sync 在「没有 running」时把帧值
+  # 写进开关，于是开关永远读到非 on 的值，动画被永久判成「关」——
+  # 界面上只表现为退回静态图标，看不出任何异常。
   wt set -g @whistle_spin on
   wt set -g @whistle_count_running 0
-  wt set -g @whistle_spin_frame 2
+  wt set -g @whistle_spin_char '⠹'
 
   whistle_spin_sync
 
-  # 开关仍是 on，帧号被复位 —— 两者互不干扰
+  # 开关仍是 on，帧值被复位 —— 两者互不干扰
   assert_eq "$(wt show -gqv @whistle_spin)" 'on'
-  assert_eq "$(wt show -gqv @whistle_spin_frame)" '0'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
 }
 
-@test "spin: @whistle_spin off 时帧号复位且不启推进器" {
+@test "spin: @whistle_spin off 时帧值复位且不启推进器" {
   wt set -g @whistle_count_running 2
-  wt set -g @whistle_spin_frame 3
+  wt set -g @whistle_spin_char '⠹'
   wt set -g @whistle_spin off
 
   whistle_spin_sync
 
-  assert_eq "$(wt show -gqv @whistle_spin_frame)" '0'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
   [ ! -f "$(whistle_spin_pidfile)" ] || {
     echo "off 时不该留下 pidfile"
     return 1
   }
 }
 
-@test "spin: 没有 running 时不启推进器，帧号复位" {
+@test "spin: 没有 running 时不启推进器，帧值复位" {
   wt set -g @whistle_spin on
   wt set -g @whistle_count_running 0
-  wt set -g @whistle_spin_frame 2
+  wt set -g @whistle_spin_char '⠹'
 
   whistle_spin_sync
 
-  assert_eq "$(wt show -gqv @whistle_spin_frame)" '0'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
   [ ! -f "$(whistle_spin_pidfile)" ] || {
     echo "不该留下 pidfile"
     return 1
@@ -127,18 +117,18 @@ spin_wait_pidfile() {
   [ ! -f "$(whistle_spin_pidfile)" ] || return 1
 }
 
-@test "spin: 真有 running 时推进器会推进帧号，running 归零后自行退出" {
+@test "spin: 真有 running 时推进器会换帧，running 归零后自行退出" {
   # shellcheck disable=SC2030,SC2031  # 导出只对本 @test 内启动的子进程有效，这正是本意
   export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
   wt set -g @whistle_spin_interval 0.1
   wt set -g @whistle_spin on
   wt set -g @whistle_count_running 1
-  wt set -g @whistle_spin_frame 0
+  wt set -g @whistle_spin_char '⠋'
 
   whistle_spin_sync
 
-  spin_wait_frame_moved || {
-    echo "推进器没动：帧号一直是 0"
+  spin_wait_char_moved || {
+    echo "推进器没动：帧字符一直是 ⠋"
     return 1
   }
 

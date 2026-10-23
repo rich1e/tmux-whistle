@@ -381,7 +381,7 @@ whistle_menu_overflow() {
 # 测试就会变假绿（这个坑踩过一次）。
 whistle_menu_running_label() {
   if [ "$(whistle_conf '@whistle_spin')" = on ]; then
-    _mr_icon=$(whistle_spin_frame "$(whistle_spin_index)")
+    _mr_icon=$(whistle_spin_char)
   else
     _mr_icon=$(whistle_icon '@whistle_icon_running')
   fi

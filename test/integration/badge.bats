@@ -473,8 +473,8 @@ teardown() {
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
-  assert_contains "$output" '#{@whistle_spin_frame}'
-  assert_contains "$output" '◐'
+  assert_contains "$output" '#{@whistle_spin_char}'
+  assert_contains "$output" '⠋'
   assert_not_contains "$output" '▶'
 }
 
@@ -485,7 +485,7 @@ teardown() {
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
-  assert_not_contains "$output" '#{@whistle_spin_frame}'
+  assert_not_contains "$output" '#{@whistle_spin_char}'
   assert_contains "$output" '▶'
 }
 

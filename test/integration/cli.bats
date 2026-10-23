@@ -123,25 +123,25 @@ pane_of() {
   # 菜单是瞬时弹出的快照，所以在**构造菜单那一刻**用 shell 取当前帧，
   # 而不是塞一段 #{?...} —— display-menu 的条目名会不会展开 format 没验证过。
   wt set -g @whistle_spin on
-  wt set -g @whistle_spin_frame 2
+  wt set -g @whistle_spin_char '⠹'
   "$CLI" running
 
   run "$CLI" --menu-args
-  assert_contains "$output" '#[fg=#00af00]◑'
+  assert_contains "$output" '#[fg=#00af00]⠹'
   assert_not_contains "$output" '▶'
 }
 
-@test "menu-args: 菜单前缀的帧跟着 @whistle_spin_frame 走" {
+@test "menu-args: 菜单前缀的帧跟着 @whistle_spin_char 走" {
   wt set -g @whistle_spin on
-  wt set -g @whistle_spin_frame 0
+  wt set -g @whistle_spin_char '⠋'
   "$CLI" running
 
   run "$CLI" --menu-args
-  assert_contains "$output" '◐'
+  assert_contains "$output" '⠋'
 
-  wt set -g @whistle_spin_frame 3
+  wt set -g @whistle_spin_char '⠼'
   run "$CLI" --menu-args
-  assert_contains "$output" '◒'
+  assert_contains "$output" '⠼'
 }
 
 @test "menu-args: 待处理在前、running 在后，共用同一串键位且互不重叠" {
