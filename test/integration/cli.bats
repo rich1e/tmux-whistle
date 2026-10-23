@@ -577,6 +577,73 @@ seed_running_windows() {
   assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
 }
 
+# -- 标题 / 正文分离 ---------------------------------------------------------
+
+@test "--title 与 --body 分开存：标题进 msg，正文不被 80 字截断" {
+  local p long
+  p=$(pane_of)
+  long=$(printf '正文%.0s' $(seq 1 200))     # 400 个字符
+  "$CLI" "done" --title '重构完成' --body "$long"
+
+  assert_eq "$(optp @whistle_msg "$p")" '重构完成'
+  assert_eq "$(optp @whistle_body "$p")" "$long"
+}
+
+@test "只给 --body 时 msg 取正文前 80 字（与改动前逐字一致）" {
+  local p long
+  p=$(pane_of)
+  long=$(printf '文%.0s' $(seq 1 200))
+  "$CLI" "done" --body "$long"
+
+  assert_eq "$(optp @whistle_msg "$p")" "$(printf '%s' "$long" | cut -c 1-80)"
+}
+
+@test "两个都不给时行为与改动前完全一致" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '普通消息'
+
+  assert_eq "$(optp @whistle_msg "$p")" '普通消息'
+  assert_eq "$(optp @whistle_body "$p")" ''
+}
+
+@test "正文超过 400 字时按正文上限截断" {
+  local p huge n
+  p=$(pane_of)
+  huge=$(printf '字%.0s' $(seq 1 600))
+  "$CLI" "done" --body "$huge"
+
+  n=$(printf '%s' "$(optp @whistle_body "$p")" | wc -m | tr -d ' ')
+  assert_eq "$n" 400
+}
+
+@test "正文里的 format 注入串被消毒" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" --title '短' --body 'a#{b}c{d}e|f'
+
+  assert_not_contains "$(optp @whistle_body "$p")" '#'
+  assert_not_contains "$(optp @whistle_body "$p")" '{'
+  assert_not_contains "$(optp @whistle_body "$p")" '|'
+}
+
+@test "清除状态时正文一并清掉，不留残值" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" --title '短' --body '很长的正文内容'
+  "$CLI" clear -t "$p"
+
+  assert_eq "$(optp @whistle_body "$p")" ''
+}
+
+@test "--body 里的换行被折叠成空格（正文是单行存储的）" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" --body $'第一行\n第二行'
+
+  assert_contains "$(optp @whistle_body "$p")" '第一行 第二行'
+}
+
 # -- 内部：--clear-pane（SessionEnd 用） -------------------------------------
 
 @test "--clear-pane: 只清 running，待处理状态原样保留" {

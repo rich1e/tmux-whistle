@@ -42,6 +42,55 @@ EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_src)" 'hook'
 }
 
+@test "e2e: Stop 的完整回复进 @whistle_body，首行进 @whistle_msg" {
+  # 改动前 last_assistant_message 被 head -n 1 砍掉首行以外的全部内容，
+  # 那部分**无处可寻**。现在全文留在 @whistle_body。
+  feed <<'EOF'
+{"hook_event_name":"Stop","session_id":"s1","cwd":"/tmp",
+ "last_assistant_message":"重构完成：抽出了 core.sh\n拆开了状态机与渲染，其余细节在这里"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" '重构完成：抽出了 core.sh'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_body)" \
+    '重构完成：抽出了 core.sh 拆开了状态机与渲染，其余细节在这里'
+}
+
+@test "e2e: Stop 缺消息时正文也是空，不留残值" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","session_id":"s1"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_body)" ''
+}
+
+@test "e2e: 下一轮对话开始时正文被清掉，不留上一轮的残值" {
+  # @whistle_body 空值也要写 —— 否则上一轮的长回复会挂在新一轮的
+  # running 上，看起来像是这一轮说的。
+  feed <<'EOF'
+{"hook_event_name":"Stop","session_id":"s1",
+ "last_assistant_message":"做完了\n细节一\n细节二"}
+EOF
+  assert_contains "$(wt show -pqv -t "$TMUX_PANE" @whistle_body)" '细节二'
+
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"再来一轮"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle_body)" ''
+}
+
+@test "e2e: SessionEnd 只清 running，不动上一轮的 done 与它的正文" {
+  # TODO-11 的设计：agent 退出不代表你已经看过，那些 done 要留到你处理。
+  feed <<'EOF'
+{"hook_event_name":"Stop","session_id":"s1",
+ "last_assistant_message":"做完了\n细节一"}
+EOF
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","session_id":"s1"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+  assert_contains "$(wt show -pqv -t "$TMUX_PANE" @whistle_body)" '细节一'
+}
+
 @test "e2e: Stop 会连带更新窗口徽章与全局计数" {
   feed <<'EOF'
 {"hook_event_name":"Stop","last_assistant_message":"做完了"}

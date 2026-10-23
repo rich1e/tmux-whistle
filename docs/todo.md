@@ -34,6 +34,7 @@
 - [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
 - [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 - [x] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
+- [x] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
 
 ---
 
@@ -779,7 +780,8 @@ tr: Illegal byte sequence
 
 ## TODO-14 · 消息被截断到 80 字后永久丢失
 
-⬜ 待处理
+✅ 已修复（`lib/core.sh` 的 `whistle_sanitize` / `whistle_state_set` /
+`whistle_state_clear` + `bin/tmux-whistle` 的 `cmd_set` + `hooks/claude-code.sh`）
 
 **现象**：消息最长 80 字符，超了直接砍断，**砍掉的部分没有任何地方能再找到**。
 agent 一轮下来常是几百字的总结，徽章位置只有一行宽，只能看到开头一句。
@@ -816,6 +818,48 @@ whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
 `WHISTLE_MSG_MAX`；`bin/tmux-whistle` 的 `cmd_set`；`hooks/claude-code.sh`。
 
 **开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 5。
+
+**已修**：加了 `@whistle_body`（上限 400），**一个 tmux format 都没改**。
+
+```sh
+tmux-whistle done --title '重构完成' --body '完整回复…'
+```
+
+- `whistle_sanitize` 加了可选的第二参作为长度上限，不传则仍用 `WHISTLE_MSG_MAX`
+  —— **所有既有调用点逐字不变**（`test/unit/core.bats` 13 条 sanitize 用例全绿即证据）
+- `whistle_state_set` 增加第 4 个位置参数 `[body]`，写进同一条 `\;` 链
+  （链是一进程，多写一个 option **不增加 fork**）
+- 空值也写 —— 否则上一轮的正文会留在 pane 上，变成「这次没写正文，
+  却显示着上次的」。`whistle_state_clear` 一并 unset
+- `hooks/claude-code.sh` 的 `Stop` / `StopFailure` 现在把**完整回复**作为
+  `--body` 传下去（改动前 `head -n 1` 之后那部分无处可寻）
+
+徽章上显示什么的优先级：`--title` > 位置消息 > `--body` 前 80 字。
+都不给就为空 —— 与改动前一致。让 `--body` 能顶上来是因为：只写 `--body`
+时若消息留空，徽章会是空白，而内容明明就在手上。
+
+**为什么不给徽章加 `@whistle_title`**：那要在 `whistle_mark_build` 已经是四层的
+条件式里再套一层 `#{?#{@whistle_title},...}`，而嵌套 `#{?...}` 的大括号配平
+是本项目最贵的坑 —— 配错一格 tmux **静默渲染成空字符串**，不报错。
+收益（标题可控）不值这个风险。
+
+**⚠️ 已知限制，说在前面**：`@whistle_body` **存了，但目前没有界面能看它**。
+要等事件历史（[设计方案评审](notify-design-review.md) 的 B-1 / 阶段 3）落地
+才有 UI。现在的收益是「不再丢失」而不是「随时可查」——
+用 `tmux show -pqv -t %<pane> @whistle_body` 能手工看到。
+
+**回归测试**：`test/integration/cli.bats` 7 条（分开存、只给 body 时 msg 取前 80 字、
+都不给时与改动前一致、超过 400 字按上限截断、format 注入串被消毒、
+清除时一并清掉、换行折叠成空格）；`test/e2e/claude_hook.bats` 4 条
+（完整回复进 body、缺消息时 body 为空、下一轮对话开始时清掉残值、
+`SessionEnd` 不动上一轮的 done 与它的正文）。
+
+写 e2e 时第一版假设「SessionEnd 会清掉正文」—— **错的**：`SessionEnd` 只清
+`running`，而那时状态已经是 `done`（TODO-11 的设计：agent 退出不代表你已经看过）。
+改成两个真正有意义的场景：下一轮 `UserPromptSubmit` 时正文是否被清掉（会），
+以及 `SessionEnd` 是否误伤上一轮的正文（不会）。
+
+`make check` 251 项全绿。
 
 ---
 
@@ -856,7 +900,7 @@ whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
 | 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ✅ 已完成 |
 | 3 | 菜单截断不再静默 | TODO-2 | ✅ 已完成 |
 | 4 | `run --` 命令包装器 | TODO-13 | ✅ 已完成 |
-| 5 | 标题 / 正文分离 | TODO-14 | ⬜ 未开始 |
+| 5 | 标题 / 正文分离 | TODO-14 | ✅ 已完成 |
 
 **执行约定**：
 

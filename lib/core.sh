@@ -45,6 +45,10 @@ WHISTLE_NOTIFIED_STATES='done wait error'
 # 消息进入 tmux format 前的最大长度（字符）
 WHISTLE_MSG_MAX=80
 
+# 正文（--body）的最大长度。它不进徽章，只进 @whistle_body，
+# 所以可以比标题长得多 —— 但仍是有限额，pane option 不是垃圾桶。
+WHISTLE_BODY_MAX=400
+
 # 默认配置。option 未被显式设置时回落到这里；
 # 用户用 `set -g @whistle_xxx` 覆盖后即以用户值为准。
 # 派生值（@whistle_mark / @whistle_pending）不在表内，由插件生成。
@@ -88,7 +92,7 @@ whistle_conf() {
 
 # -- 纯函数（§4.0：不碰 tmux） ---------------------------------------------
 
-# whistle_sanitize <任意字符串>
+# whistle_sanitize <任意字符串> [最大长度]
 #
 # 消息会被塞进 tmux format（display-menu 条目、window-status-format），
 # 所以必须剔掉会破坏 format 的字符：
@@ -97,14 +101,17 @@ whistle_conf() {
 #   控制字符 —— 会破坏状态栏单行渲染
 # 逗号保留：它在 display-menu 的引号标签内是安全的，而消息里很常用。
 #
-# 输出最多 WHISTLE_MSG_MAX 个字符（依赖 UTF-8 locale 下 cut -c 按字符切）。
+# 第二参是长度上限，不传则用 WHISTLE_MSG_MAX —— **所有既有调用点不传第二参，
+# 行为逐字不变**。正文（--body）传 WHISTLE_BODY_MAX。
+#
+# 输出最多 <最大长度> 个字符（依赖 UTF-8 locale 下 cut -c 按字符切）。
 whistle_sanitize() {
   printf '%s' "${1:-}" \
     | tr '\n\r\t' '   ' \
     | tr -d '[:cntrl:]' \
     | tr -d '#{}|' \
     | tr -s ' ' \
-    | cut -c "1-$WHISTLE_MSG_MAX" \
+    | cut -c "1-${2:-$WHISTLE_MSG_MAX}" \
     | sed -e 's/^ *//' -e 's/ *$//'
 }
 
@@ -219,10 +226,13 @@ whistle_pane_window() {
   whistle_tmux display-message -p -t "$1" '#{window_id}' 2> /dev/null
 }
 
-# whistle_state_set <state> <msg> [pane]
+# whistle_state_set <state> <msg> [pane] [body]
 #
-# 一次 tmux 调用写完 4 个 pane option（KP-16：这条链里不能出现 run-shell，
+# 一次 tmux 调用写完 5 个 pane option（KP-16：这条链里不能出现 run-shell，
 # 否则会阻塞 tmux 命令队列）。
+#
+# @whistle_body 空值也要写 —— 否则上一轮的正文会留在 pane 上，
+# 变成「这次没写正文，却显示着上次的」。
 #
 # stdout = 目标 pane id。诊断信息一律走 stderr，方便调用方做命令替换。
 # 重算与投递由调用方编排（CLI），本函数只负责写。
@@ -230,6 +240,7 @@ whistle_state_set() {
   _state="$1"
   _msg=$(whistle_sanitize "$2")
   _pane=$(whistle_resolve_pane "$3")
+  _body=$(whistle_sanitize "${4:-}" "$WHISTLE_BODY_MAX")
 
   if [ -z "$_pane" ]; then
     printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
@@ -243,7 +254,8 @@ whistle_state_set() {
   whistle_tmux set -p -t "$_pane" @whistle "$_state" \
     \; set -p -t "$_pane" @whistle_msg "$_msg" \
     \; set -p -t "$_pane" @whistle_at "$(whistle_now)" \
-    \; set -p -t "$_pane" @whistle_src "${WHISTLE_SRC:-manual}" || return 1
+    \; set -p -t "$_pane" @whistle_src "${WHISTLE_SRC:-manual}" \
+    \; set -p -t "$_pane" @whistle_body "$_body" || return 1
 
   printf '%s' "$_pane"
 }
@@ -260,7 +272,8 @@ whistle_state_clear() {
   whistle_tmux set -p -t "$_pane" -u @whistle \
     \; set -p -t "$_pane" -u @whistle_msg \
     \; set -p -t "$_pane" -u @whistle_at \
-    \; set -p -t "$_pane" -u @whistle_src || return 1
+    \; set -p -t "$_pane" -u @whistle_src \
+    \; set -p -t "$_pane" -u @whistle_body || return 1
 
   printf '%s' "$_pane"
 }

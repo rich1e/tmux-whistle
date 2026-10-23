@@ -50,6 +50,8 @@ $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
 
 选项：
   -t, --target <pane|window>        指定目标（默认当前 pane）
+      --title <短标题>              徽章上显示的文字（上限 80 字符）
+      --body <正文>                完整内容，存进 @whistle_body（上限 400）
       --dry-run                     只打印会做什么，不执行
 
 Claude Code 集成：
@@ -105,10 +107,20 @@ cmd_set() {
   _msg=''
   _target=''
   _dry=0
+  _title=''
+  _body=''
   while [ $# -gt 0 ]; do
     case "$1" in
     -t | --target)
       _target="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    --title)
+      _title="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    --body)
+      _body="${2:-}"
       shift 2 2> /dev/null || shift
       ;;
     --dry-run)
@@ -132,12 +144,22 @@ cmd_set() {
     esac
   done
 
+  # 徽章上显示什么，优先级：--title > 位置消息 > --body 的前 80 字。
+  # 三者都不给就是空 —— 与改动前逐字一致。
+  # 之所以让 --body 能顶上来：只写 --body 时若消息留空，徽章就是空白，
+  # 而正文的内容明明就在手上。
+  if [ -n "$_title" ]; then
+    _msg="$_title"
+  elif [ -z "$_msg" ] && [ -n "$_body" ]; then
+    _msg="$_body"
+  fi
+
   if [ "$_dry" = 1 ]; then
     printf '将置 %s = "%s"（目标 %s）\n' "$_state" "$_msg" "${_target:-${TMUX_PANE:-当前 pane}}"
     return 0
   fi
 
-  _pane=$(whistle_state_set "$_state" "$_msg" "$_target") || exit 1
+  _pane=$(whistle_state_set "$_state" "$_msg" "$_target" "$_body") || exit 1
   whistle_finish "$_pane" "$_state" "$_msg" || whistle_die "拿不到 pane $_pane 所属窗口"
 }
 

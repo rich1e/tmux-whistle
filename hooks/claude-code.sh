@@ -121,9 +121,11 @@ SessionEnd)
 esac
 
 # 只取消息首行：last_assistant_message 是整段最终回复全文，
-# 徽章位置只有一行宽度。
+# 徽章位置只有一行宽度。**但全文不能就这么丢掉** —— 改动前 head -n 1
+# 之后那部分无处可寻。现在把它作为 --body 存进 @whistle_body。
+_body="$_msg"
 _msg=$(printf '%s' "$_msg" | head -n 1)
 
-WHISTLE_SRC=hook "$WHISTLE_CLI" "$_state" "$_msg" > /dev/null 2>&1 || true
+WHISTLE_SRC=hook "$WHISTLE_CLI" "$_state" "$_msg" --body "$_body" > /dev/null 2>&1 || true
 
 exit 0
