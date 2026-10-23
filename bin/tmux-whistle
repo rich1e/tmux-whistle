@@ -377,11 +377,15 @@ cmd_menu() {
 
   # 用 set -- 累积 argv：菜单 label 里有空格，靠单词切分传参会散架。
   #
-  # 两遍扫描同一份数据：
-  #   第一遍 —— 待处理项，编号 1..26，选中即跳转并清除
-  #   第二遍 —— running 项，名称以 '-' 开头 = tmux 的 disabled 语义
-  #             （screen-write.c 绘制时剥掉那个 '-' 并置暗），key 传空串、
-  #             命令永远不会执行。它只是一份「哪些窗口有 agent」的清单。
+  # 两遍扫描同一份数据（待处理先、running 后），但**共用同一个键位计数器**：
+  # 两类都能点、都能跳。区别只在标记与语义 ——
+  #
+  #   待处理项   前缀空格，选中后顺带清除（你到现场了 = 已读）
+  #   running   前缀 '·'，只是跳过去看看；clear 对 running 本身是空操作
+  #             （whistle_clear_window 只清 whistle_is_notified 的状态）
+  #
+  # 键位总预算 26（9 个数字 + a~q 17 个字母），两类共享同一串序号。
+  # 待处理排前面，所以待处理多的时候 running 会先被挤掉 —— 这是对的优先级。
   #
   # 超出上限时**不静默截断**：一直计数，只在 ≤26 时累积，放不下就在末尾
   # 追加一条灰字提示。状态栏写着 🔔28 而菜单只有 26 项，用户会以为自己记错了。
@@ -400,25 +404,20 @@ cmd_menu() {
 $_items
 EOF
 
-  if [ "$_total" -gt 26 ]; then
-    set -- "$@" "$(whistle_menu_overflow $((_total - 26)))" '' "display-message ''"
-  fi
-
-  _i=0
-  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
     _total=$((_total + 1))
-    [ "$_i" -gt 10 ] && continue
-    set -- "$@" "- $(whistle_state_label "$st") $s:$wn $msg" '' "display-message ''"
+    [ "$_i" -gt 26 ] && continue
+    _label="· $(whistle_state_label "$st") $s:$wn $msg"
+    set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
+      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
 $_items
 EOF
 
-  # running 那段的截断同样不能静默：它们没有快捷键，放不下时更需要说明。
-  if [ "$_total" -gt 10 ]; then
-    set -- "$@" "$(whistle_menu_overflow $((_total - 10)))" '' "display-message ''"
+  if [ "$_total" -gt 26 ]; then
+    set -- "$@" "$(whistle_menu_overflow $((_total - 26)))" '' "display-message ''"
   fi
 
   # display-menu 需要一个 attached client；在脚本里调用（无头 server）时
@@ -433,7 +432,7 @@ EOF
       if whistle_is_notified "$st"; then
         printf '  %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
       else
-        printf '  - %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
+        printf '· %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
       fi
     done << EOF
 $_items
@@ -462,28 +461,20 @@ cmd_menu_args() {
 $_items
 EOF
 
-  if [ "$_total" -gt 26 ]; then
-    printf '%s\n' "$(whistle_menu_overflow $((_total - 26)))"
-    printf '%s\n' ''
-    printf '%s\n' "display-message ''"
-  fi
-
-  _i=0
-  _total=0
   while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
     _total=$((_total + 1))
-    [ "$_i" -gt 10 ] && continue
-    printf '%s\n' "- $(whistle_state_label "$st") $s:$wn $msg"
-    printf '%s\n' ''
-    printf '%s\n' "display-message ''"
+    [ "$_i" -gt 26 ] && continue
+    printf '%s\n' "· $(whistle_state_label "$st") $s:$wn $msg"
+    printf '%s\n' "$(whistle_menu_key "$_i")"
+    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
 $_items
 EOF
 
-  if [ "$_total" -gt 10 ]; then
-    printf '%s\n' "$(whistle_menu_overflow $((_total - 10)))"
+  if [ "$_total" -gt 26 ]; then
+    printf '%s\n' "$(whistle_menu_overflow $((_total - 26)))"
     printf '%s\n' ''
     printf '%s\n' "display-message ''"
   fi

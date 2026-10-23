@@ -74,9 +74,10 @@ pane_of() {
 
 # -- 菜单：running 也列出来（灰显、不可选） ---------------------------------
 
-@test "menu-args: running 项也列出，以 - 开头灰显且没有快捷键" {
-  # display-menu 里名称以 '-' 开头 = disabled：tmux 绘制时会剥掉这个 '-' 并置暗
-  # （screen-write.c 的 screen_write_menu），选中路径与鼠标路径都跳过它。
+@test "menu-args: running 项也能跳（有快捷键、命令是真正的跳转）" {
+  # 早期 running 项是 disabled（名称以 '-' 开头）—— 只能看不能点。
+  # 但「跳到正在跑的窗口」是常见需求：想知道那个 agent 在干嘛、
+  # 或者只是切过去看看。现在它与待处理项共用同一套键位。
   wt new-window -d -n w2
   local p1 p2
   p1=$(wt display -p -t w1 '#{pane_id}')
@@ -88,42 +89,46 @@ pane_of() {
   assert_eq "$status" 0
   assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '6'
 
+  # 第一组：待处理，键位 1
   assert_contains "$(printf '%s\n' "$output" | sed -n 1p)" '完成'
   assert_eq "$(printf '%s\n' "$output" | sed -n 2p)" '1'
 
+  # 第二组：running，接着编号 2，且命令真的是跳转
   local label key cmd
   label=$(printf '%s\n' "$output" | sed -n 4p)
   key=$(printf '%s\n' "$output" | sed -n 5p)
   cmd=$(printf '%s\n' "$output" | sed -n 6p)
 
-  case "$label" in
-  '- 运行中'*) ;;
-  *)
-    printf '期望以 "- 运行中" 开头，实际: [%s]\n' "$label" >&2
-    return 1
-    ;;
-  esac
-  assert_eq "$key" ''
-  assert_contains "$cmd" 'display-message'
+  assert_contains "$label" '运行中'
+  assert_eq "$key" '2'
+  assert_contains "$cmd" 'select-window'
+  assert_contains "$cmd" "$p2"
 }
 
-@test "menu-args: 待处理项的编号不因 running 项而错位" {
+@test "menu-args: 待处理在前、running 在后，共用同一串键位且互不重叠" {
   wt new-window -d -n w2
   wt new-window -d -n w3
   local p1 p2 p3
   p1=$(wt display -p -t w1 '#{pane_id}')
   p2=$(wt display -p -t w2 '#{pane_id}')
   p3=$(wt display -p -t w3 '#{pane_id}')
-  "$CLI" running -t "$p1"
-  "$CLI" "done" 'a' -t "$p2"
+  "$CLI" "done" 'a' -t "$p1"
+  "$CLI" running -t "$p2"
   "$CLI" "wait" 'b' -t "$p3"
 
   run "$CLI" --menu-args
-  # 顺序：先两个待处理（key 1、2），再 running（空 key）—— 共三组九行
   assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '9'
-  assert_eq "$(printf '%s\n' "$output" | sed -n '2p;5p')" "1
-2"
-  assert_eq "$(printf '%s\n' "$output" | sed -n 8p)" ''
+
+  local keys
+  keys=$(menu_keys "$output")
+  # 三个键位都非空（空 = 无快捷键 = 点不了）
+  assert_eq "$(printf '%s\n' "$keys" | grep -c '^$')" 0
+  # 两两不同
+  assert_eq "$(printf '%s\n' "$keys" | sort -u | wc -l | tr -d ' ')" 3
+  # 待处理先占 1、2，running 接 3
+  assert_eq "$keys" "1
+2
+3"
 }
 
 @test "menu-args: 只有 running 时也列出来，而不是当作『没东西』" {
@@ -268,24 +273,24 @@ seed_running_windows() {
   assert_not_contains "$output" '未显示'
 }
 
-@test "menu-args: running 那段超过 10 项时同样出提示，不静默截断" {
+@test "menu-args: running 也能跳，13 个都在 26 个键位之内" {
   seed_running_windows 13
 
   run "$CLI" --menu-args
-  # 10 个 running 项 + 1 条提示
-  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 11
-  assert_contains "$output" '- 还有 3 项未显示'
+  # 13 组、每组三行，键位全部有效
+  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 13
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^switch-client')" 13
+  assert_not_contains "$output" '未显示'
 }
 
-@test "menu-args: 待处理与 running 各自的提示分开计数" {
+@test "menu-args: 待处理占满 26 个键位时，running 被折叠进提示而不是消失" {
   seed_pending_windows 28
   seed_running_windows 13
 
   run "$CLI" --menu-args
-  # 26 + 1（待处理提示）+ 10 + 1（running 提示）
-  assert_eq "$(menu_keys "$output" | wc -l | tr -d ' ')" 38
-  assert_eq "$(printf '%s\n' "$output" | grep -c '^- 还有 2 项未显示')" 1
-  assert_eq "$(printf '%s\n' "$output" | grep -c '^- 还有 3 项未显示')" 1
+  # 28 待处理 + 13 running = 41 项，键位只有 26 个
+  assert_eq "$(printf '%s\n' "$output" | grep -c '^switch-client')" 26
+  assert_contains "$output" '- 还有 15 项未显示'
 }
 
 @test "menu-args: 提示项不会占用可跳转的名额" {

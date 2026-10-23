@@ -886,9 +886,9 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
 2. **`running` 显示 `●`** —— 新增 `@whistle_icon_running` / `@whistle_color_running`，
    徽章条件式从三层变四层。它仍不计入 `🔔N`、不算待处理。
 3. **`prefix + n` 列出所有 agent** —— 新增 `whistle_agent_windows()`（按 window 去重、
-   取 rank 最高的一行）。待处理项带编号可跳转，running 项以 `-` 开头
-   （`display-menu` 的 disabled 语义：tmux 绘制时会剥掉那个 `-` 并置暗，选中与
-   鼠标路径都会跳过），没有快捷键。
+   取 rank 最高的一行）。待处理项带编号可跳转。
+   <br>_（2026-10-23 修正：running 项最初是 `-` 开头的 disabled 条目，只能看不能点。
+   现在它与待处理项共用同一套 1–26 键位，都能跳，只用 `·` 前缀区分。见下方「已修」。）_
 4. **`running` 有了灭灯信号** —— 订阅 `SessionEnd`，agent 退出时清掉该 pane 的 running
    （见 TODO-11）。
 5. **status-right 增加四态汇总** —— `●1 ✓1 ◷0 ✗0`。`whistle_count_states`（纯函数）
