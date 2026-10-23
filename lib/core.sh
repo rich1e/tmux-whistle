@@ -358,8 +358,11 @@ whistle_recompute_window() {
   # 同名会造成影子遮蔽：清掉 pane 的 @whistle 后，查找会回退到 window 上的
   # 聚合值，于是 pane 看起来"清不掉"。
   #
-  # @whistle_win_pane 记的是「这个窗口该亮的状态来自哪一格」——菜单跳转据此
-  # select-pane。它由重算覆盖，所以 whistle_state_clear 不必清它。
+  # @whistle_win_pane 记的是「这个窗口该亮的状态来自哪一格」。
+  # 消费者是 jump（先判存活再 select-pane）。
+  # 菜单**不读它** —— 菜单走 whistle_agent_windows 的第 5 列，那份数据更新鲜。
+  # 两处用途不同，别把「测了 @whistle_win_pane」当成「测了菜单」。
+  # 它由重算覆盖，所以 whistle_state_clear 不必清它。
   whistle_tmux setw -t "$_win" @whistle_win "$_state" \
     \; setw -t "$_win" @whistle_win_msg "$_msg" \
     \; setw -t "$_win" @whistle_win_count "$_count" \

@@ -59,9 +59,46 @@ assert_nonzero() {
 }
 
 @test "run: 消息带耗时" {
-  run "$CLI" run -- sh -c 'exit 0'
-  # 断言形态而不是具体数值：秒数可能是 0s 也可能是 1s
-  assert_contains "$(optp @whistle_msg "$PANE")" 's'
+  "$CLI" run -- sh -c 'exit 0'
+
+  # 断言「末尾有个 Ns」这个形态，不是具体秒数（可能是 0s 也可能 1s）。
+  # 用 grep -E 而不是 assert_contains 's' —— 默认标签是 sh，自带一个 s，
+  # 那样写的话把整段耗时删掉也照样绿。
+  local m
+  m=$(optp @whistle_msg "$PANE")
+  printf '%s' "$m" | grep -qE '（[0-9]+s）$' || {
+    echo "消息里没有耗时: [$m]"
+    return 1
+  }
+}
+
+@test "run: 收到 SIGINT 时包装器不被打死，落终态而不是停在 running" {
+  # Ctrl-C 把 SIGINT 发给**整个前台进程组**。没有 handler 的话，/bin/sh 跑的
+  # 包装器会在读到 $? 之前就被打死 —— 状态永远停在 running。
+  # 而 running 不计入 pending、🔔 不亮，非 Claude Code 的进程更没有
+  # SessionEnd 兜底，那盏 ● 就再也灭不掉了。
+  #
+  # 必须 set -m 才能复现：非交互 shell 里 `cmd &` 的后台作业默认**忽略** SIGINT，
+  # 不开 job control 的话信号根本打不到包装器，测试会假绿。
+  #
+  # trap 必须是 ':'（no-op）而不是 ''（ignore）：被 trap 的信号在子进程里
+  # 复位成默认动作，子命令照样能被 Ctrl-C 打断；被 ignore 的会连子进程一起忽略。
+  set -m
+  "$CLI" run -- sleep 2 &
+  local pid=$!
+  set +m
+  sleep 0.4
+  kill -INT -- "-$pid" 2> /dev/null || kill -INT "$pid" 2> /dev/null || true
+  wait "$pid" 2> /dev/null || true
+
+  # 断言「不在 running」而不是具体终态：包装器活下来时，sleep 可能被一起
+  # 打断（130 → error）也可能没被打断（0 → done），两者都是正确结果。
+  local state
+  state=$(optp @whistle "$PANE")
+  [ "$state" != 'running' ] || {
+    echo "包装器被打死了，状态停在 running"
+    return 1
+  }
 }
 
 @test "run: 命令的输出透传到终端，不被吞掉" {

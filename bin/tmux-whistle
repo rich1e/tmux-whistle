@@ -175,8 +175,19 @@ cmd_set() {
 # 这是显式包装器的边界，不是缺陷。
 #
 # ⚠️ 不要用 exec：那会替换掉当前 shell 进程，拿不到退出码。
-# 直接跑 "$@" 再读 $? 即可，不需要 trap。
+# 直接跑 "$@" 再读 $? 即可。
+#
+# ⚠️ 但必须给 SIGINT 装一个 no-op handler。Ctrl-C 把信号发给**整个前台进程组**，
+# 不装的话 /bin/sh 跑的包装器会在读到 $? 之前就死掉 —— 状态永远停在 running，
+# 而 running 不计入 pending、🔔 不亮，非 Claude Code 的进程更没有 SessionEnd
+# 兜底，那盏 ● 就再也灭不掉了。
+#
+# 必须用 ':'（no-op）而不是 ''（ignore）：被 **trap** 的信号在子进程里复位成
+# 默认动作，子命令照样能被 Ctrl-C 打断；被 ignore 的信号会连子进程一起忽略 ——
+# 那样用户按 Ctrl-C 就再也停不掉自己启动的构建了。
 cmd_run() {
+  trap ':' INT
+
   _label=''
   _target=''
 
@@ -236,9 +247,27 @@ cmd_run() {
 
 # -- 清除 ------------------------------------------------------------------
 
+# whistle_select_pane_if_alive <pane>
+#
+# 选中一个 pane，但**先判它还在不在**。不判的话，对着已死的 pane 发
+# select-pane 会报错，而 tmux 的 `;` 命令链遇错即停 —— 后面的清除就不执行，
+# 状态永远清不掉。
+#
+# 两个调用点都是这个 hazard：`jump`（用户手敲的窗口名）与菜单（开着的时候
+# 那一格被关掉）。抽出来是为了两处共用同一套判断，别各写一份。
+#
+# 判存活用 display-message -p -t <pane>：不存在的 pane 会返回非零。
+whistle_select_pane_if_alive() {
+  _sp_pane="${1:-}"
+  [ -n "$_sp_pane" ] || return 0
+  whistle_tmux display-message -p -t "$_sp_pane" '#{pane_id}' > /dev/null 2>&1 || return 0
+  whistle_tmux select-pane -t "$_sp_pane" 2> /dev/null || true
+}
+
 cmd_clear() {
   _all=0
   _target=''
+  _select=''
   while [ $# -gt 0 ]; do
     case "$1" in
     -a | --all)
@@ -248,6 +277,10 @@ cmd_clear() {
     -t | --target)
       _target="$2"
       shift 2
+      ;;
+    --select)
+      _select="${2:-}"
+      shift 2 2> /dev/null || shift
       ;;
     *)
       _target="$1"
@@ -271,6 +304,9 @@ cmd_clear() {
   whistle_border_release "$_win"
   whistle_border_status_release "$_win"
   whistle_refresh_sessions "$_win"
+
+  # 菜单跳转会带 --select：先清、后选，即便 select 失败也不影响清除结果
+  whistle_select_pane_if_alive "$_select"
 }
 
 # -- 列表 ------------------------------------------------------------------
@@ -359,7 +395,7 @@ cmd_menu() {
     [ "$_i" -gt 26 ] && continue
     _label=" $(whistle_state_label "$st") $s:$wn $msg"
     set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
-      "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
 $_items
 EOF
@@ -421,7 +457,7 @@ cmd_menu_args() {
     [ "$_i" -gt 26 ] && continue
     printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
     printf '%s\n' "$(whistle_menu_key "$_i")"
-    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
   done << EOF
 $_items
 EOF
@@ -486,14 +522,11 @@ cmd_jump() {
   _wid=${_hits%%|*}
   whistle_tmux switch-client -t "$_wid" 2> /dev/null || true
 
-  # 顺带选中报状态的那一格（Task 1 的 @whistle_win_pane）。
-  # 必须先判存活：select-pane 对着已死的 pane 会报错，而 tmux 的 `;` 命令链
-  # 遇错即停 —— 后面 whistle_clear_window 就不会执行，状态永远清不掉。
-  # 这正是「菜单开着的时候那一格被关掉」的场景。
-  _pane=$(whistle_tmux show -wv -t "$_wid" @whistle_win_pane 2> /dev/null) || _pane=''
-  if [ -n "$_pane" ] && whistle_tmux display-message -p -t "$_pane" '#{pane_id}' 2> /dev/null; then
-    whistle_tmux select-pane -t "$_pane" 2> /dev/null || true
-  fi
+  # 顺带选中报状态的那一格。
+  # **必须先判存活**：select-pane 对着已死的 pane 会报错，而 tmux 的 `;`
+  # 命令链遇错即停 —— 后面的 whistle_clear_window 就不会执行，状态永远清不掉。
+  # 这正是「菜单开着的时候那一格被关掉」的场景。判断逻辑与菜单路径共用。
+  whistle_select_pane_if_alive "$(whistle_tmux show -wv -t "$_wid" @whistle_win_pane 2> /dev/null)"
 
   whistle_clear_window "$_wid"
 }

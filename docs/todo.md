@@ -643,8 +643,9 @@ switch-client -t $s ; select-window -t $wid ; run-shell -b '... clear -t $wid'
 2. `whistle_recompute_window` 多写一个 `@whistle_win_pane`；
 3. `whistle_agent_windows` 的 format 加 pane 列，`cmd_menu` / `cmd_menu_args`
    按位置读出新的一列，命令串里补 `select-pane -t $pane`；
-4. `whistle_state_clear` 必须一并清 `@whistle_win_pane` —— 否则窗口清空后
-   会残留一个已失效的 pane id。
+4. ~~`whistle_state_clear` 必须一并清 `@whistle_win_pane` —— 否则窗口清空后
+   会残留一个已失效的 pane id。~~ **这条当初判断错了，见下方「已修」第 3 点：
+   它是派生值，由重算覆盖即可，`whistle_state_clear` 不必碰它。**
 
 **风险点**：pane 在菜单弹出之后、命令执行之前被关掉时，`select-pane` 会报错，
 而 tmux 的 `;` 命令链遇错即停，后面的 `clear` 不会执行 → 状态永远清不掉。
@@ -679,14 +680,18 @@ switch-client -t $s ; select-window -t $wid ; run-shell -b '... clear -t $wid'
 `whistle_recompute_window` 覆盖掉。反倒在这里多清一遍，会在窗口已不存在时报错。
 结论已写进该函数注释。
 
-**已知限制（本次没加兜底）**：pane 在菜单弹出之后、命令执行之前被关掉时，
-`select-pane` 会报错，而 tmux 的 `;` 命令链遇错即停 —— 后面的 `clear` 不执行，
-状态会永远清不掉。
-窗口没有 pane 时 `@whistle_win_pane` 为空串**不会**触发这个问题（那是合法的空值），
-所以风险窗口只在「菜单开着的那一瞬间 pane 被关掉」。
-真要根治得给 `cmd_menu` 的每项加一次 pane 存活探测，那是每个 item 一次 tmux 调用 ——
-`cmd_menu_args` 的实测（182 项测试全绿，耗时明显）说明这套接口偏慢，不宜在热路径上加往返。
-TODO-2（Task 3）会顺带把这条命令串的结构整理一下，届时再评估。
+**pane 已死时命令链不能被打断（评审后补的）**：pane 在菜单弹出之后、命令执行之前
+被关掉时，裸的 `select-pane` 会报错，而 tmux 的 `;` 命令链遇错即停 —— 后面的
+`clear` 不执行，状态永远清不掉。若那一项正好是当前窗口，`select-window` 是 no-op、
+`after-select-window` 也不触发，徽章就一直亮着。
+
+修法：菜单项不再在命令链里裸调 `select-pane`，改成把 pane 交给异步的
+`clear --select <pane>`，由 `whistle_select_pane_if_alive` 先判存活再选。
+`jump` 走同一个 helper。这样「先清、后选」，select 失败也不影响清除结果。
+
+最早只给 `jump` 加了守卫、菜单没加 —— 复核对拍（隔离 server + `source-file`
+走 tmux 自己的解析器）复现了 `can't find pane: %999` 之后 `@whistle_win` 仍是
+`done`。教训：**同一个 hazard 在两个调用点，只修一处等于没修**。
 
 **回归测试**：`test/unit/core.bats` 12 处断言改为四列 + 4 条新用例
 （第 4 列是胜出 pane、等级相同取先出现者、无人胜出时为空串、多加一列不改变 pending 语义）；
@@ -727,6 +732,13 @@ tmux-whistle run [-- 标签] -- 命令 参数...
 拿不到退出码；直接跑 `"$@"` 再读 `$?` 即可，不需要 trap。
 
 **边界**：包装器只认退出码，不解析输出；退出码 130（Ctrl-C）按 error 处理。
+
+但「子命令自己吃到 SIGINT」与「用户按 Ctrl-C」是两件事：后者把信号发给**整个前台
+进程组**，不装 handler 的话包装器会在读到 `$?` 之前就死掉，状态永远停在 `running`
+—— 而 `running` 不计入 pending、🔔 不亮，非 Claude Code 的进程更没有 SessionEnd
+兜底。所以 `cmd_run` 开头装了 `trap ':' INT`。
+**必须用 `:` 而不是 `''`**：被 trap 的信号在子进程里复位成默认动作，子命令照样
+能被 Ctrl-C 打断；被 ignore 的会连子命令一起忽略，用户就再也停不掉自己启动的构建。
 
 **相关代码**：`bin/tmux-whistle` 的 `cmd_run` 与分派处；`README.md` 的「场景二」。
 

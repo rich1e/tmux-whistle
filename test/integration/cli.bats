@@ -644,6 +644,49 @@ seed_running_windows() {
   assert_contains "$(optp @whistle_body "$p")" '第一行 第二行'
 }
 
+@test "menu-args: 菜单项把 pane 交给 clear 去做 select（不在命令链里裸 select-pane）" {
+  wt split-window -t w1
+  local p1 p2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  "$CLI" "done" '做完了' -t "$p2"
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '--select'
+  assert_contains "$output" "$p2"
+  # 命令链里**不能**出现裸的 select-pane：pane 在菜单弹出后可能被关掉，
+  # select-pane 报错会让 tmux 的 `;` 链遇错即停，后面的 clear 就不执行，
+  # 状态永远清不掉。select 必须挪进异步的 clear 里，由它先判存活。
+  assert_not_contains "$output" 'select-pane'
+}
+
+@test "clear --select: pane 已死时仍然清掉窗口（不中断在 select 上）" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t main:w1 '#{window_id}')
+  "$CLI" "done" '做完了' -t "$p"
+
+  # %999 不存在 —— 模拟「菜单开着的时候那一格被关掉」
+  run "$CLI" clear -t "$w" --select '%999'
+  assert_eq "$status" 0
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "clear --select: pane 存活时它成为该窗口的活动 pane" {
+  wt split-window -t w1
+  local p1 w
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  w=$(wt display -p -t main:w1 '#{window_id}')
+  "$CLI" "done" '做完了' -t "$p1"
+
+  run "$CLI" clear -t "$w" --select "$p1"
+  assert_eq "$status" 0
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  # pane_active 是窗口级属性，无 attached client 也能读 —— 这是「确实选中了」
+  # 唯一的可观测证据。
+  assert_eq "$(wt display -p -t "$p1" '#{pane_active}')" '1'
+}
+
 # -- 内部：--clear-pane（SessionEnd 用） -------------------------------------
 
 @test "--clear-pane: 只清 running，待处理状态原样保留" {

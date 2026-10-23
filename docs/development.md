@@ -250,12 +250,12 @@ tmux hooks** —— 有人往 pane 里敲命令不会触发通知。
 
 **其它**
 
-- 进入 tmux format 的文本必须过 `whistle_sanitize`（剔掉 `# { } |` 与控制字符，截断 80 字符）。
+- 进入 tmux format 的文本必须过 `whistle_sanitize`（剔掉 `# { } |` 与控制字符，默认截断 80 字符；第二参可改上限，正文用 400）。
 - **不要删 `whistle_deliver` 开头的 `whistle_ensure_status_line`** —— oh-my-tmux 在 source 完
   `tmux.conf.local` 之后才重算主题，会覆盖状态栏补丁；自愈是唯一不依赖加载顺序的时机。
 - `lib/install-hooks.sh` 合并 `settings.json` 时只增删带 marker 的条目，**绝不覆盖用户已有的 hook**。
-- `lib/core.sh` 里 `whistle_sanitize` / `whistle_rank` / `whistle_aggregate` 三个函数
-  **不得出现任何 tmux 调用** —— 这是 L1 单测能脱离 tmux 跑的前提。
+- `lib/core.sh` 里 `whistle_sanitize` / `whistle_rank` / `whistle_aggregate` /
+  `whistle_count_states` 四个函数**不得出现任何 tmux 调用** —— 这是 L1 单测能脱离 tmux 跑的前提。
 
 ## 测试约定
 
