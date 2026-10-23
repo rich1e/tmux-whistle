@@ -66,7 +66,7 @@ Claude Code 集成：
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
   @whistle_color_done|wait|error|running   徽章与边框颜色
-  @whistle_icon_done|wait|error|running    各状态的图标（默认 ✓ / ◷ / ✗ / ●）
+  @whistle_icon_done|wait|error|running    各状态的图标（默认 ◆ / ◷ / ⚠ / ▶）
   @whistle_icon_pending              全局计数前的图标（默认 ✉；空串 = 不显示）
 EOF
 }

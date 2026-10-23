@@ -30,11 +30,11 @@ teardown() {
     wt set -w -t w2 @whistle_win "wait"
 
     run wt_render_windows
-    assert_contains "$output" 'w1✓'
+    assert_contains "$output" 'w1◆'
     assert_contains "$output" 'w2◷'
     # 交叉验证：w1 不该出现 wait 的符号，反之亦然
     assert_not_contains "$output" 'w1◷'
-    assert_not_contains "$output" 'w2✓'
+    assert_not_contains "$output" 'w2◆'
 }
 
 @test "KP-1: 无状态的窗口不显示任何徽章" {
@@ -45,7 +45,7 @@ teardown() {
 
     run wt_render_windows
     assert_contains "$output" 'w1▌'
-    assert_not_contains "$output" '✓'
+    assert_not_contains "$output" '◆'
 }
 
 @test "KP-1: 三种状态各自有对应符号" {
@@ -56,7 +56,7 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "error"
     run wt_render_windows
-    assert_contains "$output" 'w1✗'
+    assert_contains "$output" 'w1⚠'
 }
 
 @test "KP-1: running 显示 ▶ 徽章（不是待处理，但要让窗口列表看出有 agent）" {
@@ -69,9 +69,9 @@ teardown() {
     run wt_render_windows
     assert_contains "$output" 'w1▶'
     # running 只亮 ▶，不该串到其余三个状态的符号上
-    assert_not_contains "$output" '✓'
+    assert_not_contains "$output" '◆'
     assert_not_contains "$output" '◷'
-    assert_not_contains "$output" '✗'
+    assert_not_contains "$output" '⚠'
 }
 
 @test "KP-1: 四种状态各自渲染自己的符号，互不串台" {
@@ -80,14 +80,14 @@ teardown() {
     whistle_mark_publish
     whistle_format_patch window-status-format
 
-    for pair in 'done ✓' 'wait ◷' 'error ✗' 'running ▶'; do
+    for pair in 'done ◆' 'wait ◷' 'error ⚠' 'running ▶'; do
         local st="${pair% *}" sym="${pair#* }"
         wt set -w -t w1 @whistle_win "$st"
         run wt_render_windows
         assert_contains "$output" "w1${sym}"
         # 只断言本状态该有的符号：其余三个不该同时出现
         local other
-        for other in ✓ ◷ ✗ ▶; do
+        for other in ◆ ◷ ⚠ ▶; do
             [ "$other" = "$sym" ] && continue
             assert_not_contains "$output" "$other"
         done
@@ -107,7 +107,7 @@ teardown() {
     run wt_render_windows
     # 哨兵仍在格式里（幂等注入不受开关影响），但渲染为空
     assert_contains "$output" 'w1'
-    assert_not_contains "$output" '✓'
+    assert_not_contains "$output" '◆'
 }
 
 @test "开关: @whistle_badge 从 off 改回 on 后徽章恢复" {
@@ -122,7 +122,7 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✓'
+    assert_contains "$output" 'w1◆'
 }
 
 @test "开关: @whistle_badge 只关窗口徽章，全局计数不受影响" {
@@ -150,8 +150,8 @@ teardown() {
     wt set -w -t w2 @whistle_win "error"
 
     run wt_render_windows
-    assert_contains "$output" 'w1✓'
-    assert_contains "$output" 'w2✗'
+    assert_contains "$output" 'w1◆'
+    assert_contains "$output" 'w2⚠'
 }
 
 @test "KP-2: 徽章内容确实存在 global option 里（改色可不重载配置）" {
@@ -219,8 +219,8 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✓'
-    assert_not_contains "$output" '✓✓'
+    assert_contains "$output" 'w1◆'
+    assert_not_contains "$output" '◆◆'
 }
 
 @test "KP-4: 已注入过时 patch 是幂等空操作，不改内容" {
@@ -280,13 +280,13 @@ teardown() {
 
   wt set -w -t w1 @whistle_win "done"
   run wt_render_windows
-  assert_contains "$output" 'w1✓'
+  assert_contains "$output" 'w1◆'
 }
 
 @test "图标: @whistle_icon_done 可改成任意符号" {
   wt_load core
   wt_load status-line
-  # 用一个和默认 ✓ 明显不同的符号，否则「改了没生效」也看不出来
+  # 用一个和默认 ◆ 明显不同的符号，否则「改了没生效」也看不出来
   wt set -g @whistle_icon_done '★'
   whistle_mark_publish
   whistle_format_patch window-status-format
@@ -294,7 +294,7 @@ teardown() {
   wt set -w -t w1 @whistle_win "done"
   run wt_render_windows
   assert_contains "$output" 'w1★'
-  assert_not_contains "$output" '✓'
+  assert_not_contains "$output" '◆'
 }
 
 @test "图标: running 也可改成任意符号" {
@@ -338,25 +338,25 @@ teardown() {
   wt set -g @whistle_pending 3
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '●3'
+  assert_contains "$output" '● 3'
   assert_not_contains "$output" '✉'
 }
 
 @test "图标: 显式设成空串表示不要图标（区别于未设置）" {
   wt_load core
   wt_load status-line
-  # 未设置 → 用默认 ✓
+  # 未设置 → 用默认 ◆
   wt set -w -t w1 @whistle_win "done"
   whistle_mark_publish
   whistle_format_patch window-status-format
   run wt_render_windows
-  assert_contains "$output" 'w1✓'
+  assert_contains "$output" 'w1◆'
 
   # 显式空串 → 徽章位置什么都没有
   wt set -g @whistle_icon_done ''
   whistle_mark_publish
   run wt_render_windows
-  assert_not_contains "$output" '✓'
+  assert_not_contains "$output" '◆'
   assert_contains "$output" 'w1'
 }
 
@@ -426,7 +426,7 @@ teardown() {
   wt set -g @whistle_pending 3
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '✉3'
+  assert_contains "$output" '✉ 3'
 }
 
 @test "status-right: ✉ 用的是 @whistle_color_pending，不借用等待色" {
@@ -450,6 +450,66 @@ teardown() {
   assert_contains "$output" '#[fg=#123456]✉'
 }
 
+@test "status-right: 图标与数字之间留一个空格，不紧贴" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  # 紧贴的 "◆#{@whistle_count_done}" 会让宽图标看起来像数字的一部分
+  assert_contains "$output" '◆ #{@whistle_count_done}'
+  assert_contains "$output" '◷ #{@whistle_count_wait}'
+  assert_contains "$output" '⚠ #{@whistle_count_error}'
+  assert_contains "$output" '✉ #{@whistle_pending}'
+}
+
+@test "status-right: done 是紫色 ◆，error 是红色 ⚠" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_contains "$output" '#[fg=#af5fff]◆'
+  assert_contains "$output" '#[fg=#d70000]⚠'
+}
+
+@test "status-right: 没有 agent 在跑时 running 那格显示绿色 ◉" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 1
+  wt set -g @whistle_count_running 0
+  wt set -g @whistle_count_done 1
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+
+  run wt display -pF '#{E:status-right}'
+  # 「没有 agent 在跑」本身是个有意义的信息，不该整格消失
+  assert_contains "$output" '◉'
+  assert_not_contains "$output" '◉0'
+}
+
+@test "status-right: 有 agent 在跑时显示帧与计数，不显示 ◉" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 1
+  wt set -g @whistle_count_running 2
+  wt set -g @whistle_count_done 1
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '2'
+  assert_not_contains "$output" '◉'
+}
+
 # -- status-right 的四态汇总 --------------------------------------------------
 
 @test "status-right: 四态汇总按各自图标渲染，计数为 0 的也保留" {
@@ -468,13 +528,13 @@ teardown() {
   wt set -g @whistle_count_error 1
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '▶1'
-  assert_contains "$output" '✓1'
+  assert_contains "$output" '▶ 1'
+  assert_contains "$output" '◆ 1'
   # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
-  assert_contains "$output" '◷0'
-  assert_contains "$output" '✗1'
+  assert_contains "$output" '◷ 0'
+  assert_contains "$output" '⚠ 1'
   # 汇总与 ✉ 计数是两个独立的读法，都要在
-  assert_contains "$output" '✉2'
+  assert_contains "$output" '✉ 2'
 }
 
 @test "status-right: running 用绿色渲染" {
@@ -484,7 +544,7 @@ teardown() {
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
-  # ▶ 是绿色（#00af00），与 ✓ 同色 —— 形状不同所以仍能分辨
+  # ▶ 用 running 色（绿）；◆ 现在是紫色，两者不再同色
   assert_contains "$output" '#[fg=#00af00]▶'
 }
 
@@ -525,7 +585,7 @@ teardown() {
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '▶2'
+  assert_contains "$output" '▶ 2'
 }
 
 @test "status-right: 没有任何 agent 活动时整段不出现" {
@@ -543,7 +603,7 @@ teardown() {
 
   run wt display -pF '#{E:status-right}'
   assert_not_contains "$output" '●0'
-  assert_not_contains "$output" '✓0'
+  assert_not_contains "$output" '◆ 0'
 }
 
 @test "status-right: 汇总 format 的大括号配平" {
@@ -583,5 +643,5 @@ teardown() {
 
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
-    assert_contains "$output" 'w1✓'
+    assert_contains "$output" 'w1◆'
 }

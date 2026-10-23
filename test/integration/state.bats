@@ -313,7 +313,7 @@ pane_of() {
 
 @test "conf: 未设置的 option 回落到默认表" {
   run whistle_conf '@whistle_color_done'
-  assert_eq "$output" '#00af00'
+  assert_eq "$output" '#af5fff'
   run whistle_conf '@whistle_os'
   assert_eq "$output" 'off'
 }

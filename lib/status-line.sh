@@ -80,25 +80,33 @@ whistle_summary_build() {
   _sm_c_wait=$(whistle_conf '@whistle_color_wait')
   _sm_c_err=$(whistle_conf '@whistle_color_error')
 
-  # running 那格：@whistle_spin on 时用 Braille 帧选择器，否则退回静态图标。
-  # ⚠️ 帧选择器是 format，**不能过 whistle_icon / whistle_sanitize** ——
+  # running 那格：@whistle_spin on 时用 Braille 帧，否则退回静态图标。
+  # ⚠️ 帧片段是 format，**不能过 whistle_icon / whistle_sanitize** ——
   # 它会剔掉 # { } |，整个 format 会被毁成空串（tmux 静默渲染成空白）。
   if [ "$(whistle_conf '@whistle_spin')" = on ]; then
     _sm_s_run=$(whistle_spin_build)
   else
     _sm_s_run=$(whistle_icon '@whistle_icon_running')
   fi
+  _sm_s_idle=$(whistle_icon '@whistle_icon_idle')
 
   _sm_s_done=$(whistle_icon '@whistle_icon_done')
   _sm_s_wait=$(whistle_icon '@whistle_icon_wait')
   _sm_s_err=$(whistle_icon '@whistle_icon_error')
 
+  # 图标与数字之间留一个空格 —— 紧贴成 "✓2" 时，宽图标会看起来像
+  # 数字的一部分，窄图标又像被数字吃掉了。
+  #
   # #{||:a,b} 的真值判定是"非空且不等于 0"，见 tmux FORMATS。
   printf '#{?#{||:#{@whistle_count_running},#{@whistle_pending}},'
-  printf '#[fg=%s]%s#{@whistle_count_running}#[default] ' "$_sm_c_run" "$_sm_s_run"
-  printf '#[fg=%s]%s#{@whistle_count_done}#[default] ' "$_sm_c_done" "$_sm_s_done"
-  printf '#[fg=%s]%s#{@whistle_count_wait}#[default] ' "$_sm_c_wait" "$_sm_s_wait"
-  printf '#[fg=%s]%s#{@whistle_count_error}#[default] ,}' "$_sm_c_err" "$_sm_s_err"
+  # running 那格分两态：有在跑 → 帧 + 计数；没有在跑 → 一个绿色的 ◉。
+  # 「没有 agent 在跑」本身是个有意义的信息，比整格消失更容易读。
+  printf '#{?#{@whistle_count_running},'
+  printf '#[fg=%s]%s #{@whistle_count_running}#[default] ,' "$_sm_c_run" "$_sm_s_run"
+  printf '#[fg=%s]%s#[default] }' "$_sm_c_run" "$_sm_s_idle"
+  printf '#[fg=%s]%s #{@whistle_count_done}#[default] ' "$_sm_c_done" "$_sm_s_done"
+  printf '#[fg=%s]%s #{@whistle_count_wait}#[default] ' "$_sm_c_wait" "$_sm_s_wait"
+  printf '#[fg=%s]%s #{@whistle_count_error}#[default] ,}' "$_sm_c_err" "$_sm_s_err"
 }
 
 # whistle_status_right_build → 状态栏右侧的全局待处理计数
@@ -115,7 +123,7 @@ whistle_summary_build() {
 # 借用会让改 ◷ 的颜色连带改了总数，而且总数默认是青的、不是琥珀色。
 whistle_status_right_build() {
   whistle_summary_build
-  printf '#{?@whistle_pending, #[fg=%s]%s#{@whistle_pending}#[default],}' \
+  printf '#{?@whistle_pending, #[fg=%s]%s #{@whistle_pending}#[default],}' \
     "$(whistle_conf '@whistle_color_pending')" \
     "$(whistle_icon '@whistle_icon_pending')"
 }

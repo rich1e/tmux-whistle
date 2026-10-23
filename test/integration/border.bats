@@ -43,7 +43,7 @@ win_of() {
   whistle_border_paint "$w" "done"
 
   assert_eq "$(wt show -wv -t "$w" pane-active-border-style)" 'fg=#00ff00'
-  assert_contains "$(wt show -wv -t "$w" pane-border-style)" '#00af00'
+  assert_contains "$(wt show -wv -t "$w" pane-border-style)" '#af5fff'
 }
 
 @test "KP-6: 重复着色不会把我们的颜色当成原值记下来" {
@@ -79,7 +79,7 @@ win_of() {
   [ -z "$(wt show -wv -t "$w" pane-border-style)" ]
 
   whistle_border_paint "$w" "done"
-  assert_contains "$(wt show -wv -t "$w" pane-border-style)" '#00af00'
+  assert_contains "$(wt show -wv -t "$w" pane-border-style)" '#af5fff'
 
   whistle_border_release "$w"
   # 窗口级覆盖已删除，回到继承全局

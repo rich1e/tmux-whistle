@@ -54,7 +54,7 @@ expect_contains() {
   local out
   out=$(wt display -pF "$fmt")
 
-  expect_contains "$out" '✓'
+  expect_contains "$out" '◆'
   expect_contains "$out" '◷'
 }
 

@@ -6,7 +6,7 @@
 B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 
 ```
-  ● agentA ✓          ← 窗口徽章：这个窗口的 agent 做完了
+  ● agentA ◆          ← 窗口徽章：这个窗口的 agent 做完了
                      ✉2   ← 全局计数：全机器还有 2 件事等着你
   [agentA] 完成: 重构完成，抽出了 core.sh   ← 瞬时提示（5 秒后消失）
 ```
@@ -26,7 +26,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 
 | | monitor-activity | tmux-notify | tmux-whistle |
 |---|---|---|---|
-| 知道"完成"和"等你在批"是两件事 | ✗ | ✗ | ✓ |
+| 知道"完成"和"等你在批"是两件事 | ⚠ | ⚠ | ◆ |
 | 检测方式 | 有输出变了 | 轮询猜提示符 | **agent 主动上报** |
 | 消息内容 | 无 | 无 | 有（最后一条回复） |
 | 跨 session 可见 | 只在窗口标签高亮 | 只弹系统通知 | 状态栏计数 + 瞬时提示 + 系统通知 |
@@ -88,7 +88,7 @@ tmux-whistle doctor
 
 > **升级插件后要重跑一次 `tmux-whistle install-hooks`。** hooks 是快照式写进
 > `settings.json` 的，新增的事件（`StopFailure` / `SessionEnd`）不会自己出现 ——
-> 不重跑的话 agent 因 API 错误中断时不会亮 `✗`，退出后 `●` 也不会自己灭。
+> 不重跑的话 agent 因 API 错误中断时不会亮 `⚠`，退出后 `●` 也不会自己灭。
 > 该命令是幂等的，其它 hook 原样保留。
 
 ### macOS：系统通知授权（**必做**，否则系统通知静默失效）
@@ -125,16 +125,17 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_clear_on_focus` | `on` | 切进窗口自动清除 |
 | `@whistle_display_ms` | `0` | 瞬时提示显示时长，`0` = 跟随 tmux 的 `display-time` |
 | **外观** | | |
-| `@whistle_color_done` | `#00af00` | 完成色 |
+| `@whistle_color_done` | `#af5fff` | 完成色（紫） |
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
 | `@whistle_color_running` | `#00af00` | 运行中色（与 `done` 同色，靠图标形状区分；想更开可换 `#5faf00`） |
 | `@whistle_color_pending` | `#5fd7d7` | 待处理总数 `✉N` 的颜色（青色，独立于等待色） |
 | `@whistle_icon_pending` | `✉` | 全局计数前面的图标 |
-| `@whistle_icon_done` | `✓` | 完成符号 |
+| `@whistle_icon_done` | `◆` | 完成符号 |
 | `@whistle_icon_wait` | `◷` | 等待符号 |
-| `@whistle_icon_error` | `✗` | 错误符号 |
-| `@whistle_icon_running` | `▶` | 运行中符号 |
+| `@whistle_icon_error` | `⚠` | 错误符号 |
+| `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin off` 时才用；开时是 Braille 帧） |
+| `@whistle_icon_idle` | `◉` | 没有 agent 在跑时 running 那格显示的符号 |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
@@ -154,12 +155,12 @@ set -g @whistle_badge off          # 关掉窗口徽章，只留全局计数
 set -g @whistle_border off         # 关掉 pane 边框变色
 set -g @whistle_self on            # 也提示自己所在的 session
 set -g @whistle_color_done '#00af00'  # 改色
-set -g @whistle_color_running '#5faf00'  # 让运行中的 ▶ 换个绿（与 ✓ 区分）
+set -g @whistle_color_running '#5faf00'  # 让运行中的 ▶ 换个绿（与 ◆ 区分）
 set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
 ```tmux
-# 换图标（默认 ✉ / ✓ / ◷ / ✗ / ▶）
+# 换图标（默认 ✉ / ◆ / ◷ / ⚠ / ▶ / ◉）
 set -g @whistle_icon_pending '●'
 set -g @whistle_icon_done    '★'
 set -g @whistle_icon_wait    '⏸'
@@ -205,15 +206,15 @@ set -g @whistle_icon_pending ''
 三个独立信号，可以各自开关：
 
 ```
- 1 claude.exe✓            ← ① 窗口徽章
-      ▶1 ✓1 ◷0 ✗0   ✉2  ← ② 四态汇总 + 全局待处理计数
+ 1 claude.exe◆            ← ① 窗口徽章
+      ⠋ 1 ◆ 1 ◷ 0 ⚠ 0   ✉ 2  ← ② 四态汇总 + 全局待处理计数
  [claude.exe] 完成: 重构完成，抽出了 core.sh   ← ③ 瞬时提示（5 秒）
 ```
 
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **四态汇总** `▶1 ✓1 ◷0 ✗0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`▶` 在跑 / `✓` 完成 / `◷` 等待 / `✗` 失败） |
+| **四态汇总** `⠋ 1 ◆ 1 ◷ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`⠋` 在跑 / `◆` 完成 / `◷` 等待 / `⚠` 失败）：没有 agent 在跑时 `⠋` 那格变成 `◉` |
 | **全局计数** `✉N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 
@@ -258,9 +259,9 @@ session 里的细节"。
 | 状态 | 徽章 | 计入 ✉ | 什么时候出现 |
 |---|---|---|---|
 | `running` | `▶` | 否 | agent 开始干活 |
-| `done` | `✓` | 是 | 一轮工作结束 |
+| `done` | `◆` | 是 | 一轮工作结束 |
 | `wait` | `◷` | 是 | 等你批准 / 等你输入 |
-| `error` | `✗` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
+| `error` | `⚠` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
 `running` 不计入 `✉N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
 session 推一条「运行中」纯属噪声。它出现在状态栏汇总的 `▶N` 里，以及
@@ -284,21 +285,21 @@ hooks 装好后自动工作：
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
 | 发一条 prompt | — | `●`，不计入 ✉ |
-| agent 跑完一轮 | `Stop` hook | `✓` + ✉ + 提示 |
+| agent 跑完一轮 | `Stop` hook | `◆` + ✉ + 提示 |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `◷` + ✉ + 提示 |
-| 回合因 API 错误中断 | `StopFailure` hook | `✗` + ✉ + 提示（消息就是错误文本） |
-| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`✓`/`◷`/`✗` 保留，等你处理） |
+| 回合因 API 错误中断 | `StopFailure` hook | `⚠` + ✉ + 提示（消息就是错误文本） |
+| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`◆`/`◷`/`⚠` 保留，等你处理） |
 
 ### 场景二：任何 agent / 脚本
 
 不需要 Claude Code，在 tmux 的 pane 里直接调：
 
 ```sh
-tmux-whistle run -- long_job.sh          # 跑完自动亮 ✓ 或 ✗，消息带耗时
+tmux-whistle run -- long_job.sh          # 跑完自动亮 ◆ 或 ⚠，消息带耗时
 tmux-whistle run '备份' -- ./backup.sh    # 也可以自己起个标签
 ```
 
-`run` 按**退出码**决定状态（0 → `✓`，非 0 → `✗`），并把子命令的退出码原样透传出来，
+`run` 按**退出码**决定状态（0 → `◆`，非 0 → `⚠`），并把子命令的退出码原样透传出来，
 所以 `make && tmux-whistle run -- …` 失败时仍然返回非零。
 它只认退出码、不解析输出 —— 一个退出码 0 的命令是不是「真的完成了」，包装器判断不了。
 
@@ -322,7 +323,7 @@ tmux-whistle wait    "等你批准"     # 标记等待
 tmux-whistle error   "构建失败"     # 标记出错
 tmux-whistle running               # 开始干活（亮 ●，不计入 ✉）
 
-tmux-whistle run -- npm test       # 包一个命令：按退出码落 ✓ / ✗，带耗时
+tmux-whistle run -- npm test       # 包一个命令：按退出码落 ◆ / ⚠，带耗时
 tmux-whistle run '测试' -- npm test # 自定义标签
 
 tmux-whistle list                  # 看所有待处理项
