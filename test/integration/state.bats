@@ -85,6 +85,36 @@ pane_of() {
   assert_eq "$(wt show -wv -t "$w" @whistle_win_count)" '1'
 }
 
+@test "recompute: window 态记住胜出状态的 pane id（菜单 select-pane 的依据）" {
+  wt split-window -t w1
+  local p1 p2 w
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  w=$(wt display -p -t w1 '#{window_id}')
+
+  # p1 是 running、p2 是 wait —— wait 胜出，pane id 必须跟着 p2 走
+  whistle_state_set "running" '在跑' "$p1"
+  whistle_state_set "wait" '等你批' "$p2"
+  whistle_recompute_window "$w"
+
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'wait'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_pane)" "$p2"
+}
+
+@test "recompute: pane 状态清掉后 @whistle_win_pane 回落为空" {
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_state_set "done" '做完了'
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_pane)" '%0'
+
+  # 这一条锁住「whistle_state_clear 不必清 @whistle_win_pane」那个决定：
+  # 残留一个已失效的 pane id 会让菜单里的 select-pane 报错并中断命令链。
+  whistle_state_clear '%0' > /dev/null
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_pane)" ''
+}
+
 @test "recompute: 全空时 window 态为空字符串" {
   local w
   w=$(wt display -p -t w1 '#{window_id}')
@@ -251,6 +281,19 @@ pane_of() {
 @test "agent_windows: 从未上报过状态的 pane 不出现" {
   run whistle_agent_windows
   assert_eq "$output" ''
+}
+
+@test "agent_windows: 每行带 pane id，菜单据此 select-pane" {
+  wt split-window -t w1
+  local p1 p2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  whistle_state_set "running" '在跑' "$p1"
+  whistle_state_set "done" '做完了' "$p2"
+
+  run whistle_agent_windows
+  # 第 5 列是胜出状态的 pane id（session|window_id|window_name|index|pane|state|msg）
+  assert_eq "$(printf '%s\n' "$output" | cut -d'|' -f5)" "$p2"
 }
 
 @test "agent_windows: 同窗口多 pane 只出一行，取 rank 最高的状态" {

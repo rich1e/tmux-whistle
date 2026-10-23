@@ -100,12 +100,21 @@ setup() {
 }
 
 # -- whistle_aggregate -----------------------------------------------------
+#
+# 输出四列：<state>|<msg>|<pending>|<pane_id>
+#
+# 第 4 列是「胜出状态」所在的 pane。pane 必须由这个函数产出，不能另扫一遍 ——
+# 「哪个状态显示在窗口上」和「pane id 是谁」必须来自同一次判断，
+# 两次扫描可能选出不同的 pane，那就是 bug。
+#
+# pane 放**末位**而不是第 2 位：whistle_recompute_global 用 `cut -d'|' -f3`
+# 取待处理数，放末位它就不用改。
 
 @test "aggregate: 单个 pane 的状态原样透出" {
     run whistle_aggregate <<'EOF'
 %1|done|重构完成
 EOF
-    assert_eq "$output" 'done|重构完成|1'
+    assert_eq "$output" 'done|重构完成|1|%1'
 }
 
 @test "aggregate: 优先级 error > wait > done > running" {
@@ -114,7 +123,7 @@ EOF
 %2|done|做完了
 %3|wait|等你批
 EOF
-    assert_eq "$output" 'wait|等你批|2'
+    assert_eq "$output" 'wait|等你批|2|%3'
 }
 
 @test "aggregate: error 压过一切" {
@@ -123,7 +132,7 @@ EOF
 %2|wait|等你批
 %3|error|炸了
 EOF
-    assert_eq "$output" 'error|炸了|3'
+    assert_eq "$output" 'error|炸了|3|%3'
 }
 
 @test "aggregate: 全部 running 时输出 running，计数 0" {
@@ -131,7 +140,7 @@ EOF
 %1|running|在跑
 %2|running|也在跑
 EOF
-    assert_eq "$output" 'running|在跑|0'
+    assert_eq "$output" 'running|在跑|0|%1'
 }
 
 @test "aggregate: 全部为空时输出空状态" {
@@ -139,12 +148,12 @@ EOF
 %1||
 %2||
 EOF
-    assert_eq "$output" '||0'
+    assert_eq "$output" '||0|'
 }
 
 @test "aggregate: 空输入" {
     run whistle_aggregate </dev/null
-    assert_eq "$output" '||0'
+    assert_eq "$output" '||0|'
 }
 
 @test "aggregate: @whistle 为空时消息不会被误读成状态（非空白分隔符的意义）" {
@@ -156,14 +165,14 @@ EOF
     run whistle_aggregate <<'EOF'
 %1||done
 EOF
-    assert_eq "$output" '||0'
+    assert_eq "$output" '||0|'
 }
 
 @test "aggregate: 消息含分隔符不会挤掉后续字段" {
     run whistle_aggregate <<'EOF'
 %1|done|a|b|c
 EOF
-    assert_eq "$output" 'done|a|b|c|1'
+    assert_eq "$output" 'done|a|b|c|1|%1'
 }
 
 @test "aggregate: 跳过格式错误的行" {
@@ -171,7 +180,7 @@ EOF
 garbage-without-separator
 %1|done|做完了
 EOF
-    assert_eq "$output" 'done|做完了|1'
+    assert_eq "$output" 'done|做完了|1|%1'
 }
 
 @test "aggregate: 跳过空行" {
@@ -181,7 +190,7 @@ EOF
 
 %2|done|好了
 EOF
-    assert_eq "$output" 'wait|等你|2'
+    assert_eq "$output" 'wait|等你|2|%1'
 }
 
 @test "aggregate: 未知状态不计入 pending，也不顶优先级" {
@@ -189,13 +198,52 @@ EOF
 %1|banana|脏数据
 %2|running|在跑
 EOF
-    assert_eq "$output" 'running|在跑|0'
+    assert_eq "$output" 'running|在跑|0|%2'
 }
 
 @test "aggregate: 最后一行没有换行符也要处理" {
     printf '%%1|done|最后一行' | whistle_aggregate >"$BATS_TEST_TMPDIR/out"
     run cat "$BATS_TEST_TMPDIR/out"
-    assert_eq "$output" 'done|最后一行|1'
+    assert_eq "$output" 'done|最后一行|1|%1'
+}
+
+@test "aggregate: 第 4 列是胜出状态的 pane id" {
+    run whistle_aggregate <<'EOF'
+%7|running|在跑
+%12|wait|等你批
+%3|done|好了
+EOF
+    assert_eq "$output" 'wait|等你批|2|%12'
+}
+
+@test "aggregate: 等级相同时取先出现的那个 pane" {
+    # 窗口里两个 pane 同时 done。断言的是「有确定答案」（先来先得），
+    # 不是「答案一定是谁」—— 遍历顺序由 list-panes 决定。
+    run whistle_aggregate <<'EOF'
+%4|done|甲
+%9|done|乙
+EOF
+    assert_eq "$output" 'done|甲|2|%4'
+}
+
+@test "aggregate: 无人胜出时第 4 列是空串" {
+    # 所有 pane 都没有状态：没有胜出者，就没有 pane id。
+    # 这里特别容易写成 %1 —— _best_rank 为 0 时那个分支根本不进。
+    run whistle_aggregate <<'EOF'
+%1|banana|脏数据
+EOF
+    assert_eq "$output" '||0|'
+}
+
+@test "aggregate: 多加一列不改变待处理数的语义" {
+    # 防「修过头」：多输出 pane 不能影响 pending 的算法。
+    run whistle_aggregate <<'EOF'
+%1|done|好了
+%2|running|在跑
+%3|error|炸了
+EOF
+    assert_eq "$(printf '%s' "$output" | cut -d'|' -f3)" 2
+    assert_eq "${output##*|}" '%3'
 }
 
 # -- whistle_count_states ---------------------------------------------------

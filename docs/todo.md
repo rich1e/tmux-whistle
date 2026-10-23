@@ -12,8 +12,6 @@
 
 - [ ] **TODO-1** `jump` 不接受裸窗口名，但 `list` 显示的正是窗口名
 - [ ] **TODO-2** 菜单超过 26 项时静默截断
-- [ ] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
-- [ ] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
 
 ### 缺失能力
 
@@ -33,6 +31,7 @@
 - [x] **TODO-9** `-t` 写在消息前面时会静默写到别的 pane
 - [x] **TODO-10** `running` 被当成要打扰用户的状态扇出到所有 session
 - [x] **TODO-11** `running` 没有清除路径，agent 退出后 `●` 永远亮着
+- [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 
 ---
 
@@ -497,7 +496,8 @@ done 原样保留；重复触发幂等）、`test/integration/cli.bats` 2 条
 
 ## TODO-12 · 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 
-⬜ 待处理
+✅ 已修复（`lib/core.sh` 的 `whistle_aggregate` / `whistle_recompute_window` /
+`whistle_agent_windows` + `bin/tmux-whistle` 的 `cmd_menu` / `cmd_menu_args`）
 
 **现象**：一个窗口切成多格（pane）时，`prefix + W` 选中一项只会切到那个**窗口**，
 窗口里落在哪一格不保证 —— 常常不是正在等你的那一格。
@@ -562,6 +562,45 @@ switch-client -t $s ; select-window -t $wid ; run-shell -b '... clear -t $wid'
 `test/unit/core.bats`、`test/integration/cli.bats`。
 
 **开发计划**：[plans/2026-10-23-notify-absorption.md](superpowers/plans/2026-10-23-notify-absorption.md) 的 Task 1。
+
+**已修**：
+
+1. `whistle_aggregate` 的输出从三列变四列，**pane id 放末位**。
+   放末位不是随意的 —— `whistle_recompute_global` 用 `cut -d'|' -f3` 取待处理数，
+   放中间那里就得跟着改。
+2. `whistle_recompute_window` 多写一个 `@whistle_win_pane`。
+   窗口内没有 pane 时 `list-panes` 无输出 → 四列全空 → 该 option 被写成空串，
+   **自愈**，不需要额外兜底。
+3. `whistle_agent_windows` 的 format 加 pane 列（插在第 5 位），
+   `cmd_menu` / `cmd_menu_args` 的两处循环同步读出新列，命令串补 `select-pane`。
+
+**为什么 pane 必须由 `whistle_aggregate` 产出、不能另扫一遍算**：
+「窗口显示哪个状态」和「pane id 是谁」必须来自同一次判断。
+两次扫描各自选 rank 最高的 pane，一旦它们选到不同的 pane，
+菜单就会跳到「别的格子上那个同样高优先级」的 pane。代价是 `test/unit/core.bats`
+里 12 处三列断言要同步改成四列。
+
+**一个原本担心、结果不需要改的地方**：`whistle_state_clear` **不必**清
+`@whistle_win_pane` —— 它是 window 级派生值，调用方随后会跑
+`whistle_recompute_window` 覆盖掉。反倒在这里多清一遍，会在窗口已不存在时报错。
+结论已写进该函数注释。
+
+**已知限制（本次没加兜底）**：pane 在菜单弹出之后、命令执行之前被关掉时，
+`select-pane` 会报错，而 tmux 的 `;` 命令链遇错即停 —— 后面的 `clear` 不执行，
+状态会永远清不掉。
+窗口没有 pane 时 `@whistle_win_pane` 为空串**不会**触发这个问题（那是合法的空值），
+所以风险窗口只在「菜单开着的那一瞬间 pane 被关掉」。
+真要根治得给 `cmd_menu` 的每项加一次 pane 存活探测，那是每个 item 一次 tmux 调用 ——
+`cmd_menu_args` 的实测（182 项测试全绿，耗时明显）说明这套接口偏慢，不宜在热路径上加往返。
+TODO-2（Task 3）会顺带把这条命令串的结构整理一下，届时再评估。
+
+**回归测试**：`test/unit/core.bats` 12 处断言改为四列 + 4 条新用例
+（第 4 列是胜出 pane、等级相同取先出现者、无人胜出时为空串、多加一列不改变 pending 语义）；
+`test/integration/state.bats` 3 条（窗口态记住 pane id、清掉后回落为空、
+`agent_windows` 每行带 pane id）。合计 214 项全绿。
+
+**附带收益**：`@whistle_border_status` 从「分屏时的权宜之计」变回真正的锦上添花 ——
+它不再是「唯一能看出是哪个 pane 在等你」的手段。
 
 ---
 
@@ -676,7 +715,7 @@ whistle_sanitize() { ... | cut -c "1-$WHISTLE_MSG_MAX" | ... }
 
 | Task | 功能 | 对应 TODO | 状态 |
 |---|---|---|---|
-| 1 | 跳转精确到 pane | TODO-12 | ⬜ 未开始 |
+| 1 | 跳转精确到 pane | TODO-12 | ✅ 已完成 |
 | 2 | `jump` 接受裸窗口名 + 撞名不静默 | TODO-1 | ⬜ 未开始 |
 | 3 | 菜单截断不再静默 | TODO-2 | ⬜ 未开始 |
 | 4 | `run --` 命令包装器 | TODO-13 | ⬜ 未开始 |

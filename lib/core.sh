@@ -142,17 +142,24 @@ whistle_is_notified() {
 # whistle_aggregate
 #
 # stdin  = tmux list-panes -F '#{pane_id}|#{@whistle}|#{@whistle_msg}' 的输出
-# stdout = "<聚合态>|<消息>|<待处理数>"
+# stdout = "<聚合态>|<消息>|<待处理数>|<胜出状态的 pane id>"
 #
 # 分隔符用 '|'（非空白），否则 read 会把连续分隔符折叠掉，
-# 导致 @whistle 为空时后面的字段整体错位。消息在最后一列，
-# 所以即便含 '|' 也只会污染最后一个字段的尾部——而 sanitize 已经剔掉了它。
+# 导致 @whistle 为空时后面的字段整体错位。消息在中间列，
+# 所以即便含 '|' 也只会污染消息本身——而 sanitize 已经剔掉了它。
 #
 # 聚合规则：取 rank 最高的 pane 的状态与消息；全部为空时输出空状态。
+#
+# 第 4 列（pane id）放**末位**，不是第 2 位：whistle_recompute_global 用
+# `cut -d'|' -f3` 取待处理数，放末位那里就不用改。
+#
+# pane 与状态必须由同一个循环产出，不能另扫一遍算 pane —— 「窗口显示哪个状态」
+# 和「pane id 是谁」来自同一次判断；两次扫描可能选出不同的 pane。
 whistle_aggregate() {
   _best_rank=0
   _best_state=''
   _best_msg=''
+  _best_pane=''
   _pending=0
   while IFS='|' read -r _pane_id _state _msg || [ -n "${_pane_id:-}" ]; do
     # 合法 pane id 以 % 开头；跳过空行与解析失败的行
@@ -168,9 +175,10 @@ whistle_aggregate() {
       _best_rank=$_rank
       _best_state=$_state
       _best_msg=$_msg
+      _best_pane=$_pane_id
     fi
   done
-  printf '%s|%s|%s\n' "$_best_state" "$_best_msg" "$_pending"
+  printf '%s|%s|%s|%s\n' "$_best_state" "$_best_msg" "$_pending" "$_best_pane"
 }
 
 # whistle_count_states
@@ -241,6 +249,10 @@ whistle_state_set() {
 }
 
 # whistle_state_clear <pane> → stdout = pane id
+#
+# 不用清 @whistle_win_pane：那是 window 级派生值，调用方随后会跑
+# whistle_recompute_window 重算覆盖它（窗口内没有 pane 时重写成空串）。
+# 这里多清一遍反而可能在窗口已不存在时报错。
 whistle_state_clear() {
   _pane=$(whistle_resolve_pane "$1")
   [ -z "$_pane" ] && return 1
@@ -322,14 +334,23 @@ whistle_recompute_window() {
   _state=${_agg%%|*}
   _rest=${_agg#*|}
   _msg=${_rest%%|*}
-  _count=${_rest#*|}
+  # 剩下 "<待处理数>|<胜出 pane>"：先摘数再摘 pane。
+  # 窗口内没有 pane 时 list-panes 无输出 → 四列全空 → @whistle_win_pane
+  # 被写成空串，自愈，不需要额外兜底。
+  _rest=${_rest#*|}
+  _count=${_rest%%|*}
+  _pane=${_rest#*|}
 
   # window 级刻意用与 pane 级不同的名字（@whistle_win vs @whistle）。
   # 同名会造成影子遮蔽：清掉 pane 的 @whistle 后，查找会回退到 window 上的
   # 聚合值，于是 pane 看起来"清不掉"。
+  #
+  # @whistle_win_pane 记的是「这个窗口该亮的状态来自哪一格」——菜单跳转据此
+  # select-pane。它由重算覆盖，所以 whistle_state_clear 不必清它。
   whistle_tmux setw -t "$_win" @whistle_win "$_state" \
     \; setw -t "$_win" @whistle_win_msg "$_msg" \
-    \; setw -t "$_win" @whistle_win_count "$_count"
+    \; setw -t "$_win" @whistle_win_count "$_count" \
+    \; setw -t "$_win" @whistle_win_pane "$_pane"
 }
 
 whistle_recompute_global() {
@@ -380,20 +401,22 @@ whistle_list_lines() {
   done
 }
 
-# 所有上报过状态的 (session, window_id, window_name, window_index, state, msg)
+# 所有上报过状态的 (session, window_id, window_name, window_index, pane_id, state, msg)
 #
 # 与 whistle_pending_windows 的区别：**不过滤** whistle_is_notified，
 # 所以 running 也在内 —— 菜单要能列出「哪些窗口有 agent」，而不只是「哪些在等我」。
 #
 # 按 window_id 去重，保留 rank 最高的那一行：list-panes -a 是 pane 粒度，
 # 一个窗口开了多个 pane 时同一窗口会出现多次，菜单里就是重复条目。
+# 第 5 列是那一行所属的 pane id，菜单据此 select-pane —— 窗口切成多格时
+# 才不会落在隔壁格子。
 whistle_agent_windows() {
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle}|#{@whistle_msg}' \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_msg}' \
     2> /dev/null | awk -F'|' '
-    $5 == "" { next }
+    $6 == "" { next }
     {
-      r = ($5 == "error") ? 4 : ($5 == "wait") ? 3 : ($5 == "done") ? 2 : 1
+      r = ($6 == "error") ? 4 : ($6 == "wait") ? 3 : ($6 == "done") ? 2 : 1
       if (!($2 in best)) order[++n] = $2
       if (!($2 in best) || r > best[$2]) {
         best[$2] = r

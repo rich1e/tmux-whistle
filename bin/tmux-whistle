@@ -226,19 +226,19 @@ cmd_menu() {
   #             命令永远不会执行。它只是一份「哪些窗口有 agent」的清单。
   set --
   _i=0
-  while IFS='|' read -r s wid wn _wi st msg; do
+  while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" || continue
     _i=$((_i + 1))
     [ "$_i" -gt 26 ] && break
     _label=" $(whistle_state_label "$st") $s:$wn $msg"
     set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
-      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+      "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
   done << EOF
 $_items
 EOF
 
   _i=0
-  while IFS='|' read -r s wid wn _wi st msg; do
+  while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
     [ "$_i" -gt 10 ] && break
@@ -255,7 +255,7 @@ EOF
   # 3.8 用 arguments.c，两者都认 '--'）。少了它会报 "invalid flag -"。
   if ! whistle_tmux display-menu -T 'tmux-whistle' -- "$@" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + W 打开菜单。\n\n'
-    while IFS='|' read -r s wid wn _wi st msg; do
+    while IFS='|' read -r s wid wn _wi _pid st msg; do
       if whistle_is_notified "$st"; then
         printf '  %s  %s:%s  %s\n' "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
       else
@@ -274,19 +274,19 @@ cmd_menu_args() {
   [ -n "$_items" ] || return 0
 
   _i=0
-  while IFS='|' read -r s wid wn _wi st msg; do
+  while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" || continue
     _i=$((_i + 1))
     [ "$_i" -gt 26 ] && break
     printf '%s\n' " $(whistle_state_label "$st") $s:$wn $msg"
     printf '%s\n' "$(whistle_menu_key "$_i")"
-    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
+    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; select-pane -t $_pid ; run-shell -b '$WHISTLE_SELF clear -t $wid'"
   done << EOF
 $_items
 EOF
 
   _i=0
-  while IFS='|' read -r s wid wn _wi st msg; do
+  while IFS='|' read -r s wid wn _wi _pid st msg; do
     whistle_is_notified "$st" && continue
     _i=$((_i + 1))
     [ "$_i" -gt 10 ] && break
