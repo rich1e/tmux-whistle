@@ -550,6 +550,8 @@ seed_running_windows() {
   for c in "done" "wait" "error" "running" clear list menu jump doctor; do
     assert_contains "$output" "$c"
   done
+  # run 单独断言 —— 光靠 "run" 会被 "running" 满足，等于没断言
+  assert_contains "$output" 'run [--'
 }
 
 @test "done 带 -t 指定目标 pane" {

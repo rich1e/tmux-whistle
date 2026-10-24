@@ -66,8 +66,12 @@ Claude Code 集成：
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
   @whistle_color_done|wait|error|running   徽章与边框颜色
+  @whistle_color_pending             待处理总数的颜色（默认 #5fd7d7 青）
   @whistle_icon_done|wait|error|running    各状态的图标（默认 ◆ / ◔ / ⚠ / ▶）
+  @whistle_icon_idle                 没有 agent 在跑时那格显示的图标（默认 ◉）
   @whistle_icon_pending              全局计数前的图标（默认 ⚑；空串 = 不显示）
+  @whistle_spin on|off               running 用 Braille 帧轮转（默认 on）
+  @whistle_spin_interval 0.5         每帧间隔（秒）
 EOF
 }
 
