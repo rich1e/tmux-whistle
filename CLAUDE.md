@@ -71,6 +71,9 @@ publish，不用重载 tmux 配置。
 **CLI 表面**：`done|wait|error|running`（置状态，可带 `--title` / `--body`）、
 `run -- 命令`（按退出码落状态，带耗时）、`clear` / `list` / `menu` / `jump` / `on|off` /
 `doctor` / `install-hooks`。菜单键是 `prefix + n`。
+菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
+和窗口名、agent 的话分开（`whistle_menu_item_label` 是唯一定义处，
+`cmd_menu` 与 `cmd_menu_args` 共用它）。
 
 **图标与颜色**（都可配，见 `WHISTLE_DEFAULTS`）：`◆` 完成（紫 `#af5fff`）、`◔` 等待、
 `⚠` 错误、`▶` 运行中、`◉` 空转、`⚑` 待处理总数（青 `#5fd7d7`）。

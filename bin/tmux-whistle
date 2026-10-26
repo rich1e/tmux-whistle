@@ -405,8 +405,15 @@ whistle_menu_state_color() {
 #
 # 抽成函数是因为 cmd_menu 与 cmd_menu_args 必须逐字相同 —— 改一边不改另一边，
 # 测试就会变假绿（这个坑踩过一次）。
+#
+# session 名用 [] 裹起来：它和窗口名、agent 的话挤在同一行里，
+# 不裹起来就分不清哪一段是「哪个 session」、哪一段是「agent 说了什么」。
+# 例：完成 [main]: w1 做完了
+#
+# 窗口名不裹 —— 它是「session 里的哪一格」，紧贴 session 更好读；
+# 真正需要与内容区分开的只有 session 这一层。
 whistle_menu_item_label() {
-  printf '#[fg=%s]%s#[default] %s %s:%s %s' \
+  printf '#[fg=%s]%s#[default] %s [%s]: %s %s' \
     "$(whistle_menu_state_color "$1")" "$(whistle_menu_state_icon "$1")" \
     "$(whistle_state_label "$1")" "$2" "$3" "${4:-}"
 }
@@ -475,15 +482,14 @@ EOF
   # 3.8 用 arguments.c，两者都认 '--'）。少了它会报 "invalid flag -"。
   if ! whistle_tmux display-menu -T 'tmux-whistle' -- "$@" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
+    # 纯文本降级，没有菜单可选中，所以不带样式转义（那会原样显示出来）。
+    # 格式与菜单 label 保持一致（session 用 [] 裹住），只是少了样式前缀。
+    #
+    # 待处理与 running 原本是两个分支，但两条 printf 逐字相同 —— 合并成一条，
+    # 省得以后改格式只改一半。
     while IFS='|' read -r s wid wn _wi _pid st msg; do
-      if whistle_is_notified "$st"; then
-        printf '%s %s  %s:%s  %s\n' "$(whistle_menu_state_icon "$st")" \
-          "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
-      else
-        # 纯文本降级，没有菜单可选中，所以不带样式转义（那会原样显示出来）
-        printf '%s %s  %s:%s  %s\n' "$(whistle_menu_state_icon "$st")" \
-          "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
-      fi
+      printf '%s %s  [%s]: %s  %s\n' "$(whistle_menu_state_icon "$st")" \
+        "$(whistle_state_label "$st")" "$s" "$wn" "$msg"
     done << EOF
 $_items
 EOF

@@ -40,12 +40,31 @@ pane_of() {
   cmd=$(printf '%s\n' "$output" | sed -n 3p)
 
   assert_contains "$label" '完成'
-  assert_contains "$label" 'main:w1'
+  assert_contains "$label" '[main]: w1'
   assert_contains "$label" '做完了'
   assert_eq "$key" '1'
   assert_contains "$cmd" 'switch-client -t main'
   assert_contains "$cmd" 'select-window -t @'
   assert_contains "$cmd" 'clear -t @'
+}
+
+@test "menu-args: session 名用 [] 裹住，与窗口名、消息分开" {
+  # 菜单一行里挤着三样东西：session 名、窗口名、agent 的话。
+  # 早先是 `完成 main:w1 做完了` —— session 名和内容糊在一起，
+  # 看到 "main:w1" 只知道有个冒号，不知道哪一段才是 session。
+  # 现在标题裹进 []：`完成 [main]: w1 做完了`。
+  "$CLI" "done" '做完了'
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+
+  local label
+  label=$(printf '%s\n' "$output" | sed -n 1p)
+
+  assert_contains "$label" '[main]: w1'
+  # 只有 session 是「标题」：窗口名不裹，消息也不裹
+  assert_contains "$label" 'w1 做完了'
+  assert_not_contains "$label" '[w1]'
+  assert_not_contains "$label" '[做完了]'
 }
 
 @test "menu-args: 多窗口时键位依次是 1 2 3" {
