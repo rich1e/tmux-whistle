@@ -267,7 +267,7 @@ tmux-whistle run -- pnpm test
 - **影响的现有行为**：这是**用户可见的行为变更**，需要在 README 里写清楚
   ——「切进窗口后徽章消失，但 🔔 待处理数可能仍在」正是这条变更的体现。
 - **需要新增的语义**：什么时候算「已处理」？文档没给。本仓的答案应该是
-  **agent 下一次上报状态**（`SessionStart` / `UserPromptSubmit` 会置 `running`，
+  **agent 下一次上报状态**（`UserPromptSubmit` 置 `running`，
   自然把上一轮 `done`/`wait` 顶掉）—— 这正好与现有实现一致，不需要新机制。
 
 #### B-3 状态栏引入独立的「未读」维度

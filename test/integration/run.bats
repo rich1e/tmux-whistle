@@ -75,8 +75,8 @@ assert_nonzero() {
 @test "run: 收到 SIGINT 时包装器不被打死，落终态而不是停在 running" {
   # Ctrl-C 把 SIGINT 发给**整个前台进程组**。没有 handler 的话，/bin/sh 跑的
   # 包装器会在读到 $? 之前就被打死 —— 状态永远停在 running。
-  # 而 running 不计入 pending、🔔 不亮，非 Claude Code 的进程更没有
-  # SessionEnd 兜底，那盏 ● 就再也灭不掉了。
+  # 而 running 不计入 pending、⚑ 不亮，非 Claude Code 的进程更没有
+  # SessionEnd 兜底，那盏 ▶ 就再也灭不掉了。
   #
   # 必须 set -m 才能复现：非交互 shell 里 `cmd &` 的后台作业默认**忽略** SIGINT，
   # 不开 job control 的话信号根本打不到包装器，测试会假绿。

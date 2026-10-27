@@ -184,7 +184,7 @@ cmd_set() {
 # ⚠️ 但必须给 SIGINT 装一个 no-op handler。Ctrl-C 把信号发给**整个前台进程组**，
 # 不装的话 /bin/sh 跑的包装器会在读到 $? 之前就死掉 —— 状态永远停在 running，
 # 而 running 不计入 pending、⚑ 不亮，非 Claude Code 的进程更没有 SessionEnd
-# 兜底，那盏 ● 就再也灭不掉了。
+# 兜底，那盏 ▶ 就再也灭不掉了。
 #
 # 必须用 ':'（no-op）而不是 ''（ignore）：被 **trap** 的信号在子进程里复位成
 # 默认动作，子命令照样能被 Ctrl-C 打断；被 ignore 的信号会连子进程一起忽略 ——
@@ -627,7 +627,7 @@ cmd_read_pane() {
 
 # agent 退出（SessionEnd hook）时清掉该 pane 的 running。
 #
-# running 是「正在干活」的临时标记，agent 走了就该灭 —— 否则窗口会一直亮 ●。
+# running 是「正在干活」的临时标记，agent 走了就该灭 —— 否则窗口会一直亮 ▶。
 # 只清 running：done/wait/error 是待处理通知，agent 退出不代表你已经看过。
 cmd_forget_running() {
   _pane="${1:-}"

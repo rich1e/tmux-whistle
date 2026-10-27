@@ -156,9 +156,9 @@ stub_display_targets() {
 
 # -- running 不打扰 ---------------------------------------------------------
 #
-# 回归：whistle_deliver 曾经对所有状态无条件扇出。而 SessionStart /
-# UserPromptSubmit 都会置 running —— 于是每敲一次 prompt，其它 session 就收到
-# 一条「运行中」。徽章早就屏蔽了 running，另外两个渠道漏了。
+# 回归：whistle_deliver 曾经对所有状态无条件扇出。而 UserPromptSubmit 会把状态
+# 置成 running —— 于是每敲一次 prompt，其它 session 就收到一条「运行中」。
+# 徽章早就屏蔽了 running，另外两个渠道漏了。
 
 @test "deliver: running 不发瞬时提示（每敲一次 prompt 不该刷屏）" {
   wt set -g @whistle_display on

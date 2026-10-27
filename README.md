@@ -88,7 +88,7 @@ tmux-whistle doctor
 
 > **升级插件后要重跑一次 `tmux-whistle install-hooks`。** hooks 是快照式写进
 > `settings.json` 的，新增的事件（`StopFailure` / `SessionEnd`）不会自己出现 ——
-> 不重跑的话 agent 因 API 错误中断时不会亮 `⚠`，退出后 `●` 也不会自己灭。
+> 不重跑的话 agent 因 API 错误中断时不会亮 `⚠`，退出后 `▶` 也不会自己灭。
 > 该命令是幂等的，其它 hook 原样保留。
 
 ### macOS：系统通知授权（**必做**，否则系统通知静默失效）
@@ -322,7 +322,7 @@ tmux-whistle wait "需要你选数据库"
 tmux-whistle done    "重构完成"     # 标记完成
 tmux-whistle wait    "等你批准"     # 标记等待
 tmux-whistle error   "构建失败"     # 标记出错
-tmux-whistle running               # 开始干活（亮 ●，不计入 ⚑）
+tmux-whistle running               # 开始干活（亮 ▶，不计入 ⚑）
 
 tmux-whistle run -- npm test       # 包一个命令：按退出码落 ◆ / ⚠，带耗时
 tmux-whistle run '测试' -- npm test # 自定义标签

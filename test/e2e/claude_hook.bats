@@ -208,7 +208,7 @@ EOF
 
 # -- SessionEnd ------------------------------------------------------------
 #
-# SessionEnd 是 running 的"灭灯"信号：agent 退出了，窗口不该继续亮 ●。
+# SessionEnd 是 running 的"灭灯"信号：agent 退出了，窗口不该继续亮 ▶。
 
 @test "e2e: SessionEnd 清掉该 pane 的 running" {
   feed <<'EOF'

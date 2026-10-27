@@ -38,7 +38,7 @@ whistle_status_right_publish
 # 幂等注入窗口状态栏（连续执行不会叠出双徽章，KP-4）
 whistle_format_patch window-status-format
 whistle_format_patch window-status-current-format
-# 跨 session 可见性：不管你在哪个 session，右侧都能看到 🔔N
+# 跨 session 可见性：不管你在哪个 session，右侧都能看到 ⚑N
 whistle_status_right_patch
 
 # 重算一次聚合。**必须在插件加载时就做** —— 一个「早就报了 running、

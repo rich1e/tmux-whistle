@@ -125,7 +125,7 @@ SessionStart)
   exit 0
   ;;
 SessionEnd)
-  # agent 退出了：`running` 这个"正在干活"的标记必须灭掉，否则窗口会一直亮 ●。
+  # agent 退出了：`running` 这个"正在干活"的标记必须灭掉，否则窗口会一直亮 ▶。
   # 只清 running —— done/wait/error 是待处理通知，agent 退出不代表你已经看过，
   # 那几条要留到你切进去处理。
   #

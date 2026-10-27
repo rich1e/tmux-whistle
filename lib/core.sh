@@ -346,7 +346,7 @@ whistle_state_clear() {
 # 只清除指定 pane 上指定的那一个状态（不匹配就什么都不做），并重算
 #
 # 用途：SessionEnd —— agent 退出了，`running` 这个"正在干活"的标记就该灭，
-# 否则窗口会一直亮 ● 。**只清 running**：done/wait/error 是待处理通知，
+# 否则窗口会一直亮 ▶。**只清 running**：done/wait/error 是待处理通知，
 # agent 退出不代表你已经看过。
 #
 # 返回值：真的清了就打印所属 window id（调用方据此释放边框/重绘），否则返回 1。
