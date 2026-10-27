@@ -182,6 +182,17 @@ pane_of() {
   assert_contains "$output" '#[fg=#00af00]▶#[default] 运行中'
 }
 
+@test "menu-args: 没上报过但前台跑着 agent 的窗口也列出来（◉ 空闲）" {
+  # 这就是「恢复 tmux 后 3 个 agent 都在，但插件从没收到过它们的事件」的现场：
+  # 靠 pane 的前台进程名把它们认成空闲。
+  local cmd
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+
+  run "$CLI" --menu-args
+  assert_contains "$output" '#[fg=#8a8a8a]◉#[default] 空闲'
+}
+
 @test "menu-args: idle 项是灰色 ◉、标签是「空闲」" {
   # idle 是「进程在、没在干活」。它会出现在菜单里，与 running 分得开。
   wt set -g @whistle_spin off
@@ -782,7 +793,7 @@ seed_running_windows() {
 
 # -- 内部：--clear-pane（SessionEnd 用） -------------------------------------
 
-@test "--clear-pane: 只清 running，待处理状态原样保留" {
+@test "--clear-pane: running 收成 gone，待处理状态原样保留" {
   wt new-window -d -n w2
   local p1 p2
   p1=$(wt display -p -t w1 '#{pane_id}')
@@ -790,9 +801,17 @@ seed_running_windows() {
   "$CLI" running -t "$p1"
   "$CLI" "done" 'x' -t "$p2"
 
+  # 清空的话，紧接着的重算会按「前台还跑着 agent」把它又认成空闲 ——
+  # 那盏 ◉ 永远灭不掉。所以写成 gone：状态列非空，「发现」不会认它。
+  # 这里把 pane 的前台进程写进清单，正是要验证 gone 挡住了重新发现。
+  local cmd
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+
   run "$CLI" --clear-pane "$p1"
   assert_eq "$status" 0
-  assert_eq "$(wt show -pqv -t "$p1" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$p1" @whistle)" 'gone'
+  assert_eq "$(opt '@whistle_count_idle')" '0'
 
   # done 是待处理通知：agent 退出不代表用户已经看过
   run "$CLI" --clear-pane "$p2"

@@ -954,6 +954,30 @@ TODO-15 把 `SessionStart` 从 `running` 改掉之后，这类 agent 就变成�
   （早先同一个字符在状态栏表示「空闲」、在菜单表示「在跑」）。
 - idle 不计入 `⚑N`、不染边框、不发瞬时提示与桌面通知、不进 `list`。
 
+**后续（同日追加）：按进程发现空闲**
+
+第一版只让 hook 在 `SessionStart` 报 idle，结果计数还是不准：
+
+- **存量 agent**：功能落地之前启动的那些 agent，它们的 `SessionStart` 走的是老分支
+  （只清不写），插件从头到尾不知道它们存在 → `◉ 0`，而实际有 3 个在等。
+- **读完通知之后**：一轮做完、你把 `done` 读掉，那一格被清空 —— agent 还活着，
+  却不再计入 `◉`。计数会再次掉回 0。
+
+解法：加一层「有效状态」推导（`whistle_resolve_idle_panes`，纯函数）——
+**没上报状态、但前台跑着 agent 进程的 pane 算 idle**。判据是 tmux 自己的事实
+（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符；「哪些进程算 agent」由用户配
+（`@whistle_agent_cmds`，默认 `claude claude.exe`）。推导放在纯函数之前，
+窗口徽章、全局计数、菜单三处因此口径一致。
+
+**已知限制**：比对的是 `pane_current_command`（**进程名**，不是命令行）。原生二进制
+装出来的 `claude` 匹配得上；跑在 node 上的 `claude` 那边看到的是 `node`，得自己把
+`node` 加进清单 —— 但不能只填 `node`，跑 node 的 pane 不止 agent 这一个。
+
+同时引入 `gone` 状态（只有 `SessionEnd` 会写）：钩子跑的时候 agent 进程**还没退出**，
+`pane_current_command` 仍是 claude —— 那时若把状态清空，紧接着的重算会又把它认成
+空闲，留下一盏灭不掉的 `◉`。写成 `gone` 就绕开了（`gone` 的 rank 是 0：徽章不显示、
+计数不涨、菜单不列）。
+
 **回归测试**：rank 的相对关系、count_states 五段、aggregate 里 idle 能胜出但输给
 running、汇总「只有 idle 时也显示」、菜单 `▶ 运行中` / `◉ 空闲`、
 e2e 的 SessionStart→idle / 不顶掉 done 与 wait / SessionEnd 清 idle。

@@ -137,6 +137,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin off` 时才用；开时是 Braille 帧） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
+| `@whistle_agent_cmds` | `claude claude.exe` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
@@ -269,9 +270,22 @@ session 里的细节"。
 就朝所有 session 推一条「运行中」纯属噪声。它们出现在状态栏汇总的 `▶N` / `◉N` 里，
 `prefix + n` 菜单里分别是绿色 `▶` 与灰色 `◉`，agent 退出（`SessionEnd`）时一起熄灭。
 
-`idle` 只在**会话开始 / 恢复**时写入，而且**顶不掉待处理通知** —— 恢复会话不会把
-上一轮还没读的 `◆` / `◔` / `⚠` 当成已读。它也不参与「已读即清除」：你读完一条
-`done` 之后那一格是空的，不是 `◉`。
+`idle` 有两个来源：
+
+- **会话开始 / 恢复**时 hook 报上来（`SessionStart`）；
+- **按进程发现**：某个 pane 从没上报过状态、但前台跑着 agent 进程
+  （`@whistle_agent_cmds` 里那些，默认 `claude claude.exe`）—— 用 resurrect
+  恢复 tmux 之后，那几个还停在提示符前等你的 agent 就属于这一类。
+
+> 按进程发现比对的是 tmux 的 `pane_current_command`，那是**进程名**而不是命令行。
+> 原生二进制装出来的 `claude` 匹配得上；跑在 node 上的 `claude` 那边看到的是
+> `node` —— 那就把 `node` 也加进清单（但别只填 `node`：跑 node 的 pane 不止 agent）。
+> 对不上的时候先看一眼实际值：
+> `tmux list-panes -a -F '#{pane_id} #{pane_current_command}'`。
+
+`idle` **顶不掉待处理通知**：恢复会话不会把上一轮还没读的 `◆` / `◔` / `⚠` 当成
+已读。读完一条 `done` 之后，那一格会被清空；但只要 agent 还活着（前台进程还在），
+按进程发现会把它算回 `◉` —— 所以「活着但在等」这件事不会因为你读过就消失。
 
 ### 怎么响应
 

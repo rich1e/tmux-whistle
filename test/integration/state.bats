@@ -165,6 +165,56 @@ pane_of() {
   assert_eq "$(opt '@whistle_pending')" '2'
 }
 
+@test "recompute_global: 没上报过但前台跑着 agent 的 pane 算 idle" {
+  # 「按进程发现空闲」：测试里 pane 跑的是当前 shell，把它写进 agent 清单
+  # 就能触发。真实场景是 resurrect 拉起来的 claude --continue ——
+  # 它的 SessionStart 还没送到时，插件对那个 pane 一无所知。
+  local cmd
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+  wt new-window -d -n w2
+  local p2
+  p2=$(wt display -p -t w2 '#{pane_id}')
+  whistle_state_set "done" 'a' "$p2"
+
+  whistle_recompute_global
+  # w1 从没上报过，但前台跑着「agent」→ 算空闲
+  assert_eq "$(opt '@whistle_count_idle')" '1'
+  # w2 有待处理通知 → 不算空闲
+  assert_eq "$(opt '@whistle_count_done')" '1'
+}
+
+@test "recompute_window: 没上报过但前台跑着 agent 的窗口，聚合态是 idle" {
+  local cmd w
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+  w=$(wt display -p -t w1 '#{window_id}')
+
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'idle'
+}
+
+@test "read: 读完 done 之后 agent 还活着 → 那一格算回 idle" {
+  # 「按进程发现」的核心承诺：读完一条通知 ≠ agent 走了。
+  # 通知被清空后，那一格要靠「前台还跑着 agent」重新算回 ◉，
+  # 否则「活着但在等」这件事会随你读没读而忽隐忽现。
+  wt_load status-line
+  local cmd p
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+  p=$(pane_of)
+
+  whistle_state_set "done" '做完了' "$p"
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_done')" '1'
+  assert_eq "$(opt '@whistle_count_idle')" '0'
+
+  whistle_read_pane "$p"
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
+  assert_eq "$(opt '@whistle_count_done')" '0'
+  assert_eq "$(opt '@whistle_count_idle')" '1'
+}
+
 @test "recompute_global: 只数待处理状态，running 不算" {
   wt new-session -d -s other
   local pa pb

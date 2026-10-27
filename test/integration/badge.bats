@@ -74,20 +74,35 @@ teardown() {
     assert_not_contains "$output" '⚠'
 }
 
-@test "KP-1: 四种状态各自渲染自己的符号，互不串台" {
+@test "KP-1: idle 显示 ◉ 徽章（进程在但闲着）" {
     wt_load core
     wt_load status-line
     whistle_mark_publish
     whistle_format_patch window-status-format
 
-    for pair in 'done ◆' 'wait ◔' 'error ⚠' 'running ▶'; do
+    wt set -w -t w1 @whistle_win "idle"
+    run wt_render_windows
+    assert_contains "$output" 'w1◉'
+    # idle 不该串到待处理三态的符号上
+    assert_not_contains "$output" '◆'
+    assert_not_contains "$output" '◔'
+    assert_not_contains "$output" '⚠'
+}
+
+@test "KP-1: 各状态各自渲染自己的符号，互不串台" {
+    wt_load core
+    wt_load status-line
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+
+    for pair in 'done ◆' 'wait ◔' 'error ⚠' 'running ▶' 'idle ◉'; do
         local st="${pair% *}" sym="${pair#* }"
         wt set -w -t w1 @whistle_win "$st"
         run wt_render_windows
         assert_contains "$output" "w1${sym}"
-        # 只断言本状态该有的符号：其余三个不该同时出现
+        # 只断言本状态该有的符号：其余四个不该同时出现
         local other
-        for other in ◆ ◔ ⚠ ▶; do
+        for other in ◆ ◔ ⚠ ▶ ◉; do
             [ "$other" = "$sym" ] && continue
             assert_not_contains "$output" "$other"
         done

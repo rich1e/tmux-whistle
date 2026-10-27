@@ -42,6 +42,17 @@ whistle_now() {
 # 「已读即消失」这条语义不受影响。
 WHISTLE_STATES='running idle done wait error'
 
+# gone = 这个 pane 上曾有 agent，现在已经退出。**不是**用户可报的状态，
+# 只有 SessionEnd 会写它。
+#
+# 为什么需要它：SessionEnd 钩子跑的时候，agent 进程**还没退出**，
+# pane_current_command 仍是 claude —— 那一刻若把状态清空，紧接着的重算会
+# 又把它当成「空闲」，留下一盏永远灭不掉的 ◉。写成 gone 就不会：
+# 「发现」只看空状态，gone 不是空的。
+#
+# 它的 rank 是 0（不算任何优先级）、不算待处理、徽章不显示、菜单不列。
+WHISTLE_GONE_STATE=gone
+
 # window 聚合优先级：error > wait > done > running > idle > ''
 # 已读通知 = done / wait / error 三种（idle 不算待处理）
 WHISTLE_NOTIFIED_STATES='done wait error'
@@ -145,6 +156,7 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_spin_interval 0.5
 @whistle_display_ms 0
 @whistle_debug off
+@whistle_agent_cmds claude claude.exe
 @whistle_detect off
 @whistle_detect_interval 15
 @whistle_detect_idle 180'
@@ -236,12 +248,17 @@ whistle_is_transient() {
 
 # whistle_aggregate
 #
-# stdin  = tmux list-panes -F '#{pane_id}|#{@whistle}|#{@whistle_msg}' 的输出
+# stdin  = tmux list-panes -F '<pane_id>|<状态>|<消息>' 的输出
+#          （调用方会先过 whistle_resolve_idle_panes，命令列已经被去掉）
 # stdout = "<聚合态>|<消息>|<待处理数>|<胜出状态的 pane id>"
 #
 # 分隔符用 '|'（非空白），否则 read 会把连续分隔符折叠掉，
-# 导致 @whistle 为空时后面的字段整体错位。消息在中间列，
-# 所以即便含 '|' 也只会污染消息本身——而 sanitize 已经剔掉了它。
+# 导致 @whistle 为空时后面的字段整体错位。
+#
+# ⚠️ **只读 3 个变量**：POSIX 的 read 在字段数多于变量数时，会把余下的
+# （含分隔符）全塞进最后一个变量。消息列在**末位**，读满 3 个变量时它拿到的是
+# 「余下的全部」——消息里带 '|' 也不会被截断。反过来若只读 2 个变量，
+# 状态列就变成了「消息|别的」，消息会顶掉状态。
 #
 # 聚合规则：取 rank 最高的 pane 的状态与消息；全部为空时输出空状态。
 #
@@ -295,6 +312,69 @@ whistle_count_states() {
     $2 == "wait"    { w++ }
     $2 == "error"   { e++ }
     END { printf "%d|%d|%d|%d|%d\n", r, i, d, w, e }
+  '
+}
+
+# whistle_resolve_idle_panes <agent 命令名清单> <状态列号>
+#
+# stdin  = list-panes 的输出（字段用 | 分隔），每行一个 pane
+#          **最后一列是前台进程名**（`#{pane_current_command}`）
+# stdout = **去掉最后一列**之后的同样几行，只改了「状态列」：
+#   有上报状态               → 原样（running/done/wait/error/idle/gone）
+#   没上报、但前台进程是 agent → idle（空闲）
+#   两者都不是                → 原样（空）
+#
+# 为什么要有这一层：插件是推送式的，只认 hook 上报过的东西。可是一个刚被
+# resurrect 拉起来的 `claude --continue`，它的 SessionStart 还没送到时，
+# 那个 pane 看起来是「空的」；同理，一轮做完、通知被读掉之后那一格也会变空 ——
+# 而 agent 其实还活着、还在提示符前等着。
+#
+# 「哪些进程算 agent」由用户自己配（@whistle_agent_cmds）。判据是 tmux 自己的
+# 事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
+#
+# 纯函数：agent 清单由调用方传进来 —— 读 tmux option 是 tmux 调用，不能进纯
+# 函数（L1 单测要能脱离 tmux 跑）。
+#
+# ⚠️ **命令列取最后一列（$(NF)），不是某个固定的列号**。固定列号会被消息里的
+# '|' 带偏（消息本身不该有 '|'，但那不是这里该依赖的保证）；而最后一列永远是
+# 命令名 —— 状态列在消息之前、命令列在消息之后，两边都不受消息内容影响。
+#
+# ⚠️ **命令列被整列去掉，不是留在流里**。下游（whistle_aggregate、菜单的
+# `read`）按固定列数读，而 POSIX 的 read 在字段数多于变量数时会把余下的
+# （含分隔符）全塞进最后一个变量 —— 留着这一列，消息列就会变成
+# 「消息|进程名」，而 @whistle_win_msg 与菜单标签会把它原样显示出去。
+whistle_resolve_idle_panes() {
+  _rip_cmds="${1:-}"
+  _rip_sc="${2:-}"
+
+  [ "$_rip_sc" -gt 0 ] 2> /dev/null || return 1
+
+  # ⚠️ 清单为空时**也要走 awk**（只做去列、不改状态）：下游读的列数必须
+  # 与清单无关 —— 否则用户把 @whistle_agent_cmds 清空，下游的 read 就会
+  # 把「消息|进程名」当成消息。
+  #
+  # ⚠️ OFS 必须显式设成 '|'：awk 里**给字段赋值会把 $0 重建一遍**，分隔符用
+  # OFS（默认是空格）。不设的话输出会变成空格分隔，下游按 '|' 切列全错位。
+  #
+  # 去掉一整列是无损的：按 '|' 切开再按 '|' 拼回去，消息里的 '|' 原样还在。
+  awk -F'|' -v OFS='|' -v cmds="$_rip_cmds" -v sc="$_rip_sc" '
+    BEGIN {
+      n = split(cmds, a, " ")
+      for (i = 1; i <= n; i++) if (a[i] != "") list[a[i]] = 1
+    }
+    {
+      # NF > sc：状态列必须真的存在，否则给不存在的字段赋值会把记录撑长，
+      # 列号就全错了（list-panes 的行永远是 4 列，这里只是兜底）。
+      if (NF > sc && $sc == "" && ($NF in list)) $sc = "idle"
+      out = ""
+      k = 0
+      for (i = 1; i < NF; i++) {
+        k++
+        out = (k == 1 ? $i : out OFS $i)
+      }
+      if (NF < 2) out = $0
+      print out
+    }
   '
 }
 
@@ -384,6 +464,31 @@ whistle_state_clear() {
   printf '%s' "$_pane"
 }
 
+# whistle_state_gone <pane> → stdout = pane id
+#
+# 把 pane 标成「agent 已退出」（WHISTLE_GONE_STATE）。
+#
+# 为什么不直接清空：SessionEnd 钩子跑的时候 agent 进程还没退出，
+# pane_current_command 仍是 claude —— 清空的话，紧接着的重算会按
+# 「前台跑着 agent」把它当成空闲，留下一盏灭不掉的 ◉。写成 gone 就绕开了。
+#
+# 与 whistle_state_clear 的区别：清空 = 「这里什么状态都没有」，
+# gone = 「这里曾有 agent，已经走了」。后者还留着信息，且不会被
+# 「按进程发现空闲」重新认成 agent。
+#
+# 正文（@whistle_body）一并清掉：agent 都走了，那段回复不再属于任何待处理项。
+whistle_state_gone() {
+  _sg_pane=$(whistle_resolve_pane "${1:-}")
+  [ -z "$_sg_pane" ] && return 1
+
+  whistle_tmux set -p -t "$_sg_pane" @whistle "$WHISTLE_GONE_STATE" \
+    \; set -p -t "$_sg_pane" -u @whistle_msg \
+    \; set -p -t "$_sg_pane" -u @whistle_at \
+    \; set -p -t "$_sg_pane" -u @whistle_body || return 1
+
+  printf '%s' "$_sg_pane"
+}
+
 # 只清除指定 pane 上指定的那一个状态（不匹配就什么都不做），并重算
 #
 # 用途：需要「当前值恰好是 X 才清」的场景，比如 restart 时清掉 running。
@@ -407,26 +512,28 @@ whistle_clear_pane_state() {
   return 0
 }
 
-# 清除指定 pane 上的「临时」状态（running / idle），并重算
+# whistle_forget_agent <pane> → stdout = 所属 window id
 #
-# 用途：SessionEnd —— agent 退出了，「正在干活」和「空闲待命」两个标记都该灭，
-# 否则窗口会一直亮 ▶ / ◉。待处理通知（done/wait/error）一律不动：
-# agent 退出不代表你已经看过。
+# agent 退出了（SessionEnd）：
+#   当前是待处理通知（done/wait/error）→ **原样留着**。agent 退出不代表
+#     你已经看过，那几条要留到你切进去处理。
+#   当前是临时状态（running/idle）或空 → 写成 gone（见 whistle_state_gone）。
 #
-# 返回值同 whistle_clear_pane_state：真清了才打印 window id。
-whistle_clear_pane_transient() {
-  _cpt_pane=$(whistle_resolve_pane "${1:-}")
-  [ -z "$_cpt_pane" ] && return 1
+# 无论哪种都重算：状态变了，徽章与计数得跟上。
+whistle_forget_agent() {
+  _fa_pane=$(whistle_resolve_pane "${1:-}")
+  [ -z "$_fa_pane" ] && return 1
 
-  _cpt_have=$(whistle_tmux show -pqv -t "$_cpt_pane" @whistle 2> /dev/null) || _cpt_have=''
-  whistle_is_transient "$_cpt_have" || return 1
+  _fa_have=$(whistle_tmux show -pqv -t "$_fa_pane" @whistle 2> /dev/null) || _fa_have=''
+  if whistle_is_transient "$_fa_have" || [ -z "$_fa_have" ]; then
+    whistle_state_gone "$_fa_pane" > /dev/null
+  fi
 
-  whistle_state_clear "$_cpt_pane" > /dev/null
-  _cpt_win=$(whistle_pane_window "$_cpt_pane")
-  [ -n "$_cpt_win" ] && whistle_recompute_window "$_cpt_win"
+  _fa_win=$(whistle_pane_window "$_fa_pane")
+  [ -n "$_fa_win" ] && whistle_recompute_window "$_fa_win"
   whistle_recompute_global
 
-  printf '%s' "$_cpt_win"
+  printf '%s' "$_fa_win"
   return 0
 }
 
@@ -468,7 +575,12 @@ whistle_clear_all() {
 whistle_recompute_window() {
   _win="$1"
   _lines=$(whistle_tmux list-panes -t "$_win" \
-    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}' 2> /dev/null)
+    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' 2> /dev/null)
+
+  # 状态列 2、命令列（最后一列）：没上报过、但前台跑着 agent 的 pane 算 idle。
+  # 这层推导在纯函数之前做，下游（聚合、计数、菜单）全都白拿同一个口径。
+  _lines=$(printf '%s\n' "$_lines" \
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2)
 
   _agg=$(printf '%s' "$_lines" | whistle_aggregate)
   _state=${_agg%%|*}
@@ -499,10 +611,13 @@ whistle_recompute_window() {
 whistle_recompute_global() {
   # 必须带 pane_id：whistle_aggregate 会跳过不以 '%' 开头的行，
   # 只传 @whistle 的话每一行都被丢掉，计数恒为 0。
-  # 全局计数用不到消息，消息列留空。
   #
   # 一次 list-panes 喂两个纯函数：聚合态 / 待处理总数 + 各状态分布。
-  _cg_rows=$(whistle_tmux list-panes -a -F '#{pane_id}|#{@whistle}' 2> /dev/null)
+  # 第 4 列是前台进程名，用来推导「没上报过但跑着 agent」的 idle。
+  _cg_rows=$(whistle_tmux list-panes -a \
+    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' 2> /dev/null)
+  _cg_rows=$(printf '%s\n' "$_cg_rows" \
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2)
 
   _n=$(printf '%s\n' "$_cg_rows" | whistle_aggregate | cut -d'|' -f3)
   _c=$(printf '%s\n' "$_cg_rows" | whistle_count_states)
@@ -567,11 +682,18 @@ whistle_list_lines() {
 #
 # ⚠️ 这里的 rank 必须与 whistle_rank 一致（awk 里没法调 shell 函数）。
 # 两处对不上时症状很隐蔽：窗口徽章显示 ▶、菜单却排成 idle 那一条。
+#
+# 第 8 列是前台进程名：没上报过、但跑着 agent 的 pane 也要列进菜单（状态算
+# idle）—— 与窗口徽章、状态栏汇总同一口径。
+#
+# 注意：推导层会**去掉最后一列**（命令名），所以下面 awk 看到的行是 7 列。
 whistle_agent_windows() {
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_msg}' \
-    2> /dev/null | awk -F'|' '
-    $6 == "" { next }
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' \
+    2> /dev/null \
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 6 \
+    | awk -F'|' -v gone="$WHISTLE_GONE_STATE" '
+    $6 == "" || $6 == gone { next }
     {
       r = ($6 == "error") ? 5 : ($6 == "wait") ? 4 : ($6 == "done") ? 3 : ($6 == "running") ? 2 : 1
       if (!($2 in best)) order[++n] = $2

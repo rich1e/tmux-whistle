@@ -627,25 +627,32 @@ cmd_read_pane() {
   whistle_refresh_sessions "$_win"
 }
 
-# agent 退出（SessionEnd hook）时清掉该 pane 的「临时」状态。
+# agent 退出（SessionEnd hook）时收尾这个 pane。
 #
-# running / idle 都是「agent 进程活着」的标记：在干活 / 闲着待命。agent 走了
-# 两个都该灭 —— 否则窗口会一直亮 ▶ 或 ◉。待处理通知（done/wait/error）一律
-# 不动：agent 退出不代表你已经看过。
-cmd_forget_transient() {
+# 「正在干活」（running）和「空闲待命」（idle）两个标记都该灭 —— 否则窗口会
+# 一直亮 ▶ 或 ◉。但**不能直接清空**：钩子跑的时候 agent 进程还没退出，
+# pane_current_command 仍是 claude，清空的话紧接着的重算会又把它当成空闲。
+# 所以写成 gone（见 whistle_forget_agent）。
+#
+# 待处理通知（done/wait/error）一律不动：agent 退出不代表你已经看过。
+cmd_forget_agent() {
   _pane="${1:-}"
   [ -z "$_pane" ] && _pane=$(whistle_resolve_pane '')
   [ -z "$_pane" ] && return 0
 
-  _win=$(whistle_clear_pane_transient "$_pane") || return 0
+  _win=$(whistle_forget_agent "$_pane") || return 0
   [ -n "$_win" ] || return 0
 
-  # 窗口清空后才还原边框。若还剩别的待处理状态，边框已经是它的颜色，别动。
+  # 窗口里没有待处理状态时才还原边框。idle / running / gone 都不染边框
+  # （只有「有事等你」才染），所以它们在窗口里时边框也该还原。
   _left=$(whistle_tmux show -wv -t "$_win" @whistle_win 2> /dev/null) || _left=''
-  if [ -z "$_left" ]; then
+  case "$_left" in
+  done | wait | error) ;;
+  *)
     whistle_border_release "$_win"
     whistle_border_status_release "$_win"
-  fi
+    ;;
+  esac
   whistle_refresh_sessions "$_win"
 }
 
@@ -832,7 +839,7 @@ install-hooks)
   ;;
 --clear-pane)
   shift
-  cmd_forget_transient "${1:-}"
+  cmd_forget_agent "${1:-}"
   ;;
 --recompute)
   shift

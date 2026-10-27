@@ -124,6 +124,30 @@ setup() {
     assert_eq "$status" 1
 }
 
+# -- gone（只有 SessionEnd 会写的内部状态） ----------------------------------
+#
+# gone 的全部语义都靠「rank = 0 且状态列非空」这两点实现：
+#   - rank 0 → 赢不过任何真实状态，窗口徽章不会显示它
+#   - 状态列非空 → 「按进程发现」不会把它认成空闲
+# 它不是用户能报的状态，所以 is_state 必须不认它。
+
+@test "gone: rank 是 0，不认它是可报状态，也不算待处理/临时状态" {
+    assert_eq "$(whistle_rank gone)" 0
+    run whistle_is_state gone
+    assert_eq "$status" 1
+    run whistle_is_notified gone
+    assert_eq "$status" 1
+    run whistle_is_transient gone
+    assert_eq "$status" 1
+}
+
+@test "aggregate: gone 赢不过任何状态，窗口聚合态保持为空" {
+    run whistle_aggregate <<'EOF'
+%1|gone||
+EOF
+    assert_eq "$output" '||0|'
+}
+
 # -- whistle_aggregate -----------------------------------------------------
 #
 # 输出四列：<state>|<msg>|<pending>|<pane_id>
@@ -285,6 +309,58 @@ EOF
 EOF
     assert_eq "$(printf '%s' "$output" | cut -d'|' -f3)" 2
     assert_eq "${output##*|}" '%3'
+}
+
+# -- whistle_resolve_idle_panes ----------------------------------------------
+#
+# 输出**去掉了命令列**：下游（whistle_aggregate、菜单的 read）按固定列数读，
+# POSIX 的 read 会把多出来的字段（含分隔符）塞进最后一个变量。
+
+@test "resolve_idle_panes: 没上报状态但前台跑着 agent → idle" {
+  run whistle_resolve_idle_panes 'claude claude.exe' 2 <<'EOF'
+%1||消息|claude.exe
+%2||消息|zsh
+EOF
+  assert_eq "$output" '%1|idle|消息
+%2||消息'
+}
+
+@test "resolve_idle_panes: 有上报状态的不动（哪怕前台也是 agent）" {
+  # gone 尤其不能被认回 idle：那是「agent 已退出」的标记。
+  run whistle_resolve_idle_panes 'claude claude.exe' 2 <<'EOF'
+%1|running||claude.exe
+%2|done|做完了|claude.exe
+%3|idle||claude.exe
+%4|gone||claude.exe
+EOF
+  assert_eq "$output" '%1|running|
+%2|done|做完了
+%3|idle|
+%4|gone|'
+}
+
+@test "resolve_idle_panes: 清单为空 → 不发现任何 agent，但列数照旧" {
+  # 去列与「发现 agent」是两件事：列数必须与清单无关，
+  # 否则用户清空 @whistle_agent_cmds 就会把「消息|进程名」当消息。
+  run whistle_resolve_idle_panes '' 2 <<'EOF'
+%1||消息|claude.exe
+EOF
+  assert_eq "$output" '%1||消息'
+}
+
+@test "resolve_idle_panes: 状态列号可配（菜单那份状态在第 6 列）" {
+  run whistle_resolve_idle_panes 'claude claude.exe' 6 <<'EOF'
+s|w1|wn|1|%1|||claude.exe
+EOF
+  assert_eq "$output" 's|w1|wn|1|%1|idle|'
+}
+
+@test "resolve_idle_panes: 消息里带 '|' 也不会错位（命令列取最后一列）" {
+  # 命令列用 $(NF) 取，不用固定列号 —— 消息里的 '|' 会把列号带偏。
+  run whistle_resolve_idle_panes 'claude claude.exe' 2 <<'EOF'
+%1||a|b|claude.exe
+EOF
+  assert_eq "$output" '%1|idle|a|b'
 }
 
 # -- whistle_count_states ---------------------------------------------------

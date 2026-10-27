@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 284 项测试（38 单测 + 246 集成/e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 310 项测试（49 单测 + 261 集成/e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -163,6 +163,25 @@ resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 
 **`◉` 不再表示「零个在跑」**：`@whistle_count_idle` 是独立计数，汇总里 `▶N ◉N`
 两格并存。整段的显示判据必须同时看 running / idle / pending 三个 —— 漏掉 idle 的话
 「三个 agent 全空闲」会被判成没活动而整段隐藏，而那一格正是恢复 tmux 后最想看到的。
+
+**「空闲」有两个来源**：hook 在 `SessionStart` 报 idle，以及**按进程发现** ——
+`whistle_resolve_idle_panes`（纯函数）把「没上报状态、但前台跑着
+`@whistle_agent_cmds` 里那些进程」的 pane 推导成 idle。推导发生在纯函数之前，
+窗口徽章、全局计数、菜单三处因此口径一致。
+判据是 tmux 自己的事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
+
+**带 `|` 的行要按固定列数读**：POSIX 的 `read` 在字段数多于变量数时，会把余下的
+（含分隔符）全塞进**最后一个**变量。所以「消息」必须在**末位**（它拿到的是余下的
+全部，消息里带 `|` 也不会被截断），而**中间不能多留列** —— 多留一列，
+消息列就变成「消息|进程名」，而 `@whistle_win_msg` 与菜单标签会把它原样显示出去。
+`whistle_resolve_idle_panes` 因此**把命令列整列去掉**再往下传；
+`whistle_aggregate` 只读 3 个变量，菜单那侧读 7 个 —— 改列数时两边都要跟着改。
+
+**`gone` 不是用户能报的状态**：只有 `SessionEnd` 会写它（`whistle_forget_agent`）。
+它解决的是一个具体竞态：钩子跑的时候 agent 进程**还没退出**，
+`pane_current_command` 仍是 claude —— 那时若把状态清空，紧接着的重算会按
+「前台跑着 agent」又把它认成空闲，留下一盏灭不掉的 `◉`。写成 `gone` 就绕开了。
+`gone` 的 rank 是 0：徽章不显示、计数不涨、菜单不列。
 
 **消息消毒**：任何进入 tmux format 的文本都要过 `whistle_sanitize` —— 剔掉 `# { } |`
 与控制字符，截断 80 字符。否则 `#{` 会被二次展开、`}` 会截断条件式。

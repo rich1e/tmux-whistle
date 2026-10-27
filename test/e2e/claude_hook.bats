@@ -210,8 +210,12 @@ EOF
 #
 # SessionEnd 是「临时」状态（running / idle）的"灭灯"信号：agent 退出了，
 # 窗口不该继续亮 ▶ 或 ◉。
+#
+# ⚠️ 状态不是**清空**，而是收成 gone：钩子跑的时候 agent 进程还没退出，
+# pane_current_command 仍是 claude —— 清空的话紧接着的重算会按「前台跑着
+# agent」把它又认成空闲，留下一盏灭不掉的 ◉。
 
-@test "e2e: SessionEnd 清掉该 pane 的 running" {
+@test "e2e: SessionEnd 把 running 收成 gone（agent 走了）" {
   feed <<'EOF'
 {"hook_event_name":"UserPromptSubmit"}
 EOF
@@ -220,13 +224,16 @@ EOF
   feed <<'EOF'
 {"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'gone'
+  # gone 不参与任何显示：徽章空、计数不涨
   local w
   w=$(wt display -p -t w1 '#{window_id}')
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  assert_eq "$(wt show -gqv @whistle_count_running)" '0'
+  assert_eq "$(wt show -gqv @whistle_count_idle)" '0'
 }
 
-@test "e2e: SessionEnd 也清掉 idle（agent 走了就不该再显示空闲）" {
+@test "e2e: SessionEnd 也收掉 idle（agent 走了就不该再显示空闲）" {
   feed <<'EOF'
 {"hook_event_name":"SessionStart","source":"startup"}
 EOF
@@ -235,7 +242,7 @@ EOF
   feed <<'EOF'
 {"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'gone'
   assert_eq "$(wt show -gqv @whistle_count_idle)" '0'
   local w
   w=$(wt display -p -t w1 '#{window_id}')
@@ -262,7 +269,7 @@ EOF
   feed <<'EOF'
 {"hook_event_name":"SessionEnd","reason":"other"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'gone'
 }
 
 @test "e2e: UserPromptSubmit → running，之前点亮的徽章被压掉" {
