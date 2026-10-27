@@ -35,6 +35,7 @@
 - [x] **TODO-12** 跳转只到窗口，分屏时落不到真正报状态的那个 pane
 - [x] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
 - [x] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
+- [x] **TODO-15** `SessionStart` 被当成 running，恢复会话后满屏假 `▶`
 
 ---
 
@@ -872,6 +873,50 @@ tmux-whistle done --title '重构完成' --body '完整回复…'
 以及 `SessionEnd` 是否误伤上一轮的正文（不会）。
 
 `make check` 251 项全绿。
+
+---
+
+## TODO-15 · `SessionStart` 被当成 running，恢复会话后满屏假 `▶`
+
+✅ 已修复（`hooks/claude-code.sh` 的 `SessionStart` 分支）
+
+**现象**：配上 tmux-resurrect 的 `@resurrect-processes '"claude->claude --continue"'`
+之后，关掉 tmux 再打开，状态栏立刻显示 `▶3` —— 三个 agent 都「在跑」。
+实际上它们只是刚被拉起来，**都在提示符前面等着**，一个都没在干活。
+
+**触发**：`@continuum-restore on` + 上面那条 `@resurrect-processes`，
+tmux server 重启后自动恢复三个 Claude Code 会话。更简单的复现：
+在 pane 里敲一次 `claude`、什么都不输入，状态栏也亮 `▶`。
+
+**原因**：hook 里 `SessionStart` 与 `UserPromptSubmit` 共用一个分支，都映射成
+`running`：
+
+```sh
+SessionStart | UserPromptSubmit)
+  _state=running   # ← 注释写的是「用户开始交互」，但 SessionStart 不是交互
+```
+
+`SessionStart` 只说明**进程起来了**（`source` = `startup` / `resume` /
+`clear` / `compact` / `fork`），不说明 agent 在干活。而 `running` 一旦点亮，
+没有任何超时或轮询会把它熄掉 —— 只能等下一次 `UserPromptSubmit` / `Stop`。
+（`▶` 不计入 `⚑N`、不发瞬时提示，所以除了状态栏那一格，没有任何地方会暴露它是假的。）
+
+**修复**：
+
+- `running` 只由 `UserPromptSubmit` 点亮 —— 那才是「用户刚让 agent 干活」。
+- `SessionStart` 改为**清**：复用 `--clear-pane`（与 `SessionEnd` 同一条路径），
+  只清 `running`，`done`/`wait`/`error` 留着等你处理。
+  顺带自愈「上一个 agent 被 SIGKILL / 崩溃、没发 `SessionEnd`」的永久 `▶` ——
+  新进程起来了 ⇒ 旧的没了。
+- **`source=compact` 例外，原样退出**：压缩发生在**轮中**，那一轮还没结束、
+  agent 确实还在干活；这时清掉会把正在转的 `▶` 掐掉。
+
+**回归测试**（`test/e2e/claude_hook.bats` 5 条）：`startup` / `resume` 不点亮、
+`resume` 时窗口聚合也是空、有残留 `running` 时被清掉（含窗口聚合）、
+不动 `done`、`compact` 不动 `running`。
+
+**相关代码**：`hooks/claude-code.sh` 的 `SessionStart` 分支；
+`bin/tmux-whistle` 的 `--clear-pane`；`lib/core.sh` 的 `whistle_clear_pane_state`。
 
 ---
 

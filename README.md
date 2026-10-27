@@ -284,11 +284,12 @@ hooks 装好后自动工作：
 
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
-| 发一条 prompt | — | `●`，不计入 ⚑ |
+| 启动 / 恢复 Claude Code（含 `--continue`） | `SessionStart` hook | 不亮灯 —— agent 只是在提示符前等着 |
+| 发一条 prompt | `UserPromptSubmit` hook | `▶`，不计入 ⚑ |
 | agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示 |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `◔` + ⚑ + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `⚠` + ⚑ + 提示（消息就是错误文本） |
-| 退出 Claude Code | `SessionEnd` hook | `●` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
+| 退出 Claude Code | `SessionEnd` hook | `▶` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
 
 ### 场景二：任何 agent / 脚本
 

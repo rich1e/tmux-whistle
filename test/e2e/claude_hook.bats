@@ -260,9 +260,65 @@ EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
 }
 
-@test "e2e: SessionStart → running" {
+@test "e2e: SessionStart(startup) 不点亮 running —— 新起的 agent 只是在提示符前等着" {
   feed <<'EOF'
 {"hook_event_name":"SessionStart","source":"startup"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+}
+
+@test "e2e: SessionStart(resume) 不点亮 running —— resurrect 恢复 agent 不再误报" {
+  # 这就是 @resurrect-processes + @continuum-restore 的现场：tmux server 起来，
+  # 三个 claude --continue 各自发 SessionStart(source=resume)。
+  # 早先这里映射成 running，于是状态栏亮 ▶3，而一个都没在跑。
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"resume"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  # 窗口聚合也不能被点亮
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "e2e: SessionStart 顺带清掉残留的 running（上一个 agent 被 SIGKILL）" {
+  # 被 SIGKILL / 崩溃的 agent 不会发 SessionEnd，▶ 就永远灭不掉。
+  # 新进程起来了 ⇒ 旧的没了，这时清掉是安全的。
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"startup"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "e2e: SessionStart 不动待处理状态（done 留着等你处理）" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"做完了"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"resume"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
+}
+
+@test "e2e: SessionStart(source=compact) 不动 running —— 那一轮还没结束" {
+  # compact 发生在轮中，agent 确实还在干活。清掉会把正在转的 ▶ 掐掉。
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"compact"}
 EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
 }

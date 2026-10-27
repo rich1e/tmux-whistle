@@ -150,6 +150,13 @@ publish，不用重载 tmux 配置。
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。
 
+**`running` 只能由 `UserPromptSubmit` 点亮**：`SessionStart` 不代表 agent 在干活 ——
+`--continue` / `--resume` 恢复出来的、以及刚敲 `claude` 起的新会话，都只是在提示符前
+**等着**。早先把它映射成 `running`，配上 resurrect 的 `@continuum-restore` 就是
+「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。`SessionStart`（`source=compact`
+除外 —— 那是轮中压缩，agent 还在干活）现在只做一件事：清掉残留的 `running`，
+顺手治「上一个 agent 被 SIGKILL、没发 `SessionEnd`」的永久 `▶`。
+
 **消息消毒**：任何进入 tmux format 的文本都要过 `whistle_sanitize` —— 剔掉 `# { } |`
 与控制字符，截断 80 字符。否则 `#{` 会被二次展开、`}` 会截断条件式。
 **例外：插件自己生成的 format 片段不过消毒** —— 例如 `whistle_spin_build` 的帧选择器，
