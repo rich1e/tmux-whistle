@@ -453,10 +453,14 @@ teardown() {
 @test "status-right: 图标与数字之间留一个空格，不紧贴" {
   wt_load core
   wt_load status-line
+  # 关掉动画 —— 开着时 running 那格是帧选择器，格式里根本没有 ▶
+  wt set -g @whistle_spin off
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
   # 紧贴的 "◆#{@whistle_count_done}" 会让宽图标看起来像数字的一部分
+  assert_contains "$output" '▶ #{@whistle_count_running}'
+  assert_contains "$output" '◉ #{@whistle_count_idle}'
   assert_contains "$output" '◆ #{@whistle_count_done}'
   assert_contains "$output" '◔ #{@whistle_count_wait}'
   assert_contains "$output" '⚠ #{@whistle_count_error}'
@@ -473,46 +477,52 @@ teardown() {
   assert_contains "$output" '#[fg=#d70000]⚠'
 }
 
-@test "status-right: 没有 agent 在跑时 running 那格显示绿色 ◉" {
+@test "status-right: running 与 idle 各占一格，running 为 0 时那格也还在" {
   wt_load core
   wt_load status-line
+  wt set -g @whistle_spin off
   whistle_status_right_publish
   wt set -g status-right ''
   whistle_status_right_patch
 
-  wt set -g @whistle_pending 1
+  wt set -g @whistle_pending 0
   wt set -g @whistle_count_running 0
-  wt set -g @whistle_count_done 1
+  wt set -g @whistle_count_idle 3
+  wt set -g @whistle_count_done 0
   wt set -g @whistle_count_wait 0
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
-  # 「没有 agent 在跑」本身是个有意义的信息，不该整格消失；
-  # 而且带计数（◉ 0）比光秃秃的 ◉ 更明确 —— 不会让人以为是格子坏了。
-  assert_contains "$output" '◉ 0'
+  # 「零个在跑」也要在：格子固定存在，状态栏宽度不随计数跳动
+  assert_contains "$output" '▶ 0'
+  # 真正有信息的是这格：3 个 agent 活着但闲着
+  assert_contains "$output" '◉ 3'
 }
 
-@test "status-right: 有 agent 在跑时显示帧与计数，不显示 ◉" {
+@test "status-right: 有 agent 在跑时 running 显示 ▶ N，idle 那格照常显示 ◉ M" {
   wt_load core
   wt_load status-line
+  wt set -g @whistle_spin off
   whistle_status_right_publish
   wt set -g status-right ''
   whistle_status_right_patch
 
-  wt set -g @whistle_pending 1
+  wt set -g @whistle_pending 0
   wt set -g @whistle_count_running 2
-  wt set -g @whistle_count_done 1
+  wt set -g @whistle_count_idle 1
+  wt set -g @whistle_count_done 0
   wt set -g @whistle_count_wait 0
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
-  assert_contains "$output" '2'
-  assert_not_contains "$output" '◉'
+  assert_contains "$output" '▶ 2'
+  # idle 不再被 running 顶掉：两个格子互斥的时代结束了
+  assert_contains "$output" '◉ 1'
 }
 
-# -- status-right 的四态汇总 --------------------------------------------------
+# -- status-right 的五态汇总 --------------------------------------------------
 
-@test "status-right: 四态汇总按各自图标渲染，计数为 0 的也保留" {
+@test "status-right: 五态汇总按各自图标渲染，计数为 0 的也保留" {
   wt_load core
   wt_load status-line
   # 关掉动画才能断言到静态图标 ▶ —— 开着时那一格渲染出来是 Braille 帧
@@ -523,14 +533,16 @@ teardown() {
 
   wt set -g @whistle_pending 2
   wt set -g @whistle_count_running 1
+  wt set -g @whistle_count_idle 1
   wt set -g @whistle_count_done 1
   wt set -g @whistle_count_wait 0
   wt set -g @whistle_count_error 1
 
   run wt display -pF '#{E:status-right}'
   assert_contains "$output" '▶ 1'
+  assert_contains "$output" '◉ 1'
   assert_contains "$output" '◆ 1'
-  # 0 也要在：四个格子固定存在，状态栏宽度不随计数跳动
+  # 0 也要在：格子固定存在，状态栏宽度不随计数跳动
   assert_contains "$output" '◔ 0'
   assert_contains "$output" '⚠ 1'
   # 汇总与 ⚑ 计数是两个独立的读法，都要在
@@ -580,12 +592,34 @@ teardown() {
 
   wt set -g @whistle_pending 0
   wt set -g @whistle_count_running 2
+  wt set -g @whistle_count_idle 0
   wt set -g @whistle_count_done 0
   wt set -g @whistle_count_wait 0
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
   assert_contains "$output" '▶ 2'
+  assert_contains "$output" '◉ 0'
+}
+
+@test "status-right: 只有 idle 时也显示汇总（恢复 tmux 后最想看到的那一眼）" {
+  # 判据里漏掉 idle 的话，这里 running=0、pending=0，整段会被判成「没活动」
+  # 而隐藏 —— 三个 agent 全都空闲的场景反而什么都看不见。本用例守的就是它。
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 0
+  wt set -g @whistle_count_running 0
+  wt set -g @whistle_count_idle 3
+  wt set -g @whistle_count_done 0
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '◉ 3'
 }
 
 @test "status-right: 没有任何 agent 活动时整段不出现" {
@@ -597,12 +631,14 @@ teardown() {
 
   wt set -g @whistle_pending 0
   wt set -g @whistle_count_running 0
+  wt set -g @whistle_count_idle 0
   wt set -g @whistle_count_done 0
   wt set -g @whistle_count_wait 0
   wt set -g @whistle_count_error 0
 
   run wt display -pF '#{E:status-right}'
   assert_not_contains "$output" '●0'
+  assert_not_contains "$output" '◉ 0'
   assert_not_contains "$output" '◆ 0'
 }
 

@@ -37,12 +37,13 @@ whistle_icon() {
 # #{@whistle_win} 在 window-status-format 的 item 上下文里解析为
 # "当前窗口自己的" option。
 #
-# 四层嵌套条件式，结尾必须补齐四个 '}' —— 少一个就是畸形 format，
+# 五层嵌套条件式，结尾必须补齐五个 '}' —— 少一个就是畸形 format，
 # tmux 会静默渲染成空字符串（这个坑被 test/integration/badge.bats 抓到过）。
 #
 # 嵌套顺序只是书写顺序：@whistle_win 存的是单个状态字符串，只有一个分支会命中，
 # 所以这里没有「优先级」语义 —— 真正的优先级在 whistle_aggregate 里。
-# running 排最后，因为它不计入 ⚑N，作用只是让窗口列表能看出「这个窗口有 agent」。
+# running / idle 排最后，因为它们不计入 ⚑N，作用只是让窗口列表能看出
+# 「这个窗口有 agent」；idle 再放 running 之后，读起来是「从要处理走到只是待命」。
 #
 # @whistle_badge off 时生成空串：哨兵照常注入，但渲染为空 —— 状态栏格式保持
 # 原样。走「注入空串」而不是「注入后再移除」，是因为移除会和主题重算打架
@@ -54,28 +55,36 @@ whistle_mark_build() {
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
   _c_run=$(whistle_conf '@whistle_color_running')
+  _c_idle=$(whistle_conf '@whistle_color_idle')
   _s_done=$(whistle_icon '@whistle_icon_done')
   _s_wait=$(whistle_icon '@whistle_icon_wait')
   _s_err=$(whistle_icon '@whistle_icon_error')
   _s_run=$(whistle_icon '@whistle_icon_running')
+  _s_idle=$(whistle_icon '@whistle_icon_idle')
 
   _w='#{@whistle_win}'
   printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_c_done" "$_s_done"
   printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_c_wait" "$_s_wait"
   printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_w" "$_c_err" "$_s_err"
-  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_w" "$_c_run" "$_s_run"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_w" "$_c_run" "$_s_run"
+  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_w" "$_c_idle" "$_s_idle"
 }
 
-# whistle_summary_build → 全 server 的四态分布（纯 format，零 fork）
+# whistle_summary_build → 全 server 的各状态分布（纯 format，零 fork）
 #
 # 窗口徽章只在"拥有该窗口的 session"里可见，所以另给一段跨 session 的分布：
-#   ▶1 ◆1 ◔0 ⚠0
+#   ▶1 ◉1 ◆1 ◔0 ⚠0
 #
-# 整段只在真有 agent 活动时出现（running 或待处理任一非零），否则为空。
-# 四个格子一起出现、包括计数为 0 的 —— 这样状态栏宽度不会随计数跳动，
-# 也保证「四种状态」始终一眼可见。
+# 整段只在真有 agent 时出现（running / idle / 待处理三者全为零才隐藏），否则为空。
+# 五个格子一起出现、包括计数为 0 的 —— 这样状态栏宽度不会随计数跳动，
+# 也保证每种状态始终一眼可见。
+#
+# ⚠️ idle 必须进判据：恢复 tmux 之后「三个 agent 全空闲」正是最常见的场景，
+# 而那时 running=0、pending=0 —— 漏掉 idle 的话整段会被判成"没活动"而隐藏，
+# `◉ 3` 永远看不见。
 whistle_summary_build() {
   _sm_c_run=$(whistle_conf '@whistle_color_running')
+  _sm_c_idle=$(whistle_conf '@whistle_color_idle')
   _sm_c_done=$(whistle_conf '@whistle_color_done')
   _sm_c_wait=$(whistle_conf '@whistle_color_wait')
   _sm_c_err=$(whistle_conf '@whistle_color_error')
@@ -98,13 +107,12 @@ whistle_summary_build() {
   # 数字的一部分，窄图标又像被数字吃掉了。
   #
   # #{||:a,b} 的真值判定是"非空且不等于 0"，见 tmux FORMATS。
-  printf '#{?#{||:#{@whistle_count_running},#{@whistle_pending}},'
-  # running 那格分两态：有在跑 → 帧 + 计数；没有在跑 → ◉ + 计数。
-  # 两态都带计数：格子宽度不随状态跳变，而且「◉ 0」比光秃秃的「◉」更明确
-  # —— 一眼看出是「零个在跑」而不是「这一格坏了 / 没加载」。
-  printf '#{?#{@whistle_count_running},'
-  printf '#[fg=%s]%s #{@whistle_count_running}#[default] ,' "$_sm_c_run" "$_sm_s_run"
-  printf '#[fg=%s]%s #{@whistle_count_running}#[default] }' "$_sm_c_run" "$_sm_s_idle"
+  # 三个判据嵌套两层 || —— 大括号必须配平，配错一格 tmux 会静默渲染成空白。
+  printf '#{?#{||:#{@whistle_count_running},#{||:#{@whistle_count_idle},#{@whistle_pending}}},'
+  # running 与 idle 各占一格，都永远显示（含 0）：
+  # 「▶ 0 ◉ 3」比「◉ 3」更明确 —— 一眼看出是「零个在跑」而不是「这一格坏了 / 没加载」。
+  printf '#[fg=%s]%s #{@whistle_count_running}#[default] ' "$_sm_c_run" "$_sm_s_run"
+  printf '#[fg=%s]%s #{@whistle_count_idle}#[default] ' "$_sm_c_idle" "$_sm_s_idle"
   printf '#[fg=%s]%s #{@whistle_count_done}#[default] ' "$_sm_c_done" "$_sm_s_done"
   printf '#[fg=%s]%s #{@whistle_count_wait}#[default] ' "$_sm_c_wait" "$_sm_s_wait"
   printf '#[fg=%s]%s #{@whistle_count_error}#[default] ,}' "$_sm_c_err" "$_sm_s_err"
@@ -166,21 +174,27 @@ whistle_mark_publish() {
 #
 # 与窗口徽章同一个公式，但读的是 pane 作用域的 @whistle ——
 # pane-border-format 的 item 上下文是 pane。分屏时能分清是哪个 pane 在等你。
+#
+# 同样是五层嵌套，结尾 `}}}}}` 一个都不能少（改这里要同步改 whistle_mark_build，
+# 两份必须保持同一个状态集，否则窗口徽章与边框状态行会各自显示不同的状态）。
 whistle_pane_mark_build() {
   _c_done=$(whistle_conf '@whistle_color_done')
   _c_wait=$(whistle_conf '@whistle_color_wait')
   _c_err=$(whistle_conf '@whistle_color_error')
   _c_run=$(whistle_conf '@whistle_color_running')
+  _c_idle=$(whistle_conf '@whistle_color_idle')
   _s_done=$(whistle_icon '@whistle_icon_done')
   _s_wait=$(whistle_icon '@whistle_icon_wait')
   _s_err=$(whistle_icon '@whistle_icon_error')
   _s_run=$(whistle_icon '@whistle_icon_running')
+  _s_idle=$(whistle_icon '@whistle_icon_idle')
 
   _p='#{@whistle}'
   printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$_s_done"
   printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$_s_wait"
   printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_p" "$_c_err" "$_s_err"
-  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],}}}}' "$_p" "$_c_run" "$_s_run"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_p" "$_c_run" "$_s_run"
+  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_p" "$_c_idle" "$_s_idle"
 }
 
 whistle_pane_mark_publish() {

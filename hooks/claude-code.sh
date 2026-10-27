@@ -106,28 +106,24 @@ UserPromptSubmit)
   _state=running
   ;;
 SessionStart)
-  # 「会话开始了」不等于「agent 在干活」。
-  # --continue / --resume 恢复出来的 agent、以及刚敲 claude 起的新会话，
-  # 都是在提示符前面**等着**。早先这里映射成 running，配上
-  # tmux-resurrect + @continuum-restore 就是「恢复 3 个会话 → 状态栏亮 ▶3，
-  # 而一个都没在跑」。
+  # 「会话开始了」不等于「agent 在干活」：--continue / --resume 恢复出来的
+  # agent、以及刚敲 claude 起的新会话，都停在提示符前面**等着**。
+  # 所以这里报 idle（空闲），而不是 running。
   #
   # compact 是唯一例外：它发生在**一轮还没结束**的时候，agent 确实还在干活，
-  # 这时动状态会把正在转的 ▶ 掐掉，所以原样退出。
+  # 这时改成 idle 会把正在转的 ▶ 掐掉 —— 原样退出。
   #
-  # 其余情况顺手清掉残留的 running —— 上一个 agent 被 SIGKILL / 崩溃时不会有
-  # SessionEnd，那个 pane 上的 ▶ 就永远灭不掉；新进程起来了 ⇒ 旧的没了。
-  # 只清 running：done/wait/error 是待处理通知，留着等你处理（与 SessionEnd 同）。
+  # idle 不会顶掉 done/wait/error（守卫在 whistle_state_set 里）：恢复会话
+  # 不能把上一轮还没读的 ◆ / ◔ / ⚠ 当成已读抹掉。顺带它也覆盖了残留的
+  # running —— 上一个 agent 被 SIGKILL、没发 SessionEnd 时，那个 ▶ 会被换掉。
   _source=$(whistle_json_get "$_input" source)
   [ "$_source" = compact ] && exit 0
-  [ -n "${TMUX_PANE:-}" ] || exit 0
-  WHISTLE_SRC=hook "$WHISTLE_CLI" --clear-pane "$TMUX_PANE" > /dev/null 2>&1 || true
-  exit 0
+  _state=idle
   ;;
 SessionEnd)
-  # agent 退出了：`running` 这个"正在干活"的标记必须灭掉，否则窗口会一直亮 ▶。
-  # 只清 running —— done/wait/error 是待处理通知，agent 退出不代表你已经看过，
-  # 那几条要留到你切进去处理。
+  # agent 退出了：`running` / `idle` 这两个「进程还活着」的标记必须灭掉，
+  # 否则窗口会一直亮 ▶ 或 ◉。待处理通知（done/wait/error）一律不动 ——
+  # agent 退出不代表你已经看过，那几条要留到你切进去处理。
   #
   # 这里直接 exit：下面的公共出口是按状态写 CLI，而这条走的是清除入口。
   [ -n "${TMUX_PANE:-}" ] || exit 0

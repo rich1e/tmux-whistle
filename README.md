@@ -14,7 +14,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 ## 功能特性
 
 - **推送而非轮询**：agent 通过 hook 主动上报状态，tmux 不去 `capture-pane` 猜提示符 —— 没有扫描成本，也没有误报
-- **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`（回合被 API 错误中断）、`running`（在跑）四态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
+- **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`（回合被 API 错误中断）、`running`（在跑）、`idle`（进程在但闲着）五态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
 - **跨 session 且粘性**：通知出现在你正看着的那个 session，一直保留到你切进去处理完
 - **六个独立信号**：窗口徽章、全局计数 `⚑N`、边框变色、边框状态行、瞬时提示、桌面通知，各管各的，可单独关闭
 - **任何 agent 都能接入**：Claude Code 装上 hooks 即用；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
@@ -129,13 +129,14 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
 | `@whistle_color_running` | `#00af00` | 运行中色（与 `done` 同色，靠图标形状区分；想更开可换 `#5faf00`） |
+| `@whistle_color_idle` | `#8a8a8a` | 空闲色（灰） |
 | `@whistle_color_pending` | `#5fd7d7` | 待处理总数 `⚑N` 的颜色（青色，独立于等待色） |
 | `@whistle_icon_pending` | `⚑` | 全局计数前面的图标 |
 | `@whistle_icon_done` | `◆` | 完成符号 |
 | `@whistle_icon_wait` | `◔` | 等待符号 |
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin off` 时才用；开时是 Braille 帧） |
-| `@whistle_icon_idle` | `◉` | 没有 agent 在跑时 running 那格显示的符号（仍带计数，即 `◉ 0`） |
+| `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
@@ -207,18 +208,18 @@ set -g @whistle_icon_pending ''
 
 ```
  1 claude.exe◆            ← ① 窗口徽章
-      ⠋ 1 ◆ 1 ◔ 0 ⚠ 0   ⚑ 2  ← ② 四态汇总 + 全局待处理计数
+      ⠋ 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0   ⚑ 2  ← ② 五态汇总 + 全局待处理计数
  [claude.exe] 完成: 重构完成，抽出了 core.sh   ← ③ 瞬时提示（5 秒）
 ```
 
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **四态汇总** `⠋ 1 ◆ 1 ◔ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器四种状态各有多少（`⠋` 在跑 / `◆` 完成 / `◔` 等待 / `⚠` 失败）：没有 agent 在跑时 `⠋` 那格变成 `◉`，计数照旧 |
+| **五态汇总** `⠋ 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器各状态各有多少（`⠋` 在跑 / `◉` 空闲 / `◆` 完成 / `◔` 等待 / `⚠` 失败） |
 | **全局计数** `⚑N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 
-汇总段只在真有 agent 活动（`▶` 或 `⚑` 非零）时出现；四个格子一起出现、
+汇总段只在真有 agent（`▶` / `◉` / `⚑` 任一非零）时出现；五个格子一起出现、
 **计数为 0 的也保留**，这样状态栏宽度不会随计数跳动。
 
 ### running 的动画
@@ -258,20 +259,25 @@ session 里的细节"。
 
 | 状态 | 徽章 | 计入 ⚑ | 什么时候出现 |
 |---|---|---|---|
-| `running` | `▶` | 否 | agent 开始干活 |
+| `running` | `▶` | 否 | agent 开始干活（发了一条 prompt 之后） |
+| `idle` | `◉` | 否 | 进程在、但没在干活：刚敲 `claude` 或 `--continue` 恢复，停在提示符前等你输入 |
 | `done` | `◆` | 是 | 一轮工作结束 |
 | `wait` | `◔` | 是 | 等你批准 / 等你输入 |
 | `error` | `⚠` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
 
-`running` 不计入 `⚑N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt 就朝所有
-session 推一条「运行中」纯属噪声。它出现在状态栏汇总的 `▶N` 里，以及
-`prefix + n` 菜单的绿色 `◉` 前缀上，agent 退出（`SessionEnd`）时自动熄灭。
+`running` 与 `idle` 都不计入 `⚑N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt
+就朝所有 session 推一条「运行中」纯属噪声。它们出现在状态栏汇总的 `▶N` / `◉N` 里，
+`prefix + n` 菜单里分别是绿色 `▶` 与灰色 `◉`，agent 退出（`SessionEnd`）时一起熄灭。
+
+`idle` 只在**会话开始 / 恢复**时写入，而且**顶不掉待处理通知** —— 恢复会话不会把
+上一轮还没读的 `◆` / `◔` / `⚠` 当成已读。它也不参与「已读即清除」：你读完一条
+`done` 之后那一格是空的，不是 `◉`。
 
 ### 怎么响应
 
 | 操作 | 效果 |
 |---|---|
-| **`prefix + n`** | 弹出 agent 菜单。每项的格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，和窗口名、agent 的话分开；每项都带状态图标（`◆` 完成 / `◔` 等待 / `⚠` 错误 / `◉` 运行中）；**待处理项与运行中的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，运行中的项只是跳过去看看 |
+| **`prefix + n`** | 弹出 agent 菜单。每项的格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，和窗口名、agent 的话分开；每项都带状态图标（`◆` 完成 / `◔` 等待 / `⚠` 错误 / `▶` 运行中 / `◉` 空闲）；**待处理项与运行中/空闲的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，其余只是跳过去看看 |
 | **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
 | `prefix + n` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
 | 都不想做 | `tmux-whistle clear -a` 全清 |
@@ -285,11 +291,12 @@ hooks 装好后自动工作：
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
 | 启动 / 恢复 Claude Code（含 `--continue`） | `SessionStart` hook | 不亮灯 —— agent 只是在提示符前等着 |
+| 启动 / 恢复 Claude Code（含 `--continue`） | `SessionStart` hook | `◉`，不计入 ⚑（进程在，但停在提示符前等你） |
 | 发一条 prompt | `UserPromptSubmit` hook | `▶`，不计入 ⚑ |
 | agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示 |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `◔` + ⚑ + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `⚠` + ⚑ + 提示（消息就是错误文本） |
-| 退出 Claude Code | `SessionEnd` hook | `▶` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
+| 退出 Claude Code | `SessionEnd` hook | `▶` / `◉` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
 
 ### 场景二：任何 agent / 脚本
 
@@ -323,6 +330,7 @@ tmux-whistle done    "重构完成"     # 标记完成
 tmux-whistle wait    "等你批准"     # 标记等待
 tmux-whistle error   "构建失败"     # 标记出错
 tmux-whistle running               # 开始干活（亮 ▶，不计入 ⚑）
+tmux-whistle idle "等你输入"        # 进程在但闲着（亮 ◉，不计入 ⚑）
 
 tmux-whistle run -- npm test       # 包一个命令：按退出码落 ◆ / ⚠，带耗时
 tmux-whistle run '测试' -- npm test # 自定义标签

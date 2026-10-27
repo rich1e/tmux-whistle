@@ -208,7 +208,8 @@ EOF
 
 # -- SessionEnd ------------------------------------------------------------
 #
-# SessionEnd 是 running 的"灭灯"信号：agent 退出了，窗口不该继续亮 ▶。
+# SessionEnd 是「临时」状态（running / idle）的"灭灯"信号：agent 退出了，
+# 窗口不该继续亮 ▶ 或 ◉。
 
 @test "e2e: SessionEnd 清掉该 pane 的 running" {
   feed <<'EOF'
@@ -220,6 +221,22 @@ EOF
 {"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
 EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+@test "e2e: SessionEnd 也清掉 idle（agent 走了就不该再显示空闲）" {
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"startup"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'idle'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"prompt_input_exit"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -gqv @whistle_count_idle)" '0'
   local w
   w=$(wt display -p -t w1 '#{window_id}')
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
@@ -260,30 +277,35 @@ EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
 }
 
-@test "e2e: SessionStart(startup) 不点亮 running —— 新起的 agent 只是在提示符前等着" {
+@test "e2e: SessionStart(startup) 报 idle，不点亮 running" {
+  # agent 起来了但还停在提示符前等着 —— 这是「空闲」，不是「在干活」。
   feed <<'EOF'
 {"hook_event_name":"SessionStart","source":"startup"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'idle'
+  assert_eq "$(wt show -gqv @whistle_count_idle)" '1'
+  assert_eq "$(wt show -gqv @whistle_count_running)" '0'
+  # idle 不算待处理：⚑ 不亮
+  assert_eq "$(wt show -gqv @whistle_pending)" '0'
 }
 
-@test "e2e: SessionStart(resume) 不点亮 running —— resurrect 恢复 agent 不再误报" {
+@test "e2e: SessionStart(resume) 报 idle —— resurrect 恢复 agent 不再误报 running" {
   # 这就是 @resurrect-processes + @continuum-restore 的现场：tmux server 起来，
   # 三个 claude --continue 各自发 SessionStart(source=resume)。
   # 早先这里映射成 running，于是状态栏亮 ▶3，而一个都没在跑。
   feed <<'EOF'
 {"hook_event_name":"SessionStart","source":"resume"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
-  # 窗口聚合也不能被点亮
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'idle'
+  # 窗口聚合也要是 idle（整窗口空闲时徽章显示 ◉）
   local w
   w=$(wt display -p -t w1 '#{window_id}')
-  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'idle'
 }
 
-@test "e2e: SessionStart 顺带清掉残留的 running（上一个 agent 被 SIGKILL）" {
+@test "e2e: SessionStart 把残留的 running 换成 idle（上一个 agent 被 SIGKILL）" {
   # 被 SIGKILL / 崩溃的 agent 不会发 SessionEnd，▶ 就永远灭不掉。
-  # 新进程起来了 ⇒ 旧的没了，这时清掉是安全的。
+  # 新进程起来了 ⇒ 旧的没了，这时换成 idle 是安全的。
   feed <<'EOF'
 {"hook_event_name":"UserPromptSubmit"}
 EOF
@@ -292,13 +314,15 @@ EOF
   feed <<'EOF'
 {"hook_event_name":"SessionStart","source":"startup"}
 EOF
-  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'idle'
   local w
   w=$(wt display -p -t w1 '#{window_id}')
-  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'idle'
 }
 
-@test "e2e: SessionStart 不动待处理状态（done 留着等你处理）" {
+@test "e2e: SessionStart 不顶掉待处理状态（done 留着等你处理）" {
+  # idle 是背景信息，不能把上一轮还没读的 ◆ 当成已读抹掉。
+  # 守卫在 whistle_state_set 里，不在 hook 里。
   feed <<'EOF'
 {"hook_event_name":"Stop","last_assistant_message":"做完了"}
 EOF
@@ -310,8 +334,20 @@ EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'done'
 }
 
+@test "e2e: idle 也顶不掉 wait（等待授权中被恢复）" {
+  feed <<'EOF'
+{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"要批准"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'wait'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"resume"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'wait'
+}
+
 @test "e2e: SessionStart(source=compact) 不动 running —— 那一轮还没结束" {
-  # compact 发生在轮中，agent 确实还在干活。清掉会把正在转的 ▶ 掐掉。
+  # compact 发生在轮中，agent 确实还在干活。改成 idle 会把正在转的 ▶ 掐掉。
   feed <<'EOF'
 {"hook_event_name":"UserPromptSubmit"}
 EOF
@@ -321,6 +357,19 @@ EOF
 {"hook_event_name":"SessionStart","source":"compact"}
 EOF
   assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+}
+
+@test "e2e: UserPromptSubmit 把 idle 顶成 running" {
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"startup"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'idle'
+
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","prompt":"开工"}
+EOF
+  assert_eq "$(wt show -pqv -t "$TMUX_PANE" @whistle)" 'running'
+  assert_eq "$(wt show -gqv @whistle_count_idle)" '0'
 }
 
 # -- 边界 ------------------------------------------------------------------

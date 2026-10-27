@@ -46,6 +46,8 @@ whistle_refresh_all() {
 
 # -- 通道 B：pane 边框变色（KP-6 可还原） -----------------------------------
 
+# 只有「有事等你」的状态才染边框。running / idle 不染：
+# 它们是"agent 活着"的背景信息，每敲一次 prompt 就把边框换个颜色纯属噪声。
 whistle_border_color() {
   case "${1:-}" in
   done) whistle_conf '@whistle_color_done' ;;
@@ -167,6 +169,7 @@ whistle_state_label() {
   wait) printf '等待' ;;
   error) printf '错误' ;;
   running) printf '运行中' ;;
+  idle) printf '空闲' ;;
   *) printf '%s' "${1:-}" ;;
   esac
 }

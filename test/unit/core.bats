@@ -64,12 +64,21 @@ setup() {
 
 # -- whistle_rank ----------------------------------------------------------
 
-@test "rank: error > wait > done > running > 空" {
-    assert_eq "$(whistle_rank error)" 4
-    assert_eq "$(whistle_rank wait)" 3
-    assert_eq "$(whistle_rank "done")" 2
-    assert_eq "$(whistle_rank running)" 1
+@test "rank: error > wait > done > running > idle > 空" {
+    assert_eq "$(whistle_rank error)" 5
+    assert_eq "$(whistle_rank wait)" 4
+    assert_eq "$(whistle_rank "done")" 3
+    assert_eq "$(whistle_rank running)" 2
+    assert_eq "$(whistle_rank idle)" 1
     assert_eq "$(whistle_rank '')" 0
+}
+
+@test "rank: idle 严格低于 running，又必须高过 0" {
+    # 低于 running：同一窗口里既有在跑的、又有空闲的 pane 时，徽章要显示 ▶。
+    # 高过 0：整个窗口的 agent 都空闲时，idle 必须赢得过初始值 0，
+    #         否则徽章什么都不显示（那正是恢复 tmux 后最想看到 ◉ 的时刻）。
+    [ "$(whistle_rank running)" -gt "$(whistle_rank idle)" ] || return 1
+    [ "$(whistle_rank idle)" -gt 0 ] || return 1
 }
 
 @test "rank: 未知状态当 0（脏数据不会顶高徽章优先级）" {
@@ -80,22 +89,38 @@ setup() {
 
 # -- whistle_is_state / is_notified ----------------------------------------
 
-@test "is_state: 只认四种状态" {
+@test "is_state: 只认五种状态" {
     whistle_is_state "running" && true || return 1
+    whistle_is_state "idle" && true || return 1
     whistle_is_state "done" && true || return 1
     whistle_is_state "wait" && true || return 1
     whistle_is_state "error" && true || return 1
-    run whistle_is_state idle
+    run whistle_is_state banana
     assert_eq "$status" 1
 }
 
-@test "is_notified: done/wait/error 算待处理，running 不算" {
+@test "is_notified: done/wait/error 算待处理，running / idle 不算" {
     whistle_is_notified "done" && true || return 1
     whistle_is_notified "wait" && true || return 1
     whistle_is_notified "error" && true || return 1
     run whistle_is_notified "running"
     assert_eq "$status" 1
+    run whistle_is_notified "idle"
+    assert_eq "$status" 1
     run whistle_is_notified ''
+    assert_eq "$status" 1
+}
+
+@test "is_transient: running / idle 跟着 agent 进程活，待处理通知不是" {
+    whistle_is_transient "running" && true || return 1
+    whistle_is_transient "idle" && true || return 1
+    run whistle_is_transient "done"
+    assert_eq "$status" 1
+    run whistle_is_transient "wait"
+    assert_eq "$status" 1
+    run whistle_is_transient "error"
+    assert_eq "$status" 1
+    run whistle_is_transient ''
     assert_eq "$status" 1
 }
 
@@ -193,6 +218,22 @@ EOF
     assert_eq "$output" 'wait|等你|2|%1'
 }
 
+@test "aggregate: 只有 idle 时也能胜出（整窗口空闲要显示 ◉）" {
+    run whistle_aggregate <<'EOF'
+%1|idle|
+%2|idle|
+EOF
+    assert_eq "$output" 'idle||0|%1'
+}
+
+@test "aggregate: running 压过 idle（同一窗口有在跑的就不显示空闲）" {
+    run whistle_aggregate <<'EOF'
+%1|idle|
+%2|running|在跑
+EOF
+    assert_eq "$output" 'running|在跑|0|%2'
+}
+
 @test "aggregate: 未知状态不计入 pending，也不顶优先级" {
     run whistle_aggregate <<'EOF'
 %1|banana|脏数据
@@ -248,20 +289,21 @@ EOF
 
 # -- whistle_count_states ---------------------------------------------------
 
-@test "count_states: 四态各数各的" {
+@test "count_states: 五种状态各数各的" {
     run whistle_count_states <<'EOF'
 %1|running|
 %2|running|
-%3|done|好了
-%4|wait|等着
-%5|error|炸了
+%3|idle|
+%4|done|好了
+%5|wait|等着
+%6|error|炸了
 EOF
-    assert_eq "$output" '2|1|1|1'
+    assert_eq "$output" '2|1|1|1|1'
 }
 
 @test "count_states: 空输入全是 0" {
     run whistle_count_states </dev/null
-    assert_eq "$output" '0|0|0|0'
+    assert_eq "$output" '0|0|0|0|0'
 }
 
 @test "count_states: 跳过空状态与格式错误的行" {
@@ -271,6 +313,7 @@ garbage
 %2||消息误读探针
 %3|banana|
 %4|done|
+%5|idle|
 EOF
-    assert_eq "$output" '0|1|0|0'
+    assert_eq "$output" '0|1|1|0|0'
 }

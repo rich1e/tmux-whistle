@@ -36,6 +36,7 @@
 - [x] **TODO-13** 没有命令包装器，成功/失败要手写 `&&` / `||` 兜
 - [x] **TODO-14** 消息被截断到 80 字后**永久丢失**，无处可查
 - [x] **TODO-15** `SessionStart` 被当成 running，恢复会话后满屏假 `▶`
+- [x] **TODO-16** 没有「空闲」状态，恢复会话后空着的 agent 无处显示
 
 ---
 
@@ -917,6 +918,50 @@ SessionStart | UserPromptSubmit)
 
 **相关代码**：`hooks/claude-code.sh` 的 `SessionStart` 分支；
 `bin/tmux-whistle` 的 `--clear-pane`；`lib/core.sh` 的 `whistle_clear_pane_state`。
+
+> 后续演进：`SessionStart` 改为写 `idle`（不再只是"清"），见 TODO-16。
+
+---
+
+## TODO-16 · 没有「空闲」状态，恢复会话后空着的 agent 无处显示
+
+✅ 已修复（新增 `idle` 状态）
+
+**现象**：`claude --continue` 恢复出来的、以及刚敲 `claude` 还没输入的那些 agent，
+在 tmux-whistle 眼里**不存在** —— 窗口徽章空白、菜单里没有这一项、状态栏汇总也不计数。
+想知道「到底有几个 agent 活着」，只能靠 `ps`。
+
+**触发**：`@continuum-restore on` + `@resurrect-processes '"claude->claude --continue"'`，
+重启 tmux 后恢复三个会话；或者手动在一个 pane 里敲一次 `claude`、什么都不输入。
+
+**原因**：状态集里只有 `running / done / wait / error`，没有「进程在、但没在干活」这一档。
+TODO-15 把 `SessionStart` 从 `running` 改掉之后，这类 agent 就变成了「没有任何状态」——
+诚实，但信息也丢了。
+
+**修复**：新增 `idle` 状态。
+
+- `SessionStart`（`source=compact` 除外）→ `idle`；`UserPromptSubmit` → `running`；
+  `SessionEnd` 同时清 `running` 与 `idle`（`WHISTLE_TRANSIENT_STATES`）。
+- **`idle` 顶不掉待处理通知**：守卫在 `whistle_state_set`（唯一写入点），不在 hook 里。
+- `whistle_rank`：error 5 > wait 4 > done 3 > running 2 > idle 1 > 空 0 ——
+  idle 必须低于 running（同窗口有在跑的就显示 ▶），又必须高过 0（整个窗口都空闲时
+  徽章才显示 ◉，否则赢不过初始值）。
+- 渲染：窗口徽章与 pane 边框状态行各加一层（五层嵌套、结尾 `}}}}}`）；
+  status-right 汇总从四格变五格 `▶N ◉N ◆N ◔N ⚠N`，**显示判据同时看
+  running / idle / pending** —— 漏掉 idle 的话「三个全空闲」会被判成没活动而隐藏，
+  而那正是恢复 tmux 后最想看到的一格。
+- 菜单：running 从借用的 `◉` 改回 `▶`，新增 idle 用 `◉`。两处语义终于一致
+  （早先同一个字符在状态栏表示「空闲」、在菜单表示「在跑」）。
+- idle 不计入 `⚑N`、不染边框、不发瞬时提示与桌面通知、不进 `list`。
+
+**回归测试**：rank 的相对关系、count_states 五段、aggregate 里 idle 能胜出但输给
+running、汇总「只有 idle 时也显示」、菜单 `▶ 运行中` / `◉ 空闲`、
+e2e 的 SessionStart→idle / 不顶掉 done 与 wait / SessionEnd 清 idle。
+
+**相关代码**：`lib/core.sh`（状态常量、rank、count_states、`whistle_state_set` 的
+idle 守卫、`whistle_clear_pane_transient`）、`lib/status-line.sh`（两处徽章 + 汇总）、
+`bin/tmux-whistle`（菜单图标/颜色/标签、`cmd_forget_transient`）、
+`hooks/claude-code.sh`。
 
 ---
 

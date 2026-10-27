@@ -37,7 +37,8 @@ whistle_usage() {
 $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
 
 用法：
-  $WHISTLE_PROG <状态> [消息]        置状态：done | wait | error | running
+  $WHISTLE_PROG <状态> [消息]        置状态：done | wait | error | running | idle
+                                     （idle = 进程在但闲着；不会顶掉待处理通知）
   $WHISTLE_PROG run [-- 标签] -- 命令 [参数...]
                                      包一个命令：按退出码落 done / error，带耗时
   $WHISTLE_PROG clear [-a]           清除当前窗口 / 全部待处理状态
@@ -65,10 +66,10 @@ Claude Code 集成：
   @whistle_os on|off                 桌面系统通知（默认 off）
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
-  @whistle_color_done|wait|error|running   徽章与边框颜色
+  @whistle_color_done|wait|error|running|idle   徽章与菜单颜色
   @whistle_color_pending             待处理总数的颜色（默认 #5fd7d7 青）
   @whistle_icon_done|wait|error|running    各状态的图标（默认 ◆ / ◔ / ⚠ / ▶）
-  @whistle_icon_idle                 没有 agent 在跑时那格显示的图标（默认 ◉）
+  @whistle_icon_idle                 空闲状态的图标（默认 ◉；汇总与菜单共用）
   @whistle_icon_pending              全局计数前的图标（默认 ⚑；空串 = 不显示）
   @whistle_spin on|off               running 用 Braille 帧轮转（默认 on）
   @whistle_spin_interval 0.5         每帧间隔（秒）
@@ -372,18 +373,18 @@ whistle_menu_overflow() {
 # whistle_menu_state_icon <状态> → 菜单里该状态的前缀图标
 #
 # 与状态栏用同一套图标与颜色，两个界面看起来才是一回事：
-#   done ◆ / wait ◔ / error ⚠ / running ◉
+#   done ◆ / wait ◔ / error ⚠ / running ▶ / idle ◉
 #
-# running 用 ◉ 而不是状态栏那串 Braille 帧：菜单是一次性绘制的静态快照，
-# 帧画上去就冻住了，看起来像渲染错乱而不是动画。用 ◉ 是为了「这一项在跑」
-# 这个信息本身。
+# running 用静态 ▶ 而不是状态栏那串 Braille 帧：菜单是一次性绘制的静态快照，
+# 帧画上去就冻住了，看起来像渲染错乱而不是动画。
 #
-# ⚠️ 语义上要注意：状态栏里 ◉ 表示「一个都没在跑」，菜单里表示「这一项在跑」。
-#    同一个字符在两个界面里的含义相反 —— 因为状态栏说的是全局计数，
-#    菜单说的是单条记录。
+# 早先 running 借用的是 ◉，于是同一个字符在状态栏表示「空闲」、菜单表示「在跑」
+# —— 含义正好相反，看两个界面对同一件事会得出相反结论。现在 ▶=在跑、◉=空闲，
+# 两处一致。
 whistle_menu_state_icon() {
   case "${1:-}" in
-  running) whistle_icon '@whistle_icon_idle' ;;
+  running) whistle_icon '@whistle_icon_running' ;;
+  idle) whistle_icon '@whistle_icon_idle' ;;
   done) whistle_icon '@whistle_icon_done' ;;
   wait) whistle_icon '@whistle_icon_wait' ;;
   error) whistle_icon '@whistle_icon_error' ;;
@@ -394,6 +395,7 @@ whistle_menu_state_icon() {
 whistle_menu_state_color() {
   case "${1:-}" in
   running) whistle_conf '@whistle_color_running' ;;
+  idle) whistle_conf '@whistle_color_idle' ;;
   done) whistle_conf '@whistle_color_done' ;;
   wait) whistle_conf '@whistle_color_wait' ;;
   error) whistle_conf '@whistle_color_error' ;;
@@ -625,16 +627,17 @@ cmd_read_pane() {
   whistle_refresh_sessions "$_win"
 }
 
-# agent 退出（SessionEnd hook）时清掉该 pane 的 running。
+# agent 退出（SessionEnd hook）时清掉该 pane 的「临时」状态。
 #
-# running 是「正在干活」的临时标记，agent 走了就该灭 —— 否则窗口会一直亮 ▶。
-# 只清 running：done/wait/error 是待处理通知，agent 退出不代表你已经看过。
-cmd_forget_running() {
+# running / idle 都是「agent 进程活着」的标记：在干活 / 闲着待命。agent 走了
+# 两个都该灭 —— 否则窗口会一直亮 ▶ 或 ◉。待处理通知（done/wait/error）一律
+# 不动：agent 退出不代表你已经看过。
+cmd_forget_transient() {
   _pane="${1:-}"
   [ -z "$_pane" ] && _pane=$(whistle_resolve_pane '')
   [ -z "$_pane" ] && return 0
 
-  _win=$(whistle_clear_pane_state "$_pane" running) || return 0
+  _win=$(whistle_clear_pane_transient "$_pane") || return 0
   [ -n "$_win" ] || return 0
 
   # 窗口清空后才还原边框。若还剩别的待处理状态，边框已经是它的颜色，别动。
@@ -781,7 +784,7 @@ cmd_doctor() {
 }
 
 case "$1" in
-done | wait | error | running)
+done | wait | error | running | idle)
   cmd_set "$@"
   ;;
 run)
@@ -829,7 +832,7 @@ install-hooks)
   ;;
 --clear-pane)
   shift
-  cmd_forget_running "${1:-}"
+  cmd_forget_transient "${1:-}"
   ;;
 --recompute)
   shift

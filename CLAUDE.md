@@ -76,8 +76,8 @@ publish，不用重载 tmux 配置。
 `cmd_menu` 与 `cmd_menu_args` 共用它）。
 
 **图标与颜色**（都可配，见 `WHISTLE_DEFAULTS`）：`◆` 完成（紫 `#af5fff`）、`◔` 等待、
-`⚠` 错误、`▶` 运行中、`◉` 空转、`⚑` 待处理总数（青 `#5fd7d7`）。
-菜单里每项都带对应图标；running 项用绿色 `◉`。
+`⚠` 错误、`▶` 运行中（绿 `#00af00`）、`◉` 空闲（灰 `#8a8a8a`）、`⚑` 待处理总数（青 `#5fd7d7`）。
+菜单里每项都带对应图标，且与状态栏语义一致：`▶` = 在跑、`◉` = 空闲。
 
 ## 不变量（改代码前必须知道）
 
@@ -150,12 +150,19 @@ publish，不用重载 tmux 配置。
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。
 
-**`running` 只能由 `UserPromptSubmit` 点亮**：`SessionStart` 不代表 agent 在干活 ——
-`--continue` / `--resume` 恢复出来的、以及刚敲 `claude` 起的新会话，都只是在提示符前
-**等着**。早先把它映射成 `running`，配上 resurrect 的 `@continuum-restore` 就是
-「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。`SessionStart`（`source=compact`
-除外 —— 那是轮中压缩，agent 还在干活）现在只做一件事：清掉残留的 `running`，
-顺手治「上一个 agent 被 SIGKILL、没发 `SessionEnd`」的永久 `▶`。
+**`running` 只能由 `UserPromptSubmit` 点亮，`SessionStart` 报的是 `idle`**：
+`SessionStart` 不代表 agent 在干活 —— `--continue` / `--resume` 恢复出来的、以及刚敲
+`claude` 起的新会话，都只是在提示符前**等着**。早先把它映射成 `running`，配上
+resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。
+现在映射成 `idle`（`source=compact` 除外 —— 那是轮中压缩，agent 还在干活，原样不动）。
+
+**`idle` 顶不掉待处理通知**：守卫在 `whistle_state_set`（唯一写入点），不在 hook 里。
+恢复会话不能把上一轮还没读的 `◆`/`◔`/`⚠` 当成已读。`idle` 也不参与「已读即清除」：
+把 `done` 读掉之后那一格是空的，不是 `◉`。
+
+**`◉` 不再表示「零个在跑」**：`@whistle_count_idle` 是独立计数，汇总里 `▶N ◉N`
+两格并存。整段的显示判据必须同时看 running / idle / pending 三个 —— 漏掉 idle 的话
+「三个 agent 全空闲」会被判成没活动而整段隐藏，而那一格正是恢复 tmux 后最想看到的。
 
 **消息消毒**：任何进入 tmux format 的文本都要过 `whistle_sanitize` —— 剔掉 `# { } |`
 与控制字符，截断 80 字符。否则 `#{` 会被二次展开、`}` 会截断条件式。

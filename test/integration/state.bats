@@ -141,22 +141,28 @@ pane_of() {
 
 # -- 全局计数 --------------------------------------------------------------
 
-@test "recompute_global: 四态分布写进 global option" {
+@test "recompute_global: 五态分布写进 global option" {
   wt new-window -d -n w2
   wt new-window -d -n w3
-  local p1 p2 p3
+  wt new-window -d -n w4
+  local p1 p2 p3 p4
   p1=$(wt display -p -t w1 '#{pane_id}')
   p2=$(wt display -p -t w2 '#{pane_id}')
   p3=$(wt display -p -t w3 '#{pane_id}')
+  p4=$(wt display -p -t w4 '#{pane_id}')
   whistle_state_set "running" '' "$p1"
+  whistle_state_set "idle" '' "$p4"
   whistle_state_set "done" 'a' "$p2"
   whistle_state_set "error" 'b' "$p3"
 
   whistle_recompute_global
   assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(opt '@whistle_count_idle')" '1'
   assert_eq "$(opt '@whistle_count_done')" '1'
   assert_eq "$(opt '@whistle_count_wait')" '0'
   assert_eq "$(opt '@whistle_count_error')" '1'
+  # idle 与 running 都不算待处理：pending 只有 done + error
+  assert_eq "$(opt '@whistle_pending')" '2'
 }
 
 @test "recompute_global: 只数待处理状态，running 不算" {
