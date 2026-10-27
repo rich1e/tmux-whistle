@@ -135,7 +135,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_done` | `◆` | 完成符号 |
 | `@whistle_icon_wait` | `◔` | 等待符号 |
 | `@whistle_icon_error` | `⚠` | 错误符号 |
-| `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin off` 时才用；开时是 Braille 帧） |
+| `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是 Braille 帧，计数为 0 或 `spin off` 时用它） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
 | `@whistle_agent_cmds` | `claude claude.exe` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
@@ -232,6 +232,10 @@ set -g @whistle_icon_pending ''
 ```
 
 十帧，默认每 0.5 秒一帧。
+
+**计数为 0 时退回静态 `▶`**（不是继续挂着最后一帧）：推进器在 running 归零时自己退出，
+但帧字符还留在 option 里 —— 不判计数的话状态栏会一直显示 `⠋ 0`，动画早停了、字形还在，
+看起来像卡死。
 
 **这是怎么做到的**：状态栏里的串是预先算好存在 global option 里的**纯 format**
 （不 fork 是硬红线），而 format 本身是静态的 —— tmux 没有「每 N 帧换字符」的原生

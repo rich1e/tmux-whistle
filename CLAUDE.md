@@ -68,7 +68,7 @@ publish，不用重载 tmux 配置。
 （自愈，见下），再依次走边框、边框状态行、状态栏刷新、瞬时提示扇出、桌面通知。
 `cmd_set` 与 `cmd_run` 共用 `whistle_finish`（重算 + 投递）—— 复制两份必然分叉。
 
-**CLI 表面**：`done|wait|error|running`（置状态，可带 `--title` / `--body`）、
+**CLI 表面**：`done|wait|error|running|idle`（置状态，可带 `--title` / `--body`）、
 `run -- 命令`（按退出码落状态，带耗时）、`clear` / `list` / `menu` / `jump` / `on|off` /
 `doctor` / `install-hooks`。菜单键是 `prefix + n`。
 菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
@@ -200,8 +200,13 @@ resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 
 `lib/spin.sh` 是独立的推进器进程：只在真有 running 时被 `run-shell -b` 拉起，
 running 归零时下一轮循环 break 并清 pidfile，不常驻。
 
+**帧外面必须再套一层「有没有 running」的判断**：推进器退出后 `@whistle_spin_char`
+还留着最后一帧，不判计数的话状态栏会一直挂着 `⠋ 0` —— 动画早停了、字形还在，
+看起来像卡死。所以 `whistle_summary_build` 里 running 那格是
+`#{?#{@whistle_count_running},<帧选择器>,<静态图标>}`，归零退回 `▶`。
+
 **菜单是静态快照**（`display-menu` 画完就定住，没有更新已打开菜单的接口），
-所以菜单里的 running 项用固定的 `◉` 而非 Braille 帧 —— 冻住的帧看起来像渲染错乱。
+所以菜单里的 running 项用固定的 `▶` 而非 Braille 帧 —— 冻住的帧看起来像渲染错乱。
 
 ## 测试约定
 

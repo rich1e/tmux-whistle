@@ -575,7 +575,7 @@ teardown() {
   assert_contains "$output" '#[fg=#00af00]▶'
 }
 
-@test "status-right: @whistle_spin on 时 running 那格变成 Braille 帧选择器" {
+@test "status-right: @whistle_spin on 时 running 那格是 Braille 帧选择器" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish
@@ -583,7 +583,52 @@ teardown() {
   run opt '@whistle_status_right'
   assert_contains "$output" '#{@whistle_spin_char}'
   assert_contains "$output" '⠋'
-  assert_not_contains "$output" '▶'
+}
+
+@test "status-right: spin 开着但 running 归零 → 退回静态 ▶，不空转" {
+  # 推进器在 running 归零时自己退出，@whistle_spin_char 却还留着最后一帧。
+  # 帧外面不套「有没有 running」的判断，状态栏就会一直挂着「⠦ 0」：
+  # 动画早停了，字形还在，看起来像卡死。
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 0
+  wt set -g @whistle_count_running 0
+  wt set -g @whistle_count_idle 3
+  wt set -g @whistle_count_done 0
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+  # 模拟推进器退出后残留的最后一帧
+  wt set -g @whistle_spin_char '⠦'
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '▶ 0'
+  assert_not_contains "$output" '⠦ 0'
+  # 其余格子照常
+  assert_contains "$output" '◉ 3'
+}
+
+@test "status-right: spin 开着且有 running → 仍然用 Braille 帧，不退回 ▶" {
+  wt_load core
+  wt_load status-line
+  whistle_status_right_publish
+  wt set -g status-right ''
+  whistle_status_right_patch
+
+  wt set -g @whistle_pending 0
+  wt set -g @whistle_count_running 2
+  wt set -g @whistle_count_idle 0
+  wt set -g @whistle_count_done 0
+  wt set -g @whistle_count_wait 0
+  wt set -g @whistle_count_error 0
+  wt set -g @whistle_spin_char '⠹'
+
+  run wt display -pF '#{E:status-right}'
+  assert_contains "$output" '⠹ 2'
+  assert_not_contains "$output" '▶ 2'
 }
 
 @test "status-right: @whistle_spin off 时退回静态图标" {

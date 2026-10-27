@@ -92,10 +92,16 @@ whistle_summary_build() {
   # running 那格：@whistle_spin on 时用 Braille 帧，否则退回静态图标。
   # ⚠️ 帧片段是 format，**不能过 whistle_icon / whistle_sanitize** ——
   # 它会剔掉 # { } |，整个 format 会被毁成空串（tmux 静默渲染成空白）。
+  #
+  # ⚠️ 帧外面再套一层「有没有 running」的判断：推进器在 running 归零时自己退出，
+  # 但 @whistle_spin_char 还留着最后一帧 —— 不判 count 的话状态栏会一直挂着
+  # 「⠋ 0」：动画早停了，字形还在，看起来像卡死。归零时退回静态 ▶。
+  _sm_s_icon_run=$(whistle_icon '@whistle_icon_running')
   if [ "$(whistle_conf '@whistle_spin')" = on ]; then
-    _sm_s_run=$(whistle_spin_build)
+    _sm_s_run=$(printf '#{?#{@whistle_count_running},%s,%s}' \
+      "$(whistle_spin_build)" "$_sm_s_icon_run")
   else
-    _sm_s_run=$(whistle_icon '@whistle_icon_running')
+    _sm_s_run=$_sm_s_icon_run
   fi
   _sm_s_idle=$(whistle_icon '@whistle_icon_idle')
 
