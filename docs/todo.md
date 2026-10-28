@@ -14,7 +14,8 @@
 
 ### 缺失能力
 
-（暂无）
+- [ ] **TODO-18** 后台 Bash（`run_in_background`）在跑时状态栏看不见
+- [ ] **TODO-19** `notification_type` 的 `plan_approval` / `idle_prompt` 未处理
 
 ### 文档缺陷
 
@@ -22,6 +23,7 @@
 
 ## 已修复
 
+- [x] **TODO-17** 后台/子 agent 在跑时，徽章显示「空闲」（活动与通知挤在一个状态槽里）
 - [x] **TODO-3** 菜单第 10 项起没有快捷键
 - [x] **TODO-4** `make fmt-check` 实际没有检查 bash 测试文件
 - [x] **TODO-5** `@whistle_badge` 没有任何代码读
@@ -1049,3 +1051,232 @@ idle 守卫、`whistle_clear_pane_transient`）、`lib/status-line.sh`（两处�
 - 设计方案评审：[notify-design-review.md](notify-design-review.md)
 - 开发与测试约定：[development.md](development.md)
 - 使用者文档：[../README.md](../README.md)
+
+---
+
+## TODO-17 · 后台/子 agent 在跑时，徽章显示「空闲」
+
+✅ 已修复（活动通道与通知通道拆成正交两条）
+
+**现象**：Claude Code 界面里 agent 明明在跑（`Zesting… (10m 21s)`），tmux 状态栏却是
+`▶ 0 ◉ 3 ◆ 0 ◔ 0 ⚠ 0` —— 三个 claude pane 全被判成 `idle`。**全程零报错、零日志。**
+
+**原因**：每个 pane 只有**一个**状态槽 `@whistle`，而「agent 在不在干活」与
+「有没有事等你」是两件**正交**的事。单槽模型下，任何一个事件到达都会把另一个顶掉。
+完整的降级链（每一环都能在代码里指到具体行）：
+
+1. `UserPromptSubmit` → `@whistle = running`（▶）。
+2. Claude Code 发 `Notification`（如后台事件完成）→ hook 把它映射成 `done` →
+   **无条件写 `@whistle`，把 `running` 顶掉**。`whistle_state_set` 里唯一的守卫
+   只挡「`idle` 不顶掉待处理通知」，**对 `running` 毫无保护**。
+3. 用户切进窗口 → `after-select-window[whistle]` → `whistle_read_window`
+   → 待处理态被清 → **整格被清空**（`whistle_clear_window` 清的是 `@whistle` 本身）。
+4. 紧接着的重算 → `whistle_resolve_idle_panes`：状态为空 + 前台进程是 `claude`
+   → **推导出 `idle`** → ◉。
+5. 主 agent 还在干活，但**没有任何事件会再把 `running` 点回来**（`UserPromptSubmit`
+   只在用户提交新 prompt 时才触发）→ 徽章一直显示「空闲」。
+
+`Stop` 与 `SessionStart`（非 compact）也都能覆盖 `running`，同一个洞；plan mode 下
+批准计划后 agent 继续跑、但没有新的 `UserPromptSubmit`，走的是同一条路。
+
+**修复**：拆成两条正交通道。
+
+- **活动通道** `@whistle` ∈ `running | idle | gone` —— 这个 pane 里有没有 agent 在干活。
+- **通知通道** `@whistle_notice` ∈ `done | wait | error` —— 有没有事等你。
+- **有效态** = 两者按 rank 取高者（`error 5 > wait 4 > done 3 > running 2 > idle 1`），
+  写进 pane 级派生值 `@whistle_eff` / window 级 `@whistle_win`。
+- 汇总的 `▶/◉` 数活动通道、`◆/◔/⚠` 数通知通道，**两组互不排斥**。
+- **已读路径只清通知通道**，绝不动活动通道 —— 这是本次的关键语义修正：
+  `whistle_clear_window` / `whistle_clear_all` / `whistle_read_window` /
+  `whistle_read_pane` 现在都只碰 `@whistle_notice*`。
+- `Notification(agent_needs_input)` / `agent_completed` 是**子 agent** 的事件，
+  只写通知通道，**不再碰活动通道**。
+- 订阅 `PreToolUse`（任何工具 → 活动 `running`，覆盖 plan 批准后续跑）与
+  `SubagentStop`；`PreToolUse` 且 `tool_name` ∈ `Agent`/`Task` 时点亮子 agent 标记。
+- **子 agent 标记存的是过期时间戳**（`@whistle_sub = now + @whistle_sub_ttl`），
+  过期由推导层按时间戳判断（无需写回）；`lib/spin.sh` 的推进器每
+  `@whistle_recompute_every` 帧触发一次全局重算，让过期真正落地 ——
+  这是防「标记泄漏 → 永久亮 ▶」的安全阀，挂在推进器上是因为它
+  **只在 `count_running > 0` 时活着**，恰好就是需要自愈的场景。
+
+**⚠️ 渲染侧的红线**：两处徽章的 format **层数与结尾大括号一个都没变**。
+多通道的合成在**写 option 时**就做完了（`@whistle_eff` / `@whistle_win`），
+format 只读一个现成的值 —— 往 `#{?...}` 里再叠一层去合成，配错一格 tmux 会
+**静默渲染成空字符串**，是这个项目最贵的坑。
+
+**回归测试**（关键几条）：
+- 主 agent `running` 时收到 `Notification(agent_completed)` → 活动仍是 `running`，
+  通知通道是 `done`。
+- `running` 状态下走已读路径 → 活动**仍是 `running`**，不被降级成 `idle`。
+- `PreToolUse(Agent)` 点亮活动与子 agent 标记；`Notification(agent_completed)` 清标记。
+- 子 agent 标记过期 → 活动回落 `idle`（TTL 自愈）。
+- 汇总里同一个 pane 同时计入 `count_running` 与 `count_done`（两组不互斥）。
+
+**顺带修掉的两处测试基础设施隐患**（不是功能缺陷）：
+- `@test` 体末尾写裸 `return 0` 会被 ShellCheck 当成**文件作用域**的 return，
+  把它后面所有 `@test` 标成「不可达」（SC2317）。改成 `if` 块。
+- `for ... in ... done ...` 里出现字面量 `done` 会触发 SC1010，必须加引号。
+
+**相关代码**：`lib/core.sh`（状态常量、`whistle_effective_state`、推导层列契约、
+双写入点、已读路径、`@whistle_eff` 派生）、`hooks/claude-code.sh`（事件映射）、
+`lib/install-hooks.sh`（订阅 6→8 个事件）、`lib/status-line.sh`（pane 徽章读
+`@whistle_eff`）、`bin/tmux-whistle`（CLI 分流 + 4 个内部子命令）、`lib/spin.sh`。
+
+---
+
+## TODO-18 · 后台 Bash（`run_in_background`）在跑时状态栏看不见
+
+⬜ 待处理
+
+**现象**：`Bash(run_in_background: true)` 起的命令（这个项目里典型是几分钟的
+`xcodebuild test`）还在跑，状态栏却显示 `◆` 或 `◉` —— 看起来就像「在跑却显示空闲」。
+
+**触发**：让 Claude Code 用后台 Bash 跑一条几分钟的命令，在主 agent 那一轮结束之后
+看状态栏。
+
+**原因**：插件只认 Claude Code 的 hook 事件，而**后台 Bash 不产生任何本插件订阅的
+事件**。TODO-17 修好的是「后台/子 **agent**」的可见性（`PreToolUse` 的
+`Agent`/`Task` 调用能点亮 `▶`），后台 **Bash** 仍然看不见。
+
+**为什么单独列出来**：2026-10-28 那次「后台在跑、徽章显示空闲」的现场取证
+（见下方诊断记录）显示，那个会话里**从来没有 `run_in_background: true` 的
+`Agent`/`Task` 调用**，所有后台调用都是 `Bash(xcodebuild test)` —— 也就是说，
+用户看到的那个「还在跑的东西」很可能属于本条目，而不是 TODO-17。
+
+**调查线索**：Claude Code v2.1.304 的 hook schema 里还有这些**未订阅**的事件 ——
+`SubagentStart`、`TaskCreated` / `TaskCompleted`（后台任务生命周期）、`TeammateIdle`。
+`run_in_background` 是 `tool_input` 里的**嵌套字段**，而 `whistle_json_get` 只取
+顶层扁平字符串，取嵌套值需要额外实现（jq / python3 分支已有，扩展取值路径即可）。
+
+**修复方向**：先开 `@whistle_debug on`，跑一次后台 `xcodebuild`，从
+`${TMPDIR:-/tmp}/tmux-whistle-hooks.log` 里确认**那一刻到底来了哪些事件**，
+再按事实接线 —— **不要凭事件名猜语义**。
+
+---
+
+## TODO-19 · `notification_type` 的 `plan_approval` / `idle_prompt` 未处理
+
+⬜ 待处理
+
+**现象**：`plan_approval`（等你批准计划）目前被忽略，plan mode 下 agent 确实在等人，
+但状态栏不会有任何「等待」提示。`idle_prompt` 也被忽略。
+
+**原因**：`hooks/claude-code.sh` 的 `whistle_notify_state` 只覆盖
+`permission_prompt` / `elicitation_dialog` / `elicitation_url_dialog` /
+`agent_needs_input` / `agent_completed`。而 v2.1.304 的二进制里还存在
+`plan_approval` 与 `idle_prompt` 两个字面量 —— 注意 `notification_type` 在 schema 里
+是**裸字符串（不是枚举）**，所以这个集合天然开放，漏掉的类型会静默落到 `''`。
+
+**修复方向**：`plan_approval` 很可能应映射成 `wait`（agent 真的卡在等人），
+但要先确认它在运行时确实会发。`idle_prompt` **语义未确认，不要凭名字猜** ——
+先看日志里它出现的时机。
+
+**相关代码**：`hooks/claude-code.sh` 的 `whistle_notify_state`。
+
+---
+
+## 诊断记录：Claude Code hook 在「后台 agent」场景下的实际行为
+
+> 2026-10-28 · 为「hook 事件追踪日志」（`hooks/claude-code.sh` 的 `whistle_hook_log`）做的查证。
+> 每条结论都标了证据强度：**已确认** / **未能确认**。没查到的地方就写没查到，不猜。
+
+### a) 用户报告的那个会话里到底发生了什么
+
+**「后台 agent 在跑」这个前提，未能确认。** 查证过程与结果如下。
+
+数据源：`~/.claude/projects/-Users-rich1e-workspace-code-dayfold/` 下 2026-10-26 之后的
+6 个会话（另一个目录 `-...-dayfold-dayfold` 最新只到 10-22，不在范围内）。
+
+| 会话 | 最后修改 | 行数 | `Agent` 调用 | `run_in_background=true` |
+|---|---|---|---|---|
+| `2b6204cb` | 10-28 17:53 | 1119 | Explore×3 + Plan×1，**全前台** | 无 |
+| `093a0763` | 10-28 17:18 | 9 | 无 | 无 |
+| `4538337e` | 10-28 16:36 | 7640 | Explore×1 + general-purpose×3，**全前台** | **Bash ×45** |
+| `df1b2730` | 10-28 16:35 | 4122 | Explore×4，**全前台** | 无 |
+| `64fd50cb` | 10-28 11:28 | 3999 | 无 | **Bash ×9** |
+| `d61deea9` | 10-26 14:51 | 1687 | Explore×3 + general-purpose×3，**全前台** | 无 |
+
+- **已确认：没有任何会话用 `run_in_background: true` 起过 `Agent` / `Task`。**
+  所有 `run_in_background=true` 的调用都是 `Bash`，内容是
+  `xcodebuild test -project dayfold.xcodeproj ...`（单次几分钟）。
+- **已确认：没有命名 teammate。** 所有 `Agent` 调用的 `input.name` 都是空；
+  `2b6204cb` 里 `ListAgents` 调过 3 次，但会话里没有 teammate 活动。
+- **已确认：结束时都不在 plan mode。** 两个大会话都调用过 `ExitPlanMode`，但最后一条
+  `permission-mode` 是 `auto`、最后一条 `mode` 是 `normal`。
+- **主 agent 当时在跑还是已交付**：
+  - `2b6204cb`（最近的那个）：最后一条 assistant 内容块是 `tool_use`，transcript 末尾是
+    `tool_result` 紧跟一条 `api-request` —— **主 agent 还在一轮里**。
+  - `4538337e`：最后一条 assistant 内容块是 `text`（**已交付**），但此前起过 45 次
+    后台 `xcodebuild`。
+
+**推断（未能直接验证）**：用户看到的「后台还在跑」很可能是**后台 Bash（xcodebuild）**，
+不是后台 agent。插件只认 hook 事件，**完全看不见后台 Bash** —— 主 agent 一轮结束
+（`Stop`）后徽章就落 `done` / `idle`，而后台 `xcodebuild` 仍在跑。这与「有东西在跑、
+状态栏却显示空闲」的现象吻合。
+
+> 为什么**未能确认**：transcript 不记录 hook 是否触发、也不记录后台进程存活，
+> 无法确认截屏那一刻后台 `xcodebuild` 是否仍在运行。
+
+### b) hook 事件与 `notification_type` 的取值集合
+
+查证对象：本机 Claude Code **v2.1.304**
+（`~/.nvm/versions/node/v22.21.1/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe`）。
+该版本发的是 **271MB 原生二进制、没有 JS 源码可读**，结论全部来自 `strings` 提取的
+schema 字面量 —— 所以「存在哪些取值」可靠，「运行时实际会发哪些」不一定。
+
+**已确认：`hook_event_name` 共 33 个取值**（schema 里 `T("<名字>")` 的全集）：
+
+```
+PreToolUse  PostToolUse  PostToolUseFailure  Notification
+PermissionRequest  PermissionDenied  Elicitation  ElicitationResult
+SessionStart  SessionEnd  Setup  Stop  StopFailure
+UserPromptSubmit  UserPromptExpansion  SubagentStart  SubagentStop
+TaskCreated  TaskCompleted  TeammateIdle  PreCompact  PostCompact
+ConfigChange  CwdChanged  DirectoryAdded  FileChanged  InstructionsLoaded
+MessageDisplay  PreModelSwitch  PostModelSwitch  PostToolBatch
+WorktreeCreate  WorktreeRemove
+```
+
+与「后台 / 子 agent 可见性」直接相关、而插件**目前都没订阅**的四个：
+
+- `TeammateIdle` —— teammate（agent team）空闲。正是「agent teams 显示空闲」对应的钩子。
+- `SubagentStart` / `SubagentStop` —— 子 agent 起停。
+- `TaskCreated` / `TaskCompleted` —— 后台任务生命周期。
+
+> 所以「主 agent 已交付、子/后台 agent 还在跑」这类场景，**当前在插件眼里完全不可见**。
+> 这对后续任务（子 agent 可见性）是直接依据。
+
+**已确认：`notification_type` 不是枚举，schema 里是裸字符串**：
+
+```
+notification_type:o()        // o() = string，无取值约束
+```
+
+含义：插件 `whistle_notify_state` 的 case 列表**天然是开放集合**，遇到没覆盖的类型会
+静默落到 `''`（不写状态）。这正是必须有事件日志的原因 —— 否则「发了个新类型但没处理」
+永远查不到。
+
+**二进制里出现的 `notification_type` 字面量**（**已确认存在**；**未能确认**哪些是当前
+版本运行时真的会发）：
+
+```
+permission_prompt   plan_approval   auth_success   elicitation_complete
+elicitation_dialog  elicitation_url_dialog   agent_needs_input   agent_completed
+idle_prompt         quota_auto_resume_fired   plugin_notification
+```
+
+插件现状：`permission_prompt` / `elicitation_dialog` / `elicitation_url_dialog` /
+`agent_needs_input` → `wait`；`agent_completed` → `done`；其余忽略。
+
+两个值得后续确认的遗漏：
+
+- **`plan_approval`**（等用户批准计划）目前被忽略 —— plan mode 下 agent 确实在等人，
+  很可能应映射成 `wait`。
+- **`idle_prompt`** 目前被忽略 —— 语义未确认，不要凭名字猜。
+
+**已确认（顺带）**：`SessionStart.source` 的取值是
+`startup | resume | clear | compact | fork` —— 插件对 `compact` 的特判有效，
+`fork` / `clear` 会照常落 `idle`。
+（`UserPromptSubmit.source` 是另一套：`user | sdk | system | loop_wakeup |
+schedule_wakeup | poll_event`，两者不同源，不要混用。）
+

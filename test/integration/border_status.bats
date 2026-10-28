@@ -41,10 +41,16 @@ expect_contains() {
   local p1 p2 w
   p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
   p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
-  w=$(win_of)
+  w=$(wt display -p -t w1 '#{window_id}')
 
-  wt set -p -t "$p1" @whistle "done"
-  wt set -p -t "$p2" @whistle "wait"
+  # 走新模型的真实链路：写**通知通道**，再由重算把有效态 @whistle_eff
+  # 落到每个 pane 上 —— 徽章读的是派生值，直接写 @whistle 徽章是看不到的
+  # （@whistle 是活动通道，只装 running / idle / gone）。
+  # 状态名 'done' 必须加引号：裸的 done 会被 shell / ShellCheck 当成
+  # 语句终止符（SC1010），而这里它只是一个普通实参。
+  whistle_notice_set 'done' '做完了' '' "$p1"
+  whistle_notice_set wait '要授权' '' "$p2"
+  whistle_recompute_window "$w"
 
   # 与真实路径一致：whistle_deliver 先 ensure（发布 pane 徽章）再 apply
   whistle_ensure_status_line

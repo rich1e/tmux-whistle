@@ -141,6 +141,8 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
+| `@whistle_recompute_every` | `60` | 推进器每 N 帧触发一次全局重算（配 0.5 秒 ≈ 30 秒）；用来让过期的后台 agent 标记自行回落 |
+| `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
 | **调试** | | |
 | `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
@@ -223,6 +225,12 @@ set -g @whistle_icon_pending ''
 汇总段只在真有 agent（`▶` / `◉` / `⚑` 任一非零）时出现；五个格子一起出现、
 **计数为 0 的也保留**，这样状态栏宽度不会随计数跳动。
 
+**两组计数互不排斥。** 汇总里的 `▶N` / `◉N` 数的是「agent 在不在干活」，
+`◆N` / `◔N` / `⚠N` 数的是「有没有事等你」—— 这是两件正交的事，同一个 pane
+可以既在跑、又有事等你。所以看到 `▶ 1 ◉ 2 ◆ 1` 时，`▶1` 与 `◆1` 很可能是**同一个
+agent**：它一边跑着，一边刚给过你一条要看的东西。窗口徽章那一格只能显示一个符号，
+按优先级取（`⚠` > `◔` > `◆` > `▶` > `◉`）。
+
 ### running 的动画
 
 `▶` 那格是动的 —— 有 agent 在跑时会转。用的是经典 Braille 点阵 spinner：
@@ -262,13 +270,27 @@ session 里的细节"。
 
 ### 状态与符号
 
+状态分成**两条正交通道**，一个 pane 可以同时命中两条：
+
+**活动通道 —— 这个 pane 里有没有 agent 在干活**
+
 | 状态 | 徽章 | 计入 ⚑ | 什么时候出现 |
 |---|---|---|---|
-| `running` | `▶` | 否 | agent 开始干活（发了一条 prompt 之后） |
+| `running` | `▶` | 否 | 主 agent 正在干活（发了一条 prompt 之后），**或这个 pane 里有后台/子 agent 在跑** |
 | `idle` | `◉` | 否 | 进程在、但没在干活：刚敲 `claude` 或 `--continue` 恢复，停在提示符前等你输入 |
+
+**通知通道 —— 有没有事等你**
+
+| 状态 | 徽章 | 计入 ⚑ | 什么时候出现 |
+|---|---|---|---|
 | `done` | `◆` | 是 | 一轮工作结束 |
 | `wait` | `◔` | 是 | 等你批准 / 等你输入 |
 | `error` | `⚠` | 是 | 回合因 API 错误结束（限流 / 过载 / 认证失败 …） |
+
+> **为什么分两条**：早先只有一个状态槽，于是「后台 agent 完成」这条通知会把
+> 主 agent 的 `▶` 顶掉；你切进窗口读掉通知、那一格被清空之后，「按进程发现」
+> 又会把一个**正在干活**的 agent 判成 `◉` 空闲 —— 全程零报错。分成两条通道
+> 之后，通知再怎么来也碰不到活动状态。
 
 `running` 与 `idle` 都不计入 `⚑N`，也不发瞬时提示与桌面通知 —— 每敲一次 prompt
 就朝所有 session 推一条「运行中」纯属噪声。它们出现在状态栏汇总的 `▶N` / `◉N` 里，
@@ -291,6 +313,14 @@ session 里的细节"。
 已读。读完一条 `done` 之后，那一格会被清空；但只要 agent 还活着（前台进程还在），
 按进程发现会把它算回 `◉` —— 所以「活着但在等」这件事不会因为你读过就消失。
 
+> **已知限制：后台 Bash 看不见。** 插件只认 Claude Code 的 hook 事件，而
+> `Bash(run_in_background: true)` 起的后台命令（比如几分钟的 `xcodebuild test`）
+> **不产生任何本插件订阅的事件**。所以「主 agent 一轮结束了、后台命令还在跑」时，
+> 徽章会落 `◆` / `◉`，而那个命令其实还在转 —— 看起来就像「在跑却显示空闲」。
+> 后台/子 **agent** 能看见（`PreToolUse` 的 `Agent`/`Task` 调用会点亮 `▶`），
+> 后台 **Bash** 目前看不见。要对上这个场景，先打开 `@whistle_debug on` 看
+> `${TMPDIR:-/tmp}/tmux-whistle-hooks.log` 里那一刻到底来了哪些事件。
+
 ### 怎么响应
 
 | 操作 | 效果 |
@@ -308,13 +338,17 @@ hooks 装好后自动工作：
 
 | 你做了什么 | agent 的反应 | 状态栏 |
 |---|---|---|
-| 启动 / 恢复 Claude Code（含 `--continue`） | `SessionStart` hook | 不亮灯 —— agent 只是在提示符前等着 |
 | 启动 / 恢复 Claude Code（含 `--continue`） | `SessionStart` hook | `◉`，不计入 ⚑（进程在，但停在提示符前等你） |
 | 发一条 prompt | `UserPromptSubmit` hook | `▶`，不计入 ⚑ |
-| agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示 |
+| agent 在调工具（含 plan 批准后继续跑） | `PreToolUse` hook | `▶`（保持亮着） |
+| agent 派了后台 / 子 agent | `PreToolUse`（`Agent`/`Task`） | `▶` 一直亮到那个 agent 结束 —— 哪怕主 agent 已经交付 |
+| agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示（活动转 `◉`，但 `◆` 优先显示） |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `◔` + ⚑ + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `⚠` + ⚑ + 提示（消息就是错误文本） |
 | 退出 Claude Code | `SessionEnd` hook | `▶` / `◉` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
+
+⚠️ **后台 `Bash` 不在上表里** —— 用 `run_in_background: true` 起的后台命令不产生
+本插件订阅的任何事件，那个 pane 会显示 `◆` / `◉` 而命令还在跑。见下方「已知限制」。
 
 ### 场景二：任何 agent / 脚本
 

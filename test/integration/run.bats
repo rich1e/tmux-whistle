@@ -29,33 +29,38 @@ assert_nonzero() {
   }
 }
 
-@test "run: 退出码 0 → done" {
+@test "run: 退出码 0 → 通知通道 done，活动通道熄成 idle" {
   run "$CLI" run -- sh -c 'exit 0'
   assert_eq "$status" 0
-  assert_eq "$(optp @whistle "$PANE")" 'done'
+  # 命令跑完了，这个 pane 上没有东西在干活 —— 活动通道不能留在 running，
+  # 否则状态栏会永久转 ▶。终态归通知通道。
+  assert_eq "$(optp @whistle "$PANE")" 'idle'
+  assert_eq "$(optp @whistle_notice "$PANE")" 'done'
 }
 
-@test "run: 退出码非 0 → error，消息里带退出码" {
+@test "run: 退出码非 0 → 通知通道 error，消息里带退出码" {
   run "$CLI" run -- sh -c 'exit 7'
   assert_eq "$status" 7
-  assert_eq "$(optp @whistle "$PANE")" 'error'
-  assert_contains "$(optp @whistle_msg "$PANE")" '7'
+  assert_eq "$(optp @whistle "$PANE")" 'idle'
+  assert_eq "$(optp @whistle_notice "$PANE")" 'error'
+  assert_contains "$(optp @whistle_notice_msg "$PANE")" '7'
 }
 
 @test "run: 命令结束后 running 被换成终态" {
   run "$CLI" run -- sh -c 'exit 0'
-  assert_eq "$(optp @whistle "$PANE")" 'done'
+  assert_eq "$(optp @whistle "$PANE")" 'idle'
+  assert_eq "$(optp @whistle_notice "$PANE")" 'done'
 }
 
 @test "run: 自定义标签出现在消息里" {
   run "$CLI" run 'pnpm test' -- sh -c 'exit 0'
   assert_eq "$status" 0
-  assert_contains "$(optp @whistle_msg "$PANE")" 'pnpm test'
+  assert_contains "$(optp @whistle_notice_msg "$PANE")" 'pnpm test'
 }
 
 @test "run: 没有标签时消息里出现命令名" {
   run "$CLI" run -- pnpm test
-  assert_contains "$(optp @whistle_msg "$PANE")" 'pnpm'
+  assert_contains "$(optp @whistle_notice_msg "$PANE")" 'pnpm'
 }
 
 @test "run: 消息带耗时" {
@@ -65,7 +70,7 @@ assert_nonzero() {
   # 用 grep -E 而不是 assert_contains 's' —— 默认标签是 sh，自带一个 s，
   # 那样写的话把整段耗时删掉也照样绿。
   local m
-  m=$(optp @whistle_msg "$PANE")
+  m=$(optp @whistle_notice_msg "$PANE")
   printf '%s' "$m" | grep -qE '（[0-9]+s）$' || {
     echo "消息里没有耗时: [$m]"
     return 1
@@ -91,14 +96,19 @@ assert_nonzero() {
   kill -INT -- "-$pid" 2> /dev/null || kill -INT "$pid" 2> /dev/null || true
   wait "$pid" 2> /dev/null || true
 
-  # 断言「不在 running」而不是具体终态：包装器活下来时，sleep 可能被一起
+  # 断言「落了终态」而不是具体哪个：包装器活下来时，sleep 可能被一起
   # 打断（130 → error）也可能没被打断（0 → done），两者都是正确结果。
   local state
-  state=$(optp @whistle "$PANE")
-  [ "$state" != 'running' ] || {
-    echo "包装器被打死了，状态停在 running"
+  state=$(optp @whistle_notice "$PANE")
+  case "$state" in
+  done | error) ;;
+  *)
+    echo "包装器被打死了，通知通道停在 [$state]"
     return 1
-  }
+    ;;
+  esac
+  # 活动通道也必须熄掉 —— 否则那盏 ▶ 永远转下去
+  [ "$(optp @whistle "$PANE")" != 'running' ]
 }
 
 @test "run: 命令的输出透传到终端，不被吞掉" {
@@ -135,7 +145,8 @@ assert_nonzero() {
 
   run "$CLI" run -t "$p" -- sh -c 'exit 0'
   assert_eq "$status" 0
-  assert_eq "$(optp @whistle "$p")" 'done'
+  assert_eq "$(optp @whistle "$p")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
   assert_eq "$(optp @whistle "$PANE")" ''
 }
 

@@ -85,17 +85,23 @@ marker = os.environ["WHISTLE_MARKER"]
 cmd = os.environ["WHISTLE_HOOK_CMD"]
 action = os.environ["WHISTLE_ACTION"]
 
-# 我们管理的六个事件。
-#   Stop             agent 一轮结束
+# 我们管理的八个事件。
+#   Stop             agent 一轮结束（活动 → idle，通知 → done）
 #   StopFailure      回合因 API 错误结束（限流 / 过载 / 认证失败 ...）
 #                    —— 它**替代** Stop 触发，两者互斥；error 唯一的自动来源
+#   PreToolUse       工具调用（活动 → running；plan 模式下唯一能把 running
+#                    点回来的事件）。tool_name 为 Agent / Task 时兼记子 agent 标记，
+#                    所以**不设 matcher** —— 由脚本按 tool_name 判
+#   SubagentStop     子 agent 结束（清标记，活动 → idle）
 #   Notification     等授权 / 后台 agent 要输入 / 后台 agent 完成
-#   SessionStart     会话开始 / 恢复（→ 清掉残留的 running，**不点亮**）
-#   UserPromptSubmit 用户发了 prompt（→ running，唯一的点亮入口）
-#   SessionEnd       会话结束（→ 清掉 running，否则窗口会一直亮 ▶）
+#   SessionStart     会话开始 / 恢复（→ idle；compact 时两条通道都不动）
+#   UserPromptSubmit 用户发了 prompt（→ running，并压掉上一轮通知）
+#   SessionEnd       会话结束（→ gone，否则窗口会一直亮 ▶）
 EVENTS = [
     "Stop",
     "StopFailure",
+    "PreToolUse",
+    "SubagentStop",
     "Notification",
     "SessionStart",
     "UserPromptSubmit",
@@ -127,6 +133,9 @@ def our_entry(event):
     if event != "SessionEnd":
         hook["async"] = True
     entry = {"hooks": [hook]}
+    # Notification 只订阅相关类型。PreToolUse **刻意不设 matcher** ——
+    # 我们要的是「任何工具调用」，而 Agent / Task 的额外处理由脚本按
+    # tool_name 判断。设了 matcher 反而会把普通工具挡在外面。
     if event == "Notification":
         entry["matcher"] = NOTIFY_MATCHER
     return entry

@@ -48,6 +48,11 @@ whistle_refresh_all() {
 
 # 只有「有事等你」的状态才染边框。running / idle 不染：
 # 它们是"agent 活着"的背景信息，每敲一次 prompt 就把边框换个颜色纯属噪声。
+#
+# ⚠️ 入参是**有效态**（@whistle_eff），但判定仍然正确，不需要改：
+# 通知通道有值时 rank（done 3 / wait 4 / error 5）必然高过 running(2) / idle(1)，
+# 所以「有效态是通知态」⟺「通知通道有事等你」。反过来有效态是 running / idle
+# 时通知通道一定是空的 —— 不会漏染一条真通知。
 whistle_border_color() {
   case "${1:-}" in
   done) whistle_conf '@whistle_color_done' ;;
@@ -252,9 +257,16 @@ whistle_os_notify() {
 
 # -- 编排 ------------------------------------------------------------------
 
-# whistle_deliver <window> <state> <msg>
+# whistle_deliver <window> <有效态> <消息>
 #
-# 徽章通道没有独立步骤：badge 的数据来自 window 上的 @whistle，
+# 第二个参数是**有效态**（pane 的 @whistle_eff）—— 活动通道 @whistle 与
+# 通知通道 @whistle_notice 按 rank 合成后的那一个值，由调用方（CLI）在写完状态
+# 并重算之后读出来传入。第三个参数是**与它对应的消息**：有效态是通知态时是
+# 通知消息，否则是活动消息。
+#
+# 签名与旧的「原始状态」版本完全一致，所以这里一行都不用改 —— 见下面两个判定。
+#
+# 徽章通道没有独立步骤：badge 的数据来自 window 上的 @whistle_win，
 # 真正要做的是"让状态栏立刻重画"，即 whistle_refresh_sessions。
 whistle_deliver() {
   [ "$(whistle_conf '@whistle_enabled')" = on ] || return 0
@@ -270,6 +282,10 @@ whistle_deliver() {
   # 只有待处理状态才"打扰"用户：瞬时提示与桌面通知都会打断注意力。
   # running 是「agent 刚开始干活」，徽章亮一下就够了 —— 每敲一次 prompt
   # 就朝所有 session 推一条「运行中」纯属噪声。
+  #
+  # ⚠️ 换成有效态之后这个判定依然等价，因为 rank 里通知态永远高于活动态：
+  # 「有事等你」⟺「有效态是通知态」。所以这里不需要再读 @whistle_notice ——
+  # 多读一次反而会把「同一条通知」判成两种口径。
   if whistle_is_notified "$2"; then
     whistle_display_fanout "$1" "$2" "$3"
     whistle_os_notify "$1" "$2" "$3"

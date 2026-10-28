@@ -68,14 +68,15 @@ PY
   assert_contains "$(jqf "d['statusLine']['command']")" 'statusline.sh'
 }
 
-@test "install: 装上六个事件；除 SessionEnd 外都带 async true" {
+@test "install: 装上八个事件；除 SessionEnd 外都带 async true" {
   "$INSTALLER" --settings "$SETTINGS"
 
   python3 - "$SETTINGS" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 hooks = data["hooks"]
-events = ("Stop", "StopFailure", "Notification", "SessionStart", "UserPromptSubmit", "SessionEnd")
+events = ("Stop", "StopFailure", "PreToolUse", "SubagentStop", "Notification",
+          "SessionStart", "UserPromptSubmit", "SessionEnd")
 for event in events:
     ours = [h for e in hooks[event] for h in e["hooks"] if "tmux-whistle" in h["command"]]
     assert len(ours) == 1, f"{event} 应恰好有一个我们的 hook，实际 {len(ours)}"
@@ -84,6 +85,38 @@ for event in events:
 # StopFailure 必须订阅全部错误类型：不能有 matcher 把某些类型挡在外面
 sf = [e for e in hooks["StopFailure"] if any("tmux-whistle" in h["command"] for h in e["hooks"])][0]
 assert "matcher" not in sf, f"StopFailure 不该设 matcher，实际 {sf.get('matcher')!r}"
+PY
+}
+
+@test "install: 新增订阅 PreToolUse 与 SubagentStop" {
+  "$INSTALLER" --settings "$SETTINGS"
+
+  python3 - "$SETTINGS" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+hooks = data["hooks"]
+# PreToolUse 刻意不设 matcher：脚本按 tool_name 判 Agent / Task，
+# 设了 matcher 会把普通工具调用挡在外面。
+for event in ("PreToolUse", "SubagentStop"):
+    entries = [e for e in hooks.get(event, [])
+               if any("tmux-whistle" in h["command"] for h in e["hooks"])]
+    assert len(entries) == 1, f"{event} 应恰好订阅一次，实际 {len(entries)}"
+    assert "matcher" not in entries[0], f"{event} 不该设 matcher"
+PY
+}
+
+@test "install: SessionEnd 仍然同步（不加 async）" {
+  # Claude Code 退出会带走后台子进程，异步的清除可能被杀在半路，
+  # 留下一个永远灭不掉的 ▶。这条是硬约束，别的都可以异步，它不行。
+  "$INSTALLER" --settings "$SETTINGS"
+
+  python3 - "$SETTINGS" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+ours = [h for e in data["hooks"]["SessionEnd"] for h in e["hooks"]
+        if "tmux-whistle" in h["command"]]
+assert len(ours) == 1
+assert "async" not in ours[0], f"SessionEnd 不该带 async，实际 {ours[0].get('async')!r}"
 PY
 }
 
@@ -163,7 +196,8 @@ PY
   python3 - "$partial" <<'PY'
 import json, sys
 hooks = json.load(open(sys.argv[1]))["hooks"]
-for event in ("Stop", "Notification", "SessionStart", "UserPromptSubmit"):
+for event in ("Stop", "PreToolUse", "SubagentStop", "Notification",
+              "SessionStart", "UserPromptSubmit"):
     assert event in hooks, f"缺 {event}"
 assert any(h["command"] == "x" for e in hooks["SessionStart"] for h in e["hooks"])
 PY

@@ -40,6 +40,12 @@ whistle_icon() {
 # 五层嵌套条件式，结尾必须补齐五个 '}' —— 少一个就是畸形 format，
 # tmux 会静默渲染成空字符串（这个坑被 test/integration/badge.bats 抓到过）。
 #
+# ⚠️ @whistle_win 存的是**有效态**（不是某个通道的原始值）：
+# 活动通道 @whistle（running / idle / gone）与通知通道 @whistle_notice
+# （done / wait / error）由 whistle_recompute_window 按 rank 取高者，
+# 结果是 @whistle_win。所以这里**只读一个值**，五个分支原样复用，
+# 不需要为双通道加深嵌套（加深就是多四处配错大括号的机会）。
+#
 # 嵌套顺序只是书写顺序：@whistle_win 存的是单个状态字符串，只有一个分支会命中，
 # 所以这里没有「优先级」语义 —— 真正的优先级在 whistle_aggregate 里。
 # running / idle 排最后，因为它们不计入 ⚑N，作用只是让窗口列表能看出
@@ -78,6 +84,16 @@ whistle_mark_build() {
 # 整段只在真有 agent 时出现（running / idle / 待处理三者全为零才隐藏），否则为空。
 # 五个格子一起出现、包括计数为 0 的 —— 这样状态栏宽度不会随计数跳动，
 # 也保证每种状态始终一眼可见。
+#
+# ⚠️ 两格一组、**互不排斥**：`▶N ◉N` 数的是活动通道（有没有 agent 在干活），
+# `◆N ◔N ⚠N` 数的是通知通道（有没有事等你）。同一个 pane 可以同时在
+# count_running 与 count_done 里 —— 比如后台 agent 还在跑、主回合已经交付。
+# 计数的语义在 whistle_recompute_global 里（那是唯一写 @whistle_count_* 的地方），
+# 渲染侧只负责把两组都显示出来，**不做任何互斥判断**。
+#
+# 判据段同理不必改：@whistle_pending 就是通知通道的待处理总数（done+wait+error），
+# 于是「活动有计数 OR 通知有计数」逐字成立。为了两条通道去加深这层嵌套，
+# 只会多出四处配错大括号的机会（配错了 tmux 静默渲染成空字符串）。
 #
 # ⚠️ idle 必须进判据：恢复 tmux 之后「三个 agent 全空闲」正是最常见的场景，
 # 而那时 running=0、pending=0 —— 漏掉 idle 的话整段会被判成"没活动"而隐藏，
@@ -178,8 +194,14 @@ whistle_mark_publish() {
 
 # whistle_pane_mark_build → pane 级徽章（用于 pane-border-status 行）
 #
-# 与窗口徽章同一个公式，但读的是 pane 作用域的 @whistle ——
+# 与窗口徽章同一个公式，但读的是 pane 作用域的派生值 @whistle_eff ——
 # pane-border-format 的 item 上下文是 pane。分屏时能分清是哪个 pane 在等你。
+#
+# ⚠️ 读的是**有效态**（@whistle_eff），不是活动通道 @whistle：
+# 一个 pane 现在有两条正交通道 —— 活动通道 @whistle（running / idle / gone）
+# 与通知通道 @whistle_notice（done / wait / error）。合成有效态的工作在
+# whistle_recompute_window 里做完并写进 @whistle_eff。**format 里不做合成** ——
+# 两个通道各判一遍要多出四层嵌套，配错一格 tmux 就静默渲染成空字符串。
 #
 # 同样是五层嵌套，结尾 `}}}}}` 一个都不能少（改这里要同步改 whistle_mark_build，
 # 两份必须保持同一个状态集，否则窗口徽章与边框状态行会各自显示不同的状态）。
@@ -195,7 +217,7 @@ whistle_pane_mark_build() {
   _s_run=$(whistle_icon '@whistle_icon_running')
   _s_idle=$(whistle_icon '@whistle_icon_idle')
 
-  _p='#{@whistle}'
+  _p='#{@whistle_eff}'
   printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$_s_done"
   printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$_s_wait"
   printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_p" "$_c_err" "$_s_err"
@@ -307,6 +329,14 @@ whistle_print_status_line() {
 # -- 已读钩子（原理 6） ----------------------------------------------------
 
 # 切进窗口 = 已读。hook 里传 #{window_id}（KP-7 优先方案）。
+#
+# ⚠️ 判据看**通知通道**（@whistle_win_notice），不是有效态（@whistle_win）。
+# 有效态里也含 running / idle，拿它当判据会在「窗口里只有 agent 在跑、
+# 没有事等你」时白走一遍清除；而真正该清的是「有事等你」那一条。
+#
+# 清除本身是 whistle_clear_window —— 它只清通知通道（@whistle_notice*），
+# **绝不动活动通道**。这一点是本次修 bug 的核心：以前已读清的是整个 @whistle，
+# 于是「在跑 → 空闲」的降级有了执行者。
 whistle_read_window() {
   _win="${1:-}"
   [ -z "$_win" ] && _win=$(whistle_tmux display-message -p '#{window_id}' 2> /dev/null)
@@ -314,7 +344,7 @@ whistle_read_window() {
 
   # option 不存在时 tmux show 返回非零，这里必须兜住：
   # set -e 的调用方（hook、bats）会因此中断，已读路径就废了。
-  _s=$(whistle_tmux show -wv -t "$_win" @whistle_win 2> /dev/null) || _s=''
+  _s=$(whistle_tmux show -wv -t "$_win" @whistle_win_notice 2> /dev/null) || _s=''
   whistle_is_notified "$_s" || return 0
   whistle_clear_window "$_win"
 }
@@ -324,7 +354,9 @@ whistle_read_pane() {
   [ -z "$_pane" ] && _pane=$(whistle_resolve_pane '')
   [ -z "$_pane" ] && return 1
 
-  _s=$(whistle_tmux show -pqv -t "$_pane" @whistle 2> /dev/null) || _s=''
+  # 判据同样看**通知通道**：@whistle 里是活动态（running / idle / gone），
+  # 永远不是待处理态 —— 拿它当判据会让已读永远清不掉通知。
+  _s=$(whistle_tmux show -pqv -t "$_pane" @whistle_notice 2> /dev/null) || _s=''
   whistle_is_notified "$_s" || return 0
 
   whistle_state_clear "$_pane" > /dev/null

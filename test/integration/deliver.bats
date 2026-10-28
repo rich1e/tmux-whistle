@@ -199,6 +199,83 @@ stub_display_targets() {
   assert_contains "$output" '-t other-sess'
 }
 
+# -- 有效态语义（第二个参数现在是 @whistle_eff，不是原始状态） ----------------
+#
+# 有效态 = 活动通道与通知通道按 rank 取高者（error 5 > wait 4 > done 3 >
+# running 2 > idle 1）。于是有一条等价关系：
+#   「有事等你」⟺「有效态是通知态」
+# 因为只要通知通道有值，它的 rank 就必然高过 running / idle —— 通知态一旦存在
+# 就一定赢下有效态。deliver 因此不需要再读通知通道，只看这一个参数就够。
+
+@test "deliver: 打扰用户 ⟺ 有效态是通知态（running / idle 不打扰）" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/eff_equiv"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess other-sess
+
+  # 词表必须放进变量：`for st in ... done ...` 里的字面量 done 会被
+  # shell / ShellCheck 当成循环终止符（SC1010）。项目红线不用数组，
+  # 所以走「一个带前缀的变量 + 无引号展开」这条可移植写法。
+  local st body sts='running idle done wait error'
+  for st in $sts; do
+    : > "$calls"
+    whistle_deliver "$w" "$st" 'x'
+    body=$(cat "$calls")
+    case "$st" in
+    done | wait | error)
+      assert_contains "$body" '-t other-sess'
+      ;;
+    *)
+      assert_eq "$body" ''
+      ;;
+    esac
+  done
+}
+
+@test "deliver: 有效态是 idle 时不染边框（边框只为待处理态着色）" {
+  wt set -g @whistle_border on
+  local w
+  w=$(win_of)
+  wt set -w -t "$w" pane-border-style 'fg=#123456'
+
+  whistle_deliver "$w" "idle" ''
+
+  assert_eq "$(wt show -wv -t "$w" pane-border-style)" 'fg=#123456'
+  [ -z "$(wt show -wv -t "$w" @whistle_border_painted)" ]
+}
+
+@test "deliver: 边框色按有效态取（done / wait / error 各自一色）" {
+  local w
+  w=$(win_of)
+
+  whistle_deliver "$w" "wait" '要授权'
+  assert_eq "$(wt show -wv -t "$w" pane-border-style)" "fg=$(whistle_conf '@whistle_color_wait')"
+
+  whistle_deliver "$w" "error" '挂了'
+  assert_eq "$(wt show -wv -t "$w" pane-border-style)" "fg=$(whistle_conf '@whistle_color_error')"
+
+  whistle_deliver "$w" "done" '做完了'
+  assert_eq "$(wt show -wv -t "$w" pane-border-style)" "fg=$(whistle_conf '@whistle_color_done')"
+}
+
+@test "deliver: 有效态是通知态时，消息体用通知消息与对应标签" {
+  wt set -g @whistle_display on
+  wt set -g @whistle_self on
+  local calls="$BATS_TEST_TMPDIR/eff_msg"
+  local w
+  w=$(win_of)
+  stub_display_targets "$calls" origin-sess
+
+  whistle_deliver "$w" "done" '重构完成'
+
+  run cat "$calls"
+  # 有效态 done → 走「完成」标签 + 与有效态对应的消息
+  assert_contains "$output" '完成: 重构完成'
+  assert_contains "$output" '[origin-sess]'
+}
+
 # -- 状态栏重画门控（KP-15） -----------------------------------------------
 
 @test "KP-15: 只刷新受影响 session 的 client，且带 -S（只刷状态栏）" {

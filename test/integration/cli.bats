@@ -425,7 +425,7 @@ seed_running_windows() {
 
   run "$CLI" jump 'other:api'
   assert_eq "$status" 0
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
 }
 
@@ -444,7 +444,7 @@ seed_running_windows() {
 
   run "$CLI" jump 'api'
   assert_eq "$status" 0
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
 }
 
@@ -462,8 +462,8 @@ seed_running_windows() {
   assert_contains "$output" 'other:api'
   assert_contains "$output" 'main:api'
   # 撞名时**不该**动任何一边
-  assert_contains "$(wt show -pqv -t "$p1" @whistle)" 'done'
-  assert_contains "$(wt show -pqv -t "$p3" @whistle)" 'done'
+  assert_contains "$(wt show -pqv -t "$p1" @whistle_notice)" 'done'
+  assert_contains "$(wt show -pqv -t "$p3" @whistle_notice)" 'done'
 }
 
 @test "jump: 裸窗口序号撞名时同样报错" {
@@ -503,7 +503,7 @@ seed_running_windows() {
   assert_eq "$status" 0
   # 只有 other 那一侧被清掉，main 的原地不动
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
-  assert_contains "$(wt show -pqv -t "$p3" @whistle)" 'done'
+  assert_contains "$(wt show -pqv -t "$p3" @whistle_notice)" 'done'
 }
 
 @test "jump: @whistle_win_pane 指向已死的 pane 时仍然清掉窗口" {
@@ -597,8 +597,10 @@ seed_running_windows() {
   local p2
   p2=$(wt display -p -t w2 '#{pane_id}')
   "$CLI" "done" '目标明确' -t "$p2"
-  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'done'
-  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
+  # done 走通知通道（@whistle_notice），活动通道不动
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" 'done'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle_notice)" ''
 }
 
 # -- 参数顺序（消息与选项谁在前都行）-----------------------------------------
@@ -611,9 +613,9 @@ seed_running_windows() {
   p2=$(wt display -p -t w2 '#{pane_id}')
   "$CLI" "done" -t "$p2" '目标明确'
 
-  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'done'
-  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '目标明确'
-  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" 'done'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice_msg)" '目标明确'
+  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle_notice)" ''
 }
 
 @test "参数: -t 与消息两种顺序结果一致" {
@@ -626,7 +628,7 @@ seed_running_windows() {
   "$CLI" "done" '同样的消息' -t "$p2"
   "$CLI" "done" -t "$p3" '同样的消息'
 
-  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" "$(wt show -pqv -t "$p3" @whistle_msg)"
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice_msg)" "$(wt show -pqv -t "$p3" @whistle_notice_msg)"
 }
 
 @test "参数: 无消息也能带 -t（running 最常用）" {
@@ -644,7 +646,7 @@ seed_running_windows() {
   local p2
   p2=$(wt display -p -t w2 '#{pane_id}')
   "$CLI" "done" 重构 完成 -t "$p2"
-  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '重构 完成'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice_msg)" '重构 完成'
 }
 
 @test "参数: -- 之后的内容一律当消息，以 - 开头也不当选项" {
@@ -652,7 +654,7 @@ seed_running_windows() {
   local p2
   p2=$(wt display -p -t w2 '#{pane_id}')
   "$CLI" "done" -t "$p2" -- '-开头也是消息'
-  assert_eq "$(wt show -pqv -t "$p2" @whistle_msg)" '-开头也是消息'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice_msg)" '-开头也是消息'
 }
 
 @test "参数: 未知选项报错而不是被当成消息" {
@@ -671,14 +673,14 @@ seed_running_windows() {
   assert_contains "$output" '预览'
   assert_contains "$output" "$p2"
   # 只打印，不落盘
-  assert_eq "$(wt show -pqv -t "$p2" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" ''
 }
 
 @test "--dry-run: 只打印不执行" {
   run "$CLI" "done" 'x' --dry-run
   assert_eq "$status" 0
   assert_contains "$output" '将置'
-  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle_notice)" ''
 }
 
 # -- 标题 / 正文分离 ---------------------------------------------------------
@@ -689,8 +691,8 @@ seed_running_windows() {
   long=$(printf '正文%.0s' $(seq 1 200))     # 400 个字符
   "$CLI" "done" --title '重构完成' --body "$long"
 
-  assert_eq "$(optp @whistle_msg "$p")" '重构完成'
-  assert_eq "$(optp @whistle_body "$p")" "$long"
+  assert_eq "$(optp @whistle_notice_msg "$p")" '重构完成'
+  assert_eq "$(optp @whistle_notice_body "$p")" "$long"
 }
 
 @test "只给 --body 时 msg 取正文前 80 字（与改动前逐字一致）" {
@@ -699,7 +701,7 @@ seed_running_windows() {
   long=$(printf '文%.0s' $(seq 1 200))
   "$CLI" "done" --body "$long"
 
-  assert_eq "$(optp @whistle_msg "$p")" "$(printf '%s' "$long" | cut -c 1-80)"
+  assert_eq "$(optp @whistle_notice_msg "$p")" "$(printf '%s' "$long" | cut -c 1-80)"
 }
 
 @test "两个都不给时行为与改动前完全一致" {
@@ -707,8 +709,8 @@ seed_running_windows() {
   p=$(pane_of)
   "$CLI" "done" '普通消息'
 
-  assert_eq "$(optp @whistle_msg "$p")" '普通消息'
-  assert_eq "$(optp @whistle_body "$p")" ''
+  assert_eq "$(optp @whistle_notice_msg "$p")" '普通消息'
+  assert_eq "$(optp @whistle_notice_body "$p")" ''
 }
 
 @test "正文超过 400 字时按正文上限截断" {
@@ -717,7 +719,7 @@ seed_running_windows() {
   huge=$(printf '字%.0s' $(seq 1 600))
   "$CLI" "done" --body "$huge"
 
-  n=$(printf '%s' "$(optp @whistle_body "$p")" | wc -m | tr -d ' ')
+  n=$(printf '%s' "$(optp @whistle_notice_body "$p")" | wc -m | tr -d ' ')
   assert_eq "$n" 400
 }
 
@@ -726,9 +728,9 @@ seed_running_windows() {
   p=$(pane_of)
   "$CLI" "done" --title '短' --body 'a#{b}c{d}e|f'
 
-  assert_not_contains "$(optp @whistle_body "$p")" '#'
-  assert_not_contains "$(optp @whistle_body "$p")" '{'
-  assert_not_contains "$(optp @whistle_body "$p")" '|'
+  assert_not_contains "$(optp @whistle_notice_body "$p")" '#'
+  assert_not_contains "$(optp @whistle_notice_body "$p")" '{'
+  assert_not_contains "$(optp @whistle_notice_body "$p")" '|'
 }
 
 @test "清除状态时正文一并清掉，不留残值" {
@@ -737,7 +739,7 @@ seed_running_windows() {
   "$CLI" "done" --title '短' --body '很长的正文内容'
   "$CLI" clear -t "$p"
 
-  assert_eq "$(optp @whistle_body "$p")" ''
+  assert_eq "$(optp @whistle_notice_body "$p")" ''
 }
 
 @test "--body 里的换行被折叠成空格（正文是单行存储的）" {
@@ -745,7 +747,7 @@ seed_running_windows() {
   p=$(pane_of)
   "$CLI" "done" --body $'第一行\n第二行'
 
-  assert_contains "$(optp @whistle_body "$p")" '第一行 第二行'
+  assert_contains "$(optp @whistle_notice_body "$p")" '第一行 第二行'
 }
 
 @test "menu-args: 菜单项把 pane 交给 clear 去做 select（不在命令链里裸 select-pane）" {
@@ -794,7 +796,10 @@ seed_running_windows() {
 # -- 内部：--clear-pane（SessionEnd 用） -------------------------------------
 
 @test "--clear-pane: running 收成 gone，待处理状态原样保留" {
-  wt new-window -d -n w2
+  # w2 跑一个与 w1 不同的前台进程：否则两格的 pane_current_command 相同，
+  # w2（活动通道为空、只有通知）也会被「按进程发现空闲」算成 idle，
+  # count_idle 就分不清到底是哪一格。
+  wt new-window -d -n w2 'sleep 30'
   local p1 p2
   p1=$(wt display -p -t w1 '#{pane_id}')
   p2=$(wt display -p -t w2 '#{pane_id}')
@@ -813,10 +818,12 @@ seed_running_windows() {
   assert_eq "$(wt show -pqv -t "$p1" @whistle)" 'gone'
   assert_eq "$(opt '@whistle_count_idle')" '0'
 
-  # done 是待处理通知：agent 退出不代表用户已经看过
+  # done 是待处理通知：agent 退出不代表用户已经看过。
+  # 活动通道照例收成 gone，通知通道原样留着。
   run "$CLI" --clear-pane "$p2"
   assert_eq "$status" 0
-  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'done'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'gone'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" 'done'
 }
 
 @test "--clear-pane: 清掉后窗口聚合与全局计数一起回落" {
@@ -828,6 +835,239 @@ seed_running_windows() {
   local w
   w=$(wt display -p -t w1 '#{window_id}')
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+}
+
+# -- 双通道分流 -------------------------------------------------------------
+#
+# 每个 pane 有两条正交通道：
+#   活动通道 @whistle          running / idle / gone
+#   通知通道 @whistle_notice   done / wait / error
+# 用户语法按状态分流；两通道互不覆盖，@whistle_eff 取 rank 高者。
+
+@test "done / wait / error 只写通知通道，活动通道原样保留" {
+  local p
+  p=$(pane_of)
+  "$CLI" running -t "$p"
+
+  "$CLI" "done" '做完了' -t "$p"
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_eq "$(optp @whistle_notice_msg "$p")" '做完了'
+  # 有效态按 rank：done(3) > running(2)
+  assert_eq "$(optp @whistle_eff "$p")" 'done'
+
+  "$CLI" wait '等你授权' -t "$p"
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_notice "$p")" 'wait'
+
+  "$CLI" error '炸了' -t "$p"
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_notice "$p")" 'error'
+  # 活动消息没被通知消息顶掉
+  assert_eq "$(optp @whistle_msg "$p")" ''
+}
+
+@test "running / idle 只写活动通道，通知通道原样保留" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '还没读' -t "$p"
+
+  "$CLI" running '干活中' -t "$p"
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_msg "$p")" '干活中'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_eq "$(optp @whistle_notice_msg "$p")" '还没读'
+
+  "$CLI" idle -t "$p"
+  assert_eq "$(optp @whistle "$p")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+}
+
+@test "run: 开始写活动 running，结束熄成 idle、通知通道落 done" {
+  run "$CLI" run -- true
+  assert_eq "$status" 0
+
+  local p
+  p=$(pane_of)
+  # 命令跑完了，这个 pane 上没有东西在干活 —— 活动通道不能留在 running
+  # （否则状态栏永久转 ▶），终态归通知通道。
+  assert_eq "$(optp @whistle "$p")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_contains "$(optp @whistle_notice_msg "$p")" '完成'
+  assert_eq "$(optp @whistle_eff "$p")" 'done'
+}
+
+@test "run: 命令失败时落 error 通知，活动通道同样熄成 idle" {
+  run "$CLI" run -- false
+  assert_eq "$status" 1
+
+  local p
+  p=$(pane_of)
+  assert_eq "$(optp @whistle "$p")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p")" 'error'
+  assert_contains "$(optp @whistle_notice_msg "$p")" '失败'
+}
+
+@test "clear: 只清通知通道，活动态保留" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  "$CLI" running -t "$p"
+  "$CLI" "done" '读我' -t "$p"
+
+  run "$CLI" clear -t "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  assert_eq "$(optp @whistle "$p")" 'running'
+  # 窗口有效态回落到活动态，而不是空
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'running'
+}
+
+@test "clear -a: 只清通知通道，活动态保留" {
+  local p
+  p=$(pane_of)
+  "$CLI" running -t "$p"
+  "$CLI" "done" 'x' -t "$p"
+
+  run "$CLI" clear -a
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(opt @whistle_pending)" '0'
+  assert_eq "$(opt @whistle_count_running)" '1'
+}
+
+@test "--read-pane: 活动 running + 通知 done 时只清通知" {
+  # 这是本次要修的 bug 的第三个入口：守卫读的是 @whistle（活动态），
+  # 永远判不成待处理 → 通知清不掉。
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  "$CLI" running -t "$p"
+  "$CLI" "done" 'x' -t "$p"
+
+  run "$CLI" --read-pane "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_eff "$p")" 'running'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'running'
+  assert_eq "$(opt @whistle_pending)" '0'
+  assert_eq "$(opt @whistle_count_running)" '1'
+}
+
+@test "menu-args: 消息为空时 9 列仍能正确分行" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" -t "$p"
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '3'
+  assert_contains "$(printf '%s\n' "$output" | sed -n 1p)" '完成 [main]: w1'
+  assert_contains "$(printf '%s\n' "$output" | sed -n 3p)" "$p"
+}
+
+@test "menu-args: 消息里带 | 时列不错位（仍跳到正确的 pane）" {
+  # 消息列在**末位**，read 会把余下的（含分隔符）全塞给它 ——
+  # 中间列数一旦算错，pane id 就会混进消息、命令跳到别的格子。
+  local p
+  p=$(pane_of)
+  # 直接写 option：CLI 的 whistle_sanitize 会把 | 剔掉
+  wt set -p -t "$p" @whistle_notice 'done'
+  wt set -p -t "$p" @whistle_notice_msg 'a|b'
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '3'
+
+  local label cmd
+  label=$(printf '%s\n' "$output" | sed -n 1p)
+  cmd=$(printf '%s\n' "$output" | sed -n 3p)
+  assert_contains "$label" '完成 [main]: w1'
+  # pane id 不能泄漏进消息列
+  assert_not_contains "$label" '%'
+  assert_contains "$cmd" "select-window"
+  assert_contains "$cmd" "$p"
+}
+
+# -- 内部子命令（hook 用，不进用户语法）--------------------------------------
+
+@test "--activity: 写活动通道，最后一个位置参数是 pane" {
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '读我' -t "$p"
+
+  run "$CLI" --activity running "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle "$p")" 'running'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+}
+
+@test "--activity gone: 只有 hook 能写，用户语法里到不了" {
+  local p
+  p=$(pane_of)
+  run "$CLI" --activity gone "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle "$p")" 'gone'
+  assert_eq "$(optp @whistle_eff "$p")" ''
+
+  # 用户语法不认 gone
+  run "$CLI" gone
+  assert_eq "$status" 1
+}
+
+@test "--activity: 非法状态直接报错" {
+  run "$CLI" --activity "done"
+  assert_eq "$status" 1
+  assert_contains "$output" '--activity'
+}
+
+@test "--notice: 写通知通道，消息与正文分开" {
+  local p
+  p=$(pane_of)
+  "$CLI" running -t "$p"
+
+  run "$CLI" --notice "done" '做完了' --body '完整正文' "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_eq "$(optp @whistle_notice_msg "$p")" '做完了'
+  assert_eq "$(optp @whistle_notice_body "$p")" '完整正文'
+  # 活动通道不动
+  assert_eq "$(optp @whistle "$p")" 'running'
+}
+
+@test "--notice: 非法通知态直接报错" {
+  run "$CLI" --notice running
+  assert_eq "$status" 1
+  assert_contains "$output" '--notice'
+}
+
+@test "--sub-agent-start / --sub-agent-stop: 只写子 agent 标记，活动态由推导层合成" {
+  local p
+  p=$(pane_of)
+
+  run "$CLI" --sub-agent-start "$p"
+  assert_eq "$status" 0
+  # 不写 @whistle —— 否则分不清「主回合在跑」和「只是子 agent 在跑」
+  assert_eq "$(optp @whistle "$p")" ''
+  # 存的是过期时间戳
+  assert_eq "$(optp @whistle_sub "$p" | wc -c | tr -d ' ')" '11'
+  # 推导层把它合成 running
+  assert_eq "$(optp @whistle_eff "$p")" 'running'
+
+  run "$CLI" --sub-agent-stop "$p"
+  assert_eq "$status" 0
+  assert_eq "$(optp @whistle_sub "$p")" ''
+  assert_eq "$(optp @whistle_eff "$p")" ''
+}
+
+@test "内部子命令不出现在用户用法里" {
+  run "$CLI" --help
+  assert_eq "$status" 0
+  assert_not_contains "$output" '--activity'
+  assert_not_contains "$output" '--notice'
+  assert_not_contains "$output" '--sub-agent'
 }
 
 # -- doctor ----------------------------------------------------------------

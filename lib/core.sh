@@ -6,7 +6,23 @@
 # 唯一状态写入点。所有 pane / window / global 的 user option 变更都从这里出去，
 # 渲染（status-line.sh）与投递（deliver.sh）只读不写。
 #
-# 可测性约束：§4.0 的三个纯函数不得出现任何 tmux 调用。
+# -- 状态模型：两条正交通道 -----------------------------------------------
+#
+#   活动通道   @whistle          running | idle | gone | ''
+#     回答「这个 pane 里有没有 agent 在干活」
+#   通知通道   @whistle_notice   done | wait | error | ''
+#     回答「有没有事等你」
+#
+# 两条通道**互不排斥**：一个 pane 可以同时 running + done。
+# 「有效显示状态」（@whistle_eff / @whistle_win）= 两者按 rank 取高者：
+#   error 5 > wait 4 > done 3 > running 2 > idle 1 > 空 0
+#
+# 为什么拆两条：单槽模型下，任何一个事件到达都会把另一个覆盖掉 ——
+# 后台 agent 结束时的 agent_completed 通知会把主 agent 的 running 顶成 done，
+# 用户读完通知后整格被清空，再被「按进程发现空闲」判成 idle，
+# 一个正在干活的 agent 就此显示成「空闲」，且零报错。
+#
+# 可测性约束：§4.0 的纯函数不得出现任何 tmux 调用。
 
 # -- tmux 调用包装 ---------------------------------------------------------
 #
@@ -36,13 +52,21 @@ whistle_now() {
 
 # -- 状态常量 --------------------------------------------------------------
 
-# idle = 进程在、但没在干活（刚 --continue 恢复、或刚敲 claude 还没输入）。
-# 它只在 SessionStart 时写入，被 running/done/wait/error 覆盖后就再也不回来，
-# 直到下一次 SessionStart —— 所以「读完通知」之后是空，不是 idle，
-# 「已读即消失」这条语义不受影响。
+# 活动通道的状态集合：这个 pane 里有没有 agent 在干活。
+# running = 有 agent 正在干活；idle = 进程在、但闲着。
+WHISTLE_ACTIVITY_STATES='running idle'
+
+# 通知通道的状态集合：有没有事等你（done / wait / error）。
+#
+# ⚠️ 语义变了：以前这三个状态和 running/idle 挤在同一个槽里，
+# 现在它们是**独立的一条通道**，与活动通道互不排斥。
+WHISTLE_NOTIFIED_STATES='done wait error'
+
+# 用户能报的全部状态（CLI 校验用）。gone 不在里面 ——
+# 它不是用户能报的状态，只有 SessionEnd 会写它。
 WHISTLE_STATES='running idle done wait error'
 
-# gone = 这个 pane 上曾有 agent，现在已经退出。**不是**用户可报的状态，
+# gone = 这个 pane 上曾有 agent，现在已经退出。**不是**用户能报的状态，
 # 只有 SessionEnd 会写它。
 #
 # 为什么需要它：SessionEnd 钩子跑的时候，agent 进程**还没退出**，
@@ -51,11 +75,9 @@ WHISTLE_STATES='running idle done wait error'
 # 「发现」只看空状态，gone 不是空的。
 #
 # 它的 rank 是 0（不算任何优先级）、不算待处理、徽章不显示、菜单不列。
+# ⚠️ 它住在**活动通道**（@whistle），通知通道不受影响 ——
+# agent 走了不等于你已经看过那条通知。
 WHISTLE_GONE_STATE=gone
-
-# window 聚合优先级：error > wait > done > running > idle > ''
-# 已读通知 = done / wait / error 三种（idle 不算待处理）
-WHISTLE_NOTIFIED_STATES='done wait error'
 
 # 「临时」状态：跟着 agent 进程活，进程没了就该清。SessionEnd 只清这两种，
 # 待处理通知一律留着等你处理。
@@ -127,11 +149,12 @@ whistle_spin_build() {
   printf '#{?#{@whistle_spin_char},#{@whistle_spin_char},%s}' "$(whistle_spin_first)"
 }
 
-# whistle_spin_build → 供 tmux format 用的片段
+# -- 默认配置 --------------------------------------------------------------
 
 # 默认配置。option 未被显式设置时回落到这里；
 # 用户用 `set -g @whistle_xxx` 覆盖后即以用户值为准。
-# 派生值（@whistle_mark / @whistle_pending）不在表内，由插件生成。
+# 派生值（@whistle_mark / @whistle_pending / @whistle_eff …）不在表内，
+# 由插件生成 —— 「用户可配的开关」与「插件自己写的状态」必须用不同的 option 名。
 WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_badge on
 @whistle_border on
@@ -154,12 +177,14 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_icon_idle ◉
 @whistle_spin on
 @whistle_spin_interval 0.5
+@whistle_recompute_every 60
 @whistle_display_ms 0
 @whistle_debug off
 @whistle_agent_cmds claude claude.exe
 @whistle_detect off
 @whistle_detect_interval 15
-@whistle_detect_idle 180'
+@whistle_detect_idle 180
+@whistle_sub_ttl 1800'
 
 # whistle_conf_default <option 名> → 默认表里的值（不查 tmux）
 whistle_conf_default() {
@@ -207,6 +232,9 @@ whistle_sanitize() {
 # idle 必须严格低于 running：一个窗口里既有在跑的、又有空闲的 pane 时，
 # 徽章要显示 ▶ 而不是 ◉。但它又必须 > 0 —— 否则「整个窗口的 agent 都空闲」
 # 时 rank 赢不过初始的 0，徽章就什么都不显示了。
+#
+# ⚠️ 这个 rank 表同时被推导层（awk）与 whistle_effective_state 抄了一份，
+# 两处必须一致 —— awk 里没法调 shell 函数。
 whistle_rank() {
   case "${1:-}" in
   error) printf '5' ;;
@@ -228,7 +256,16 @@ whistle_is_state() {
   return 1
 }
 
-# whistle_is_notified <状态> → 该状态算不算"待用户处理"
+# whistle_is_activity <状态> → 该状态是不是活动通道的状态
+whistle_is_activity() {
+  for _ws in $WHISTLE_ACTIVITY_STATES; do
+    [ "$_ws" = "${1:-}" ] && return 0
+  done
+  unset _ws
+  return 1
+}
+
+# whistle_is_notified <状态> → 该状态是不是通知通道的状态（「有事等你」）
 whistle_is_notified() {
   for _ws in $WHISTLE_NOTIFIED_STATES; do
     [ "$_ws" = "${1:-}" ] && return 0
@@ -246,83 +283,142 @@ whistle_is_transient() {
   return 1
 }
 
+# whistle_effective_state <活动态> <通知态> → 有效显示状态
+#
+# 取 rank 高者。两者都为空（或都是 gone 这种 rank 0 的值）→ 空串。
+#
+# 纯函数（不碰 tmux）。
+whistle_effective_state() {
+  _es_act="${1:-}"
+  _es_not="${2:-}"
+  _es_ra=$(whistle_rank "$_es_act")
+  _es_rn=$(whistle_rank "$_es_not")
+  if [ "$_es_rn" -gt "$_es_ra" ]; then
+    printf '%s' "$_es_not"
+  elif [ "$_es_ra" -gt 0 ]; then
+    printf '%s' "$_es_act"
+  else
+    printf ''
+  fi
+}
+
 # whistle_aggregate
 #
-# stdin  = tmux list-panes -F '<pane_id>|<状态>|<消息>' 的输出
-#          （调用方会先过 whistle_resolve_idle_panes，命令列已经被去掉）
-# stdout = "<聚合态>|<消息>|<待处理数>|<胜出状态的 pane id>"
+# stdin  = 推导层（whistle_resolve_idle_panes）的输出，5 列：
+#          <pane_id>|<有效态>|<通知态>|<活动态>|<消息>
+# stdout = 6 列：
+#          <有效态>|<消息>|<待处理数>|<胜出 pane>|<通知态>|<通知消息>
 #
 # 分隔符用 '|'（非空白），否则 read 会把连续分隔符折叠掉，
 # 导致 @whistle 为空时后面的字段整体错位。
 #
-# ⚠️ **只读 3 个变量**：POSIX 的 read 在字段数多于变量数时，会把余下的
-# （含分隔符）全塞进最后一个变量。消息列在**末位**，读满 3 个变量时它拿到的是
-# 「余下的全部」——消息里带 '|' 也不会被截断。反过来若只读 2 个变量，
+# ⚠️ **只读 5 个变量**：POSIX 的 read 在字段数多于变量数时，会把余下的
+# （含分隔符）全塞进最后一个变量。消息列在**末位**，读满 5 个变量时它拿到的是
+# 「余下的全部」——消息里带 '|' 也不会被截断。反过来若只读 4 个变量，
 # 状态列就变成了「消息|别的」，消息会顶掉状态。
 #
-# 聚合规则：取 rank 最高的 pane 的状态与消息；全部为空时输出空状态。
+# 聚合规则：取**有效态** rank 最高的 pane 的有效态与消息；
+# 全部为空时输出空状态。
 #
-# 第 4 列（pane id）放**末位**，不是第 2 位：whistle_recompute_global 用
-# `cut -d'|' -f3` 取待处理数，放末位那里就不用改。
+# 第 4 列（pane id）放**末位那一段的第 4 位**，不是第 2 位：
+# whistle_recompute_global 用 `cut -d'|' -f3` 取待处理数，位置不能变。
+#
+# 第 5、6 列是通知通道的态与消息：窗口徽章用有效态（@whistle_win），
+# 而「这个窗口有没有事等我」看 @whistle_win_notice / @whistle_win_notice_msg。
 #
 # pane 与状态必须由同一个循环产出，不能另扫一遍算 pane —— 「窗口显示哪个状态」
 # 和「pane id 是谁」来自同一次判断；两次扫描可能选出不同的 pane。
 whistle_aggregate() {
   _best_rank=0
-  _best_state=''
+  _best_eff=''
   _best_msg=''
   _best_pane=''
+  _best_notice=''
   _pending=0
-  while IFS='|' read -r _pane_id _state _msg || [ -n "${_pane_id:-}" ]; do
+  while IFS='|' read -r _pane_id _eff _notice _activity _msg || [ -n "${_pane_id:-}" ]; do
     # 合法 pane id 以 % 开头；跳过空行与解析失败的行
     case "${_pane_id:-}" in
     '%'*) ;;
     *) continue ;;
     esac
-    _rank=$(whistle_rank "$_state")
-    if whistle_is_notified "$_state"; then
+    _rank=$(whistle_rank "$_eff")
+    if whistle_is_notified "$_notice"; then
       _pending=$((_pending + 1))
     fi
     if [ "$_rank" -gt "$_best_rank" ]; then
       _best_rank=$_rank
-      _best_state=$_state
+      _best_eff=$_eff
       _best_msg=$_msg
       _best_pane=$_pane_id
+      _best_notice=$_notice
     fi
   done
-  printf '%s|%s|%s|%s\n' "$_best_state" "$_best_msg" "$_pending" "$_best_pane"
+  # 通知消息：胜出的 pane 有通知时，推导层选中的那条消息就是它的通知消息
+  # （推导层「通知消息优先」）；没有通知就没有通知消息。
+  _best_notice_msg=''
+  if [ -n "$_best_notice" ]; then
+    _best_notice_msg=$_best_msg
+  fi
+  printf '%s|%s|%s|%s|%s|%s\n' \
+    "$_best_eff" "$_best_msg" "$_pending" "$_best_pane" "$_best_notice" "$_best_notice_msg"
 }
 
 # whistle_count_states
 #
-# stdin  = 与 whistle_aggregate 同一份 list-panes 输出
+# stdin  = 与 whistle_aggregate 同一份推导输出（5 列或 9 列：
+#          9 列的是菜单那份，pane id 在第 5 列）
 # stdout = "<running>|<idle>|<done>|<wait>|<error>" 各有多少个 pane
 #
 # 与 whistle_aggregate 的分工：它算「窗口该显示哪个状态」+ 待处理总数，
 # 这里算各状态分布，给 status-right 的汇总段用。纯函数，不碰 tmux（§4.0）。
 #
+# ⚠️ **分通道计数**：running / idle 数**活动通道**，done / wait / error 数
+# **通知通道**。两组**互不排斥** —— 同一个 pane 一边在跑、一边有事找你，
+# running 与 done 各计一次（▶1 ◆1 说的可能就是同一个 pane）。
+#
 # 字段顺序跟汇总段的显示顺序一致（running、idle、done、wait、error）——
 # 两边对不上时最难看懂，调用方是按位置 cut 的。
+#
+# 列定位：pane id（以 % 开头的那一列）之后依次是有效态、通知态、活动态。
+# 5 列那份 pane id 在第 1 列，9 列那份在第 5 列 —— 所以不写死列号，
+# 按 pane id 那一列定位，两种布局都能吃。
 whistle_count_states() {
   awk -F'|' '
-    $1 !~ /^%/ { next }
-    $2 == "running" { r++ }
-    $2 == "idle"    { i++ }
-    $2 == "done"    { d++ }
-    $2 == "wait"    { w++ }
-    $2 == "error"   { e++ }
-    END { printf "%d|%d|%d|%d|%d\n", r, i, d, w, e }
+    function pane_col(  k) {
+      for (k = 1; k <= NF; k++) if ($k ~ /^%[0-9]+$/) return k
+      return 0
+    }
+    {
+      p = pane_col()
+      if (p == 0) next
+      notice = $(p + 2)
+      activity = $(p + 3)
+      if (activity == "running") _r++
+      else if (activity == "idle") _i++
+      if (notice == "done") _d++
+      else if (notice == "wait") _w++
+      else if (notice == "error") _e++
+    }
+    END { printf "%d|%d|%d|%d|%d\n", _r + 0, _i + 0, _d + 0, _w + 0, _e + 0 }
   '
 }
 
-# whistle_resolve_idle_panes <agent 命令名清单> <状态列号>
+# whistle_resolve_idle_panes <agent 命令名清单> <状态列号> [前导列数]
 #
 # stdin  = list-panes 的输出（字段用 | 分隔），每行一个 pane
 #          **最后一列是前台进程名**（`#{pane_current_command}`）
-# stdout = **去掉最后一列**之后的同样几行，只改了「状态列」：
-#   有上报状态               → 原样（running/done/wait/error/idle/gone）
-#   没上报、但前台进程是 agent → idle（空闲）
-#   两者都不是                → 原样（空）
+#          状态块从第 <sc> 列开始：
+#            $sc    活动态（@whistle）
+#            $sc+1  通知态（@whistle_notice）
+#            $sc+2  活动消息（@whistle_msg）
+#            $sc+3  通知消息（@whistle_notice_msg）
+#            $sc+4  子 agent 标记的过期时间戳（**可选列**，见下）
+#          最后一列（$NF）始终是命令名。
+# stdout = 状态块被重写成四列，前导列原样：
+#            $sc    有效态（活动态与通知态取 rank 高者）
+#            $sc+1  通知态（原样）
+#            $sc+2  活动态（推导后）
+#            $sc+3  选中的消息（通知消息优先，空则活动消息）—— **必须在末位**
 #
 # 为什么要有这一层：插件是推送式的，只认 hook 上报过的东西。可是一个刚被
 # resurrect 拉起来的 `claude --continue`，它的 SessionStart 还没送到时，
@@ -333,46 +429,91 @@ whistle_count_states() {
 # 事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
 #
 # 纯函数：agent 清单由调用方传进来 —— 读 tmux option 是 tmux 调用，不能进纯
-# 函数（L1 单测要能脱离 tmux 跑）。
+# 函数（L1 单测要能脱离 tmux 跑）。同理，now 由调用方用环境变量 WHISTLE_NOW
+# 注入（不注入则取当前时间；date 不是 tmux 调用，但注入后 L1 单测才可复现）。
 #
 # ⚠️ **命令列取最后一列（$(NF)），不是某个固定的列号**。固定列号会被消息里的
-# '|' 带偏（消息本身不该有 '|'，但那不是这里该依赖的保证）；而最后一列永远是
+# '|' 带偏（消息本身不该有 '|，但那不是这里该依赖的保证）；而最后一列永远是
 # 命令名 —— 状态列在消息之前、命令列在消息之后，两边都不受消息内容影响。
 #
 # ⚠️ **命令列被整列去掉，不是留在流里**。下游（whistle_aggregate、菜单的
 # `read`）按固定列数读，而 POSIX 的 read 在字段数多于变量数时会把余下的
 # （含分隔符）全塞进最后一个变量 —— 留着这一列，消息列就会变成
 # 「消息|进程名」，而 @whistle_win_msg 与菜单标签会把它原样显示出去。
+#
+# ⚠️ **子 agent 标记列（$sc+4）是可选的**：给了就用（没给就是没有子 agent）。
+# 它存的是**过期时间戳**，0 表示永不过期。过期不需要写回 —— 推导层按时间戳
+# 判断即可，这样漏报「子 agent 结束」时标记会自己过期回落，
+# 而不会永久亮着 ▶。
 whistle_resolve_idle_panes() {
   _rip_cmds="${1:-}"
   _rip_sc="${2:-}"
+  _rip_lead="${3:-0}"
 
   [ "$_rip_sc" -gt 0 ] 2> /dev/null || return 1
 
-  # ⚠️ 清单为空时**也要走 awk**（只做去列、不改状态）：下游读的列数必须
-  # 与清单无关 —— 否则用户把 @whistle_agent_cmds 清空，下游的 read 就会
-  # 把「消息|进程名」当成消息。
-  #
+  _rip_now="${WHISTLE_NOW:-}"
+  [ -n "$_rip_now" ] || _rip_now=$(whistle_now)
+
   # ⚠️ OFS 必须显式设成 '|'：awk 里**给字段赋值会把 $0 重建一遍**，分隔符用
   # OFS（默认是空格）。不设的话输出会变成空格分隔，下游按 '|' 切列全错位。
   #
-  # 去掉一整列是无损的：按 '|' 切开再按 '|' 拼回去，消息里的 '|' 原样还在。
-  awk -F'|' -v OFS='|' -v cmds="$_rip_cmds" -v sc="$_rip_sc" '
+  # 去掉整列是无损的：按 '|' 切开再按 '|' 拼回去，消息里的 '|' 原样还在。
+  awk -F'|' -v OFS='|' -v cmds="$_rip_cmds" -v sc="$_rip_sc" \
+    -v lead="$_rip_lead" -v now="$_rip_now" '
+    # ⚠️ 这个 rank 表必须与 whistle_rank 逐项一致（awk 里没法调 shell 函数）。
+    function rank(s) {
+      if (s == "error") return 5
+      if (s == "wait") return 4
+      if (s == "done") return 3
+      if (s == "running") return 2
+      if (s == "idle") return 1
+      return 0
+    }
     BEGIN {
       n = split(cmds, a, " ")
-      for (i = 1; i <= n; i++) if (a[i] != "") list[a[i]] = 1
+      for (j = 1; j <= n; j++) if (a[j] != "") list[a[j]] = 1
+      # 前导列数：给了就用给的，没给就按「状态块前面全是前导列」算。
+      # 状态块必须落在 $sc，所以前导列最多 sc-1 列。
+      if (lead <= 0) lead = sc - 1
+      if (lead > sc - 1) lead = sc - 1
     }
     {
-      # NF > sc：状态列必须真的存在，否则给不存在的字段赋值会把记录撑长，
-      # 列号就全错了（list-panes 的行永远是 4 列，这里只是兜底）。
-      if (NF > sc && $sc == "" && ($NF in list)) $sc = "idle"
-      out = ""
-      k = 0
-      for (i = 1; i < NF; i++) {
-        k++
-        out = (k == 1 ? $i : out OFS $i)
-      }
-      if (NF < 2) out = $0
+      # 命令列永远是最后一列
+      cmd = $NF
+      # 子 agent 标记列（可选）：过期时间戳，0 = 永不过期。
+      # 只认纯数字 —— 消息里带 | 时列数会飘，宁可漏判也不能把消息当时间戳。
+      subexp = ""
+      if (NF >= sc + 5 && $(sc + 4) ~ /^[0-9]+$/) subexp = $(sc + 4)
+      notice = $(sc + 1)
+      amsg = $(sc + 2)
+      nmsg = $(sc + 3)
+      act = $sc
+
+      # 活动态推导：没上报过、但前台跑着 agent → idle
+      if (act == "" && (cmd in list)) act = "idle"
+      # 子 agent 还在跑 → 活动态强制 running（哪怕主回合已经结束）
+      if (subexp != "" && (subexp + 0 == 0 || now + 0 < subexp + 0)) act = "running"
+
+      # 有效态 = rank 高者（与 whistle_effective_state 一致）
+      ra = rank(act)
+      rn = rank(notice)
+      if (rn > ra) eff = notice
+      else if (ra > 0) eff = act
+      else eff = ""
+
+      # 选中的消息：通知消息优先，空则活动消息
+      msg = (nmsg != "") ? nmsg : amsg
+
+      # 重建输出：前导列原样 + 有效态 + 通知态 + 活动态 + 消息
+      m = 0
+      for (k = 1; k <= lead; k++) { m++; f[m] = $k }
+      m++; f[m] = eff
+      m++; f[m] = notice
+      m++; f[m] = act
+      m++; f[m] = msg
+      out = f[1]
+      for (k = 2; k <= m; k++) out = out OFS f[k]
       print out
     }
   '
@@ -398,7 +539,9 @@ whistle_pane_window() {
   whistle_tmux display-message -p -t "$1" '#{window_id}' 2> /dev/null
 }
 
-# whistle_state_set <state> <msg> [pane] [body]
+# whistle_activity_set <running|idle|gone> [pane] [src] [msg] [body]
+#
+# 写**活动通道**：@whistle / @whistle_msg / @whistle_at / @whistle_src / @whistle_body
 #
 # 一次 tmux 调用写完 5 个 pane option（KP-16：这条链里不能出现 run-shell，
 # 否则会阻塞 tmux 命令队列）。
@@ -406,47 +549,173 @@ whistle_pane_window() {
 # @whistle_body 空值也要写 —— 否则上一轮的正文会留在 pane 上，
 # 变成「这次没写正文，却显示着上次的」。
 #
-# **idle 不顶掉待处理通知**：idle 是背景信息（「这个 pane 上有 agent，但它闲着」），
-# 而 done/wait/error 是「有事等你」。`SessionStart` 恢复会话时必须能报 idle，
-# 但绝不能把上一轮还没读的 `◆` / `◔` / `⚠` 抹掉 —— 那等于替你点了「已读」。
-# 所以这条守卫放在这里（状态机的唯一写入点），不是放在 hook 里。
+# **绝不碰通知通道**：活动与通知是两条正交的通道，
+# 写 idle（SessionStart 恢复会话）不能替用户把没读的 ◆ / ◔ / ⚠ 抹掉。
+#
+# **写 idle 时若子 agent 标记仍有效，实际写 running** —— 子 agent 还在跑，
+# 这个 pane 就还在干活，显示空闲是失真。
 #
 # stdout = 目标 pane id。诊断信息一律走 stderr，方便调用方做命令替换。
 # 重算与投递由调用方编排（CLI），本函数只负责写。
-whistle_state_set() {
-  _state="$1"
-  _msg=$(whistle_sanitize "$2")
-  _pane=$(whistle_resolve_pane "$3")
-  _body=$(whistle_sanitize "${4:-}" "$WHISTLE_BODY_MAX")
+whistle_activity_set() {
+  _as_state="${1:-}"
+  _as_pane=$(whistle_resolve_pane "${2:-}")
+  _as_src="${3:-${WHISTLE_SRC:-manual}}"
+  _as_msg=$(whistle_sanitize "${4:-}")
+  _as_body=$(whistle_sanitize "${5:-}" "$WHISTLE_BODY_MAX")
 
-  if [ -z "$_pane" ]; then
+  if [ -z "$_as_pane" ]; then
     printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
     return 1
   fi
-  if ! whistle_is_state "$_state"; then
-    printf 'tmux-whistle: 未知状态 [%s]（可选：%s）\n' "$_state" "$WHISTLE_STATES" >&2
+  if [ "$_as_state" != running ] && [ "$_as_state" != idle ] && [ "$_as_state" != gone ]; then
+    printf 'tmux-whistle: 未知活动态 [%s]（可选：running idle gone）\n' "$_as_state" >&2
     return 1
   fi
 
-  if [ "$_state" = idle ]; then
-    _ss_cur=$(whistle_tmux show -pqv -t "$_pane" @whistle 2> /dev/null) || _ss_cur=''
-    if whistle_is_notified "$_ss_cur"; then
-      # 静默成功：调用方照常走重算与投递，状态本身没变。
-      printf '%s' "$_pane"
-      return 0
-    fi
+  # 子 agent 还在跑 → idle 实际写成 running
+  #
+  # @whistle_sub 存的是**过期时间戳**，所以判据是「现在还没过那个点」。
+  # 0 = 永不过期（TTL 配成 0）。
+  if [ "$_as_state" = idle ]; then
+    _as_sub=$(whistle_tmux show -pqv -t "$_as_pane" @whistle_sub 2> /dev/null) || _as_sub=''
+    case "$_as_sub" in
+    '' | *[!0-9]*) ;;
+    0) _as_state=running ;;
+    *)
+      _as_now=$(whistle_now)
+      if [ "$_as_now" -lt "$_as_sub" ]; then
+        _as_state=running
+      fi
+      ;;
+    esac
   fi
 
-  whistle_tmux set -p -t "$_pane" @whistle "$_state" \
-    \; set -p -t "$_pane" @whistle_msg "$_msg" \
-    \; set -p -t "$_pane" @whistle_at "$(whistle_now)" \
-    \; set -p -t "$_pane" @whistle_src "${WHISTLE_SRC:-manual}" \
-    \; set -p -t "$_pane" @whistle_body "$_body" || return 1
+  whistle_tmux set -p -t "$_as_pane" @whistle "$_as_state" \
+    \; set -p -t "$_as_pane" @whistle_msg "$_as_msg" \
+    \; set -p -t "$_as_pane" @whistle_at "$(whistle_now)" \
+    \; set -p -t "$_as_pane" @whistle_src "$_as_src" \
+    \; set -p -t "$_as_pane" @whistle_body "$_as_body" || return 1
 
-  printf '%s' "$_pane"
+  printf '%s' "$_as_pane"
+}
+
+# whistle_notice_set <done|wait|error> <msg> <body> [pane]
+#
+# 写**通知通道**：@whistle_notice / @whistle_notice_msg /
+# @whistle_notice_body / @whistle_notice_at
+#
+# 与活动通道互不影响：写通知不动 @whistle，写活动不动 @whistle_notice。
+# 这正是双通道模型的目的 —— 后台 agent 完成的通知不会再顶掉主 agent 的 running。
+whistle_notice_set() {
+  _ns_state="${1:-}"
+  _ns_msg=$(whistle_sanitize "${2:-}")
+  _ns_body=$(whistle_sanitize "${3:-}" "$WHISTLE_BODY_MAX")
+  _ns_pane=$(whistle_resolve_pane "${4:-}")
+
+  if [ -z "$_ns_pane" ]; then
+    printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
+    return 1
+  fi
+  if ! whistle_is_notified "$_ns_state"; then
+    printf 'tmux-whistle: 未知通知态 [%s]（可选：%s）\n' "$_ns_state" "$WHISTLE_NOTIFIED_STATES" >&2
+    return 1
+  fi
+
+  whistle_tmux set -p -t "$_ns_pane" @whistle_notice "$_ns_state" \
+    \; set -p -t "$_ns_pane" @whistle_notice_msg "$_ns_msg" \
+    \; set -p -t "$_ns_pane" @whistle_notice_body "$_ns_body" \
+    \; set -p -t "$_ns_pane" @whistle_notice_at "$(whistle_now)" || return 1
+
+  printf '%s' "$_ns_pane"
+}
+
+# whistle_sub_set <start|stop> [pane]
+#
+# 子 agent 标记：@whistle_sub 存**过期时间戳**（epoch 秒），0 = 永不过期。
+#
+# start：写 @whistle_sub = now + @whistle_sub_ttl。
+#   活动态由**推导层**合成（标记有效 → 活动态强制 running），
+#   这里不写 @whistle —— 写了就分不清「主回合在跑」和「只是子 agent 在跑」，
+#   子 agent 结束（stop）时那份 running 会留下来变 permanent。
+#
+# stop：清 @whistle_sub。活动态是否回落到 idle 由合成规则处理
+#   （@whistle 是什么就显示什么）。
+#
+# 过期不需要写回：推导层按时间戳判断，标记会自己过期回落。
+whistle_sub_set() {
+  _ss_act="${1:-}"
+  _ss_pane=$(whistle_resolve_pane "${2:-}")
+
+  if [ -z "$_ss_pane" ]; then
+    printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
+    return 1
+  fi
+
+  case "$_ss_act" in
+  start)
+    _ss_ttl=$(whistle_conf '@whistle_sub_ttl')
+    case "$_ss_ttl" in
+    '' | *[!0-9]*) _ss_ttl=1800 ;;
+    esac
+    if [ "$_ss_ttl" -eq 0 ]; then
+      _ss_until=0
+    else
+      _ss_until=$(($(whistle_now) + _ss_ttl))
+    fi
+    whistle_tmux set -p -t "$_ss_pane" @whistle_sub "$_ss_until" || return 1
+    ;;
+  stop)
+    whistle_tmux set -p -t "$_ss_pane" @whistle_sub '' || return 1
+    ;;
+  *)
+    printf 'tmux-whistle: 未知的子 agent 标记动作 [%s]（可选：start stop）\n' "$_ss_act" >&2
+    return 1
+    ;;
+  esac
+
+  printf '%s' "$_ss_pane"
+}
+
+# whistle_state_set <state> <msg> [pane] [body]
+#
+# 兼容入口：按状态分流到两条通道。
+#   running / idle / gone → 活动通道（whistle_activity_set）
+#   done / wait / error   → 通知通道（whistle_notice_set）
+#
+# 新代码请直接用 whistle_activity_set / whistle_notice_set ——
+# 这个入口存在的意义是让还没改造的调用方（关键词兜底轮询等）继续可用。
+whistle_state_set() {
+  _st_state="${1:-}"
+  _st_msg="${2:-}"
+  _st_pane="${3:-}"
+  _st_body="${4:-}"
+
+  case "$_st_state" in
+  running | idle | gone)
+    whistle_activity_set "$_st_state" "$_st_pane" "${WHISTLE_SRC:-manual}" \
+      "$_st_msg" "$_st_body"
+    ;;
+  done | wait | error)
+    whistle_notice_set "$_st_state" "$_st_msg" "$_st_body" "$_st_pane"
+    ;;
+  *)
+    printf 'tmux-whistle: 未知状态 [%s]（可选：%s）\n' "$_st_state" "$WHISTLE_STATES" >&2
+    return 1
+    ;;
+  esac
 }
 
 # whistle_state_clear <pane> → stdout = pane id
+#
+# **只清通知通道**（@whistle_notice*），绝不碰活动通道（@whistle）。
+#
+# 这是本次最关键的语义修正：以前「已读」清的是整个 @whistle，
+# 于是「在跑 → 空闲」的降级有了执行者 —— 主 agent 明明还在干活，
+# 用户切进窗口读掉一条通知，活动态就被清空，接着被「按进程发现空闲」
+# 判成 idle，徽章从此显示「空闲」，且零报错。
+#
+# 活动通道只由 whistle_activity_set / whistle_state_gone 改。
 #
 # 不用清 @whistle_win_pane：那是 window 级派生值，调用方随后会跑
 # whistle_recompute_window 重算覆盖它（窗口内没有 pane 时重写成空串）。
@@ -455,24 +724,41 @@ whistle_state_clear() {
   _pane=$(whistle_resolve_pane "$1")
   [ -z "$_pane" ] && return 1
 
-  whistle_tmux set -p -t "$_pane" -u @whistle \
-    \; set -p -t "$_pane" -u @whistle_msg \
-    \; set -p -t "$_pane" -u @whistle_at \
-    \; set -p -t "$_pane" -u @whistle_src \
-    \; set -p -t "$_pane" -u @whistle_body || return 1
+  whistle_tmux set -p -t "$_pane" -u @whistle_notice \
+    \; set -p -t "$_pane" -u @whistle_notice_msg \
+    \; set -p -t "$_pane" -u @whistle_notice_body \
+    \; set -p -t "$_pane" -u @whistle_notice_at || return 1
 
   printf '%s' "$_pane"
 }
 
+# whistle_activity_clear <pane> → stdout = pane id
+#
+# 清**活动通道**（@whistle*），通知通道不动。
+# 与 whistle_state_clear 是一对：前者清活动，后者清通知。
+whistle_activity_clear() {
+  _ac_pane=$(whistle_resolve_pane "${1:-}")
+  [ -z "$_ac_pane" ] && return 1
+
+  whistle_tmux set -p -t "$_ac_pane" -u @whistle \
+    \; set -p -t "$_ac_pane" -u @whistle_msg \
+    \; set -p -t "$_ac_pane" -u @whistle_at \
+    \; set -p -t "$_ac_pane" -u @whistle_src \
+    \; set -p -t "$_ac_pane" -u @whistle_body || return 1
+
+  printf '%s' "$_ac_pane"
+}
+
 # whistle_state_gone <pane> → stdout = pane id
 #
-# 把 pane 标成「agent 已退出」（WHISTLE_GONE_STATE）。
+# 把**活动通道**标成「agent 已退出」（WHISTLE_GONE_STATE）。
+# **通知通道不动** —— agent 走了不代表你已经看过那条通知。
 #
 # 为什么不直接清空：SessionEnd 钩子跑的时候 agent 进程还没退出，
 # pane_current_command 仍是 claude —— 清空的话，紧接着的重算会按
 # 「前台跑着 agent」把它当成空闲，留下一盏灭不掉的 ◉。写成 gone 就绕开了。
 #
-# 与 whistle_state_clear 的区别：清空 = 「这里什么状态都没有」，
+# 与 whistle_activity_clear 的区别：清空 = 「这里什么状态都没有」，
 # gone = 「这里曾有 agent，已经走了」。后者还留着信息，且不会被
 # 「按进程发现空闲」重新认成 agent。
 #
@@ -489,7 +775,7 @@ whistle_state_gone() {
   printf '%s' "$_sg_pane"
 }
 
-# 只清除指定 pane 上指定的那一个状态（不匹配就什么都不做），并重算
+# 只清除指定 pane 上指定的那一个**活动态**（不匹配就什么都不做），并重算
 #
 # 用途：需要「当前值恰好是 X 才清」的场景，比如 restart 时清掉 running。
 #
@@ -503,7 +789,7 @@ whistle_clear_pane_state() {
   _cps_have=$(whistle_tmux show -pqv -t "$_cps_pane" @whistle 2> /dev/null) || _cps_have=''
   [ "$_cps_have" = "$_cps_want" ] || return 1
 
-  whistle_state_clear "$_cps_pane" > /dev/null
+  whistle_activity_clear "$_cps_pane" > /dev/null
   _cps_win=$(whistle_pane_window "$_cps_pane")
   [ -n "$_cps_win" ] && whistle_recompute_window "$_cps_win"
   whistle_recompute_global
@@ -515,9 +801,9 @@ whistle_clear_pane_state() {
 # whistle_forget_agent <pane> → stdout = 所属 window id
 #
 # agent 退出了（SessionEnd）：
-#   当前是待处理通知（done/wait/error）→ **原样留着**。agent 退出不代表
-#     你已经看过，那几条要留到你切进去处理。
-#   当前是临时状态（running/idle）或空 → 写成 gone（见 whistle_state_gone）。
+#   活动通道是临时状态（running/idle）或空 → 写成 gone（见 whistle_state_gone）。
+#   通知通道**原样留着** —— agent 退出不代表你已经看过，那几条要留到你处理。
+#   子 agent 标记清掉（主 agent 都走了，子 agent 也不该再算「在干活」）。
 #
 # 无论哪种都重算：状态变了，徽章与计数得跟上。
 whistle_forget_agent() {
@@ -528,6 +814,7 @@ whistle_forget_agent() {
   if whistle_is_transient "$_fa_have" || [ -z "$_fa_have" ]; then
     whistle_state_gone "$_fa_pane" > /dev/null
   fi
+  whistle_sub_set stop "$_fa_pane" > /dev/null
 
   _fa_win=$(whistle_pane_window "$_fa_pane")
   [ -n "$_fa_win" ] && whistle_recompute_window "$_fa_win"
@@ -539,6 +826,10 @@ whistle_forget_agent() {
 
 # 清除整个 window 内所有处于"待处理"状态的 pane（已读语义），并重算
 #
+# ⚠️ **只清通知通道**：切进窗口 = 已读，读掉的是「有事等你」，
+# 不是「这个 pane 有没有 agent 在干活」。动 @whistle 就是把正在干活的
+# agent 降级成空闲 —— 本次要修的正是这条。
+#
 # 分层约定：core 只管状态，不碰边框与重绘（那属于 deliver 层）。
 # 所以这里不调 whistle_border_release / whistle_refresh_*，由调用方补上。
 whistle_clear_window() {
@@ -547,7 +838,7 @@ whistle_clear_window() {
 
   _pids=$(whistle_tmux list-panes -t "$_win" -F '#{pane_id}' 2> /dev/null)
   for _p in $_pids; do
-    _s=$(whistle_tmux show -pqv -t "$_p" @whistle 2> /dev/null) || _s=''
+    _s=$(whistle_tmux show -pqv -t "$_p" @whistle_notice 2> /dev/null) || _s=''
     whistle_is_notified "$_s" && whistle_state_clear "$_p" > /dev/null
   done
 
@@ -555,11 +846,11 @@ whistle_clear_window() {
   whistle_recompute_global
 }
 
-# 清除整个 server 内所有待处理状态
+# 清除整个 server 内所有待处理状态（同样只清通知通道）
 whistle_clear_all() {
   _pids=$(whistle_tmux list-panes -a -F '#{pane_id}' 2> /dev/null)
   for _p in $_pids; do
-    _s=$(whistle_tmux show -pqv -t "$_p" @whistle 2> /dev/null) || _s=''
+    _s=$(whistle_tmux show -pqv -t "$_p" @whistle_notice 2> /dev/null) || _s=''
     whistle_is_notified "$_s" && whistle_state_clear "$_p" > /dev/null
   done
 
@@ -572,30 +863,63 @@ whistle_clear_all() {
 
 # -- 聚合重算 --------------------------------------------------------------
 
+# 把推导结果里的 (pane_id|有效态) 写成一次 tmux 调用里的 \; 链
+#
+# 为什么不逐个写：每个 pane 一次 tmux 调用就是 N 次 fork。
+# 一次 \; 链写完，只有一次 fork —— 与 CLAUDE.md 里「一次 \; 链写多个
+# option 不额外 fork」同一条原则。
+#
+# stdin = 推导输出（pane_id|有效态|通知态|活动态|消息）
+whistle_write_pane_eff() {
+  set --
+  while IFS='|' read -r _we_pane _we_eff _we_notice _we_act _we_msg \
+    || [ -n "${_we_pane:-}" ]; do
+    case "${_we_pane:-}" in
+    '%'*) ;;
+    *) continue ;;
+    esac
+    if [ $# -gt 0 ]; then
+      set -- "$@" ';'
+    fi
+    set -- "$@" set -p -t "$_we_pane" @whistle_eff "$_we_eff"
+  done
+  if [ $# -gt 0 ]; then
+    whistle_tmux "$@"
+  fi
+  return 0
+}
+
 whistle_recompute_window() {
   _win="$1"
+  # 状态块从第 2 列开始：活动态、通知态、活动消息、通知消息、
+  # 子 agent 标记（可选列）、最后一列是前台进程名。
   _lines=$(whistle_tmux list-panes -t "$_win" \
-    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' 2> /dev/null)
+    -F '#{pane_id}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' 2> /dev/null)
 
-  # 状态列 2、命令列（最后一列）：没上报过、但前台跑着 agent 的 pane 算 idle。
+  # 推导层：没上报过、但前台跑着 agent 的 pane 算 idle；子 agent 在跑则强制 running。
   # 这层推导在纯函数之前做，下游（聚合、计数、菜单）全都白拿同一个口径。
   _lines=$(printf '%s\n' "$_lines" \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2)
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0)
 
   _agg=$(printf '%s' "$_lines" | whistle_aggregate)
+  # 拆 6 列：<有效态>|<消息>|<待处理数>|<胜出 pane>|<通知态>|<通知消息>
   _state=${_agg%%|*}
   _rest=${_agg#*|}
   _msg=${_rest%%|*}
-  # 剩下 "<待处理数>|<胜出 pane>"：先摘数再摘 pane。
-  # 窗口内没有 pane 时 list-panes 无输出 → 四列全空 → @whistle_win_pane
-  # 被写成空串，自愈，不需要额外兜底。
   _rest=${_rest#*|}
   _count=${_rest%%|*}
-  _pane=${_rest#*|}
+  _rest=${_rest#*|}
+  _pane=${_rest%%|*}
+  _rest=${_rest#*|}
+  _notice=${_rest%%|*}
+  _notice_msg=${_rest#*|}
 
   # window 级刻意用与 pane 级不同的名字（@whistle_win vs @whistle）。
   # 同名会造成影子遮蔽：清掉 pane 的 @whistle 后，查找会回退到 window 上的
   # 聚合值，于是 pane 看起来"清不掉"。
+  #
+  # @whistle_win 是**有效态**（徽章显示它），@whistle_win_notice 是
+  # **通知态**（这个窗口有没有事等你）—— 两个不同的名字，两件事。
   #
   # @whistle_win_pane 记的是「这个窗口该亮的状态来自哪一格」。
   # 消费者是 jump（先判存活再 select-pane）。
@@ -605,7 +929,12 @@ whistle_recompute_window() {
   whistle_tmux setw -t "$_win" @whistle_win "$_state" \
     \; setw -t "$_win" @whistle_win_msg "$_msg" \
     \; setw -t "$_win" @whistle_win_count "$_count" \
-    \; setw -t "$_win" @whistle_win_pane "$_pane"
+    \; setw -t "$_win" @whistle_win_pane "$_pane" \
+    \; setw -t "$_win" @whistle_win_notice "$_notice" \
+    \; setw -t "$_win" @whistle_win_notice_msg "$_notice_msg"
+
+  # pane 级有效态：徽章直接读它（format 层数不变，不加嵌套）。
+  printf '%s\n' "$_lines" | whistle_write_pane_eff
 }
 
 whistle_recompute_global() {
@@ -613,11 +942,10 @@ whistle_recompute_global() {
   # 只传 @whistle 的话每一行都被丢掉，计数恒为 0。
   #
   # 一次 list-panes 喂两个纯函数：聚合态 / 待处理总数 + 各状态分布。
-  # 第 4 列是前台进程名，用来推导「没上报过但跑着 agent」的 idle。
   _cg_rows=$(whistle_tmux list-panes -a \
-    -F '#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' 2> /dev/null)
+    -F '#{pane_id}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' 2> /dev/null)
   _cg_rows=$(printf '%s\n' "$_cg_rows" \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2)
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0)
 
   _n=$(printf '%s\n' "$_cg_rows" | whistle_aggregate | cut -d'|' -f3)
   _c=$(printf '%s\n' "$_cg_rows" | whistle_count_states)
@@ -639,6 +967,9 @@ whistle_recompute_global() {
     \; set -g @whistle_count_wait "${_cw:-0}" \
     \; set -g @whistle_count_error "${_ce:-0}"
 
+  # pane 级有效态
+  printf '%s\n' "$_cg_rows" | whistle_write_pane_eff
+
   # 帧推进器的启停跟着计数走 —— 挂在这里而不是 deliver / setup.sh 里，
   # 因为**这里是唯一改 @whistle_count_running 的地方**。
   # 挂在调用方就会漏：--recompute（由 pane-exited / window-pane-changed
@@ -649,7 +980,10 @@ whistle_recompute_global() {
 
 # -- 查询 ------------------------------------------------------------------
 
-# whistle_list_lines：输出 "<session>|<window>|<pane>|<state>|<msg>|<age>"
+# whistle_list_lines：输出 "<session>|<window>|<pane>|<通知态>|<消息>|<age>"
+#
+# **只列通知通道**（「有事等你」的那些）。活动通道是背景信息，
+# 混进待办清单里就没有意义了 —— 待办清单的语义就是「等我处理」。
 #
 # 分隔符一律用 '|'（非空白）。若用 TAB/空格，read 会折叠连续分隔符，
 # 消息为空时后面的列会整体前移一格。消息在倒数第二列且末列 age 恒有值，
@@ -658,7 +992,7 @@ whistle_list_lines() {
   # 临时变量一律用 _l 前缀：whistle_is_notified 等被调函数也会用通用短名，
   # POSIX sh 里同名会被覆盖（曾经把 session 名覆盖成状态名）。
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_name}|#{pane_id}|#{@whistle}|#{@whistle_msg}|#{@whistle_at}' \
+    -F '#{session_name}|#{window_name}|#{pane_id}|#{@whistle_notice}|#{@whistle_notice_msg}|#{@whistle_notice_at}' \
     2> /dev/null | while IFS='|' read -r _ls _lwn _lpid _lst _lmsg _lat; do
     whistle_is_notified "$_lst" || continue
     _lage='-'
@@ -669,7 +1003,8 @@ whistle_list_lines() {
   done
 }
 
-# 所有上报过状态的 (session, window_id, window_name, window_index, pane_id, state, msg)
+# 所有 pane 的 (session, window_id, window_name, window_index, pane_id, 有效态,
+#               通知态, 活动态, 消息)
 #
 # 与 whistle_pending_windows 的区别：**不过滤** whistle_is_notified，
 # 所以 running / idle 也在内 —— 菜单要能列出「哪些窗口有 agent」，
@@ -683,15 +1018,16 @@ whistle_list_lines() {
 # ⚠️ 这里的 rank 必须与 whistle_rank 一致（awk 里没法调 shell 函数）。
 # 两处对不上时症状很隐蔽：窗口徽章显示 ▶、菜单却排成 idle 那一条。
 #
-# 第 8 列是前台进程名：没上报过、但跑着 agent 的 pane 也要列进菜单（状态算
-# idle）—— 与窗口徽章、状态栏汇总同一口径。
+# 第 10 列是子 agent 标记（可选列）、第 11 列是前台进程名：
+# 没上报过、但跑着 agent 的 pane 也要列进菜单（活动态算 idle）——
+# 与窗口徽章、状态栏汇总同一口径。
 #
-# 注意：推导层会**去掉最后一列**（命令名），所以下面 awk 看到的行是 7 列。
+# 注意：推导层会**去掉命令列与子 agent 标记列**，所以下面 awk 看到的行是 9 列。
 whistle_agent_windows() {
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_msg}|#{pane_current_command}' \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' \
     2> /dev/null \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 6 \
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 6 5 \
     | awk -F'|' -v gone="$WHISTLE_GONE_STATE" '
     $6 == "" || $6 == gone { next }
     {
@@ -706,11 +1042,11 @@ whistle_agent_windows() {
   '
 }
 
-# 待处理的 (session, window_id, window_name, window_index, state, msg)
+# 待处理的 (session, window_id, window_name, window_index, 通知态, 消息)
 # 供 display-menu 与 jump 使用。
 whistle_pending_windows() {
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle}|#{@whistle_msg}' \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{@whistle_notice}|#{@whistle_notice_msg}' \
     2> /dev/null | while IFS='|' read -r _ps _pwid _pwn _pwi _pst _pmsg; do
     whistle_is_notified "$_pst" || continue
     printf '%s|%s|%s|%s|%s|%s\n' "$_ps" "$_pwid" "$_pwn" "$_pwi" "$_pst" "$_pmsg"

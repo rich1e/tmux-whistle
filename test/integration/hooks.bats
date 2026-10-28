@@ -160,7 +160,8 @@ win_of() {
 
   whistle_read_window "$(win_of w2)"
 
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'done'
+  # done 住通知通道（@whistle_notice）—— 活动通道从来没被写过
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" 'done'
 }
 
 @test "已读：非待处理窗口被读不产生任何写操作" {
@@ -179,13 +180,17 @@ win_of() {
   p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
   p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
 
+  # p1 同时「在跑」和「有事等我」：已读只能清掉后者
+  whistle_state_set "running" '还在跑' "$p1" > /dev/null
   whistle_state_set "done" 'a' "$p1" > /dev/null
   whistle_state_set "wait" 'b' "$p2" > /dev/null
 
   whistle_read_pane "$p1"
 
-  assert_eq "$(wt show -pqv -t "$p1" @whistle)" ''
-  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'wait'
+  assert_eq "$(wt show -pqv -t "$p1" @whistle_notice)" ''
+  # 活动通道**原样保留** —— 读掉通知不该把正在干活的 agent 降级成空闲
+  assert_eq "$(wt show -pqv -t "$p1" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" 'wait'
 }
 
 @test "重算：pane 增删后 window 聚合态与全局计数都被刷新" {

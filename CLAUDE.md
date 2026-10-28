@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 310 项测试（49 单测 + 261 集成/e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 401 项测试（65 单测 + 285 集成 + 51 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -50,13 +50,30 @@ L1 存储     tmux user option（tmux server 内存，不落盘、不跨 tmux �
 
 **状态存储约定**
 
+状态分成**两条正交通道**：活动通道（这个 pane 里有没有 agent 在干活）与通知通道
+（有没有事等你）。一个 pane 可以同时命中两条 —— 所以 pane 级有**两个**真源。
+
 | 作用域 | option | 性质 |
 |---|---|---|
-| pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **真源**，只有这里能写 |
+| pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
+| pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
+| pane | `@whistle_sub` | 子 agent 标记，存的是**过期时间戳**（epoch 秒），空 = 无 |
+| pane | `@whistle_eff` | 派生：该 pane 的有效态（供 pane 徽章 format 读） |
 | window | `@whistle_win` `@whistle_win_msg` `@whistle_win_count` `@whistle_win_pane` | 派生，由 `whistle_recompute_window` 重算 |
+| window | `@whistle_win_notice` `@whistle_win_notice_msg` | 派生：窗口通知态与消息 |
 | global | `@whistle_pending` `@whistle_count_*` `@whistle_mark` `@whistle_status_right` `@whistle_pane_mark` `@whistle_spin_char` | 派生 / format 串 |
 
-`@whistle_body` 是「完整正文」（上限 400），`@whistle_msg` 是「徽章上显示的短标题」（上限 80）。
+- 活动通道取值：`running` / `idle` / `gone` / 未设置。
+- 通知通道取值：`done` / `wait` / `error` / 未设置。
+- **有效态** = 两者按 rank 取高者（`error 5 > wait 4 > done 3 > running 2 > idle 1`）。
+  窗口徽章、pane 徽章、边框、`whistle_deliver` 都按有效态走。
+- 汇总段 `▶N ◉N ◆N ◔N ⚠N`：`▶/◉` 数**活动**通道，`◆/◔/⚠` 数**通知**通道，
+  **两组互不排斥**（同一个 pane 可以既在 `count_running` 又在 `count_done` 里）。
+  整段是否显示的判据仍是 `running || idle || pending` —— `@whistle_pending`
+  就是通知总数，所以那个判据段逐字成立，**不要为双通道去加深 format 嵌套**。
+
+`@whistle_body` / `@whistle_notice_body` 是「完整正文」（上限 400），
+`@whistle_msg` / `@whistle_notice_msg` 是「徽章上显示的短标题」（上限 80）。
 后者被截断就永久丢失，所以前者单独存一份。
 
 **徽章必须是纯 tmux format，一个进程都不 fork。** 状态栏每 `status-interval` 重算一次，
@@ -68,9 +85,12 @@ publish，不用重载 tmux 配置。
 （自愈，见下），再依次走边框、边框状态行、状态栏刷新、瞬时提示扇出、桌面通知。
 `cmd_set` 与 `cmd_run` 共用 `whistle_finish`（重算 + 投递）—— 复制两份必然分叉。
 
-**CLI 表面**：`done|wait|error|running|idle`（置状态，可带 `--title` / `--body`）、
-`run -- 命令`（按退出码落状态，带耗时）、`clear` / `list` / `menu` / `jump` / `on|off` /
-`doctor` / `install-hooks`。菜单键是 `prefix + n`。
+**CLI 表面**：`done|wait|error`（写**通知通道**）、`running|idle`（写**活动通道**），
+都可以带 `--title` / `--body`；`run -- 命令`（开始置活动 `running`，结束置活动
+`idle` + 通知 `done`/`error`，带耗时）、`clear` / `list` / `menu` / `jump`（只碰通知通道）/
+`on|off` / `doctor` / `install-hooks`。菜单键是 `prefix + n`。
+hook 专用、不进用户语法的内部子命令：`--activity <running|idle|gone>`、
+`--notice <done|wait|error>`、`--sub-agent-start`、`--sub-agent-stop`。
 菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
 和窗口名、agent 的话分开（`whistle_menu_item_label` 是唯一定义处，
 `cmd_menu` 与 `cmd_menu_args` 共用它）。
@@ -156,13 +176,32 @@ publish，不用重载 tmux 配置。
 resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。
 现在映射成 `idle`（`source=compact` 除外 —— 那是轮中压缩，agent 还在干活，原样不动）。
 
-**`idle` 顶不掉待处理通知**：守卫在 `whistle_state_set`（唯一写入点），不在 hook 里。
-恢复会话不能把上一轮还没读的 `◆`/`◔`/`⚠` 当成已读。`idle` 也不参与「已读即清除」：
-把 `done` 读掉之后那一格是空的，不是 `◉`。
+**活动与通知是两条正交通道，永远不会互相顶掉**：`@whistle`（活动）与
+`@whistle_notice`（通知）是两个独立状态槽，写入点也分开
+（`whistle_activity_set` / `whistle_notice_set`）。这条不是可有可无的洁癖 ——
+早先只有一个槽时，「后台 agent 完成」这条通知会把主 agent 的 `running` 顶掉，
+用户读掉通知后整格被清空、再被「按进程发现」判成 `idle`，一个**正在干活**的
+agent 显示成「空闲」，**全程零报错**。新增任何一种「要告诉你的事」都写通知通道，
+**不要往活动通道挤**。
+
+**已读路径只清通知通道，绝不动活动通道**：`whistle_clear_window` /
+`whistle_clear_all` / `whistle_read_window` / `whistle_read_pane` 只清
+`@whistle_notice*`。「切进窗口 = 已读」只该表示「那件事我看过了」，不该顺手
+把「它还在干活」这件事也抹掉 —— 抹掉之后没有任何事件会把它点回来。
+⚠️ 这四个函数的判据入口横跨 `lib/core.sh` 与 `lib/status-line.sh` 两个文件，
+改的时候两边都要找一遍（`bin/tmux-whistle` 的 `cmd_read_pane` 里还有第三个判据）。
+
+**`running` 的含义是「这个 pane 里有任何 agent 在干活」**，不只是主 agent 的一轮：
+子 agent / 后台 agent 存活也算（`@whistle_sub` 标记 + 推导层覆盖），
+`PreToolUse` 也会点亮它 —— 后者顺带覆盖了 plan mode「批准后 agent 继续跑、
+但没有新的 `UserPromptSubmit`」那条路。
 
 **`◉` 不再表示「零个在跑」**：`@whistle_count_idle` 是独立计数，汇总里 `▶N ◉N`
 两格并存。整段的显示判据必须同时看 running / idle / pending 三个 —— 漏掉 idle 的话
 「三个 agent 全空闲」会被判成没活动而整段隐藏，而那一格正是恢复 tmux 后最想看到的。
+`▶/◉` 与 `◆/◔/⚠` 两组**互不排斥**：同一个 pane 可以既在 `count_running` 又在
+`count_done` 里。整段是否隐藏的判据仍写 `running || idle || pending` ——
+`@whistle_pending` 就是通知总数，所以那个 format 段逐字成立，**别为双通道去加深嵌套**。
 
 **「空闲」有两个来源**：hook 在 `SessionStart` 报 idle，以及**按进程发现** ——
 `whistle_resolve_idle_panes`（纯函数）把「没上报状态、但前台跑着
@@ -170,12 +209,20 @@ resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 
 窗口徽章、全局计数、菜单三处因此口径一致。
 判据是 tmux 自己的事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
 
+**`@whistle_sub` 存的是过期时间戳，不是布尔**：`PreToolUse`(Agent/Task) 写
+`now + @whistle_sub_ttl`，`SubagentStop` / `Notification(agent_completed)` 清空。
+过期由推导层按时间戳判断（**不需要写回**）。这是防「标记泄漏 → 永久亮 `▶`」的
+安全阀：宁可漏报 `running`（回到旧行为），不可永久误报。让过期真正落地的是
+`lib/spin.sh` 每 `@whistle_recompute_every` 帧触发的一次全局重算 ——
+挂在推进器上不是偶然，它**只在 `count_running > 0` 时活着**，恰好就是需要自愈的场景。
+
 **带 `|` 的行要按固定列数读**：POSIX 的 `read` 在字段数多于变量数时，会把余下的
 （含分隔符）全塞进**最后一个**变量。所以「消息」必须在**末位**（它拿到的是余下的
 全部，消息里带 `|` 也不会被截断），而**中间不能多留列** —— 多留一列，
 消息列就变成「消息|进程名」，而 `@whistle_win_msg` 与菜单标签会把它原样显示出去。
-`whistle_resolve_idle_panes` 因此**把命令列整列去掉**再往下传；
-`whistle_aggregate` 只读 3 个变量，菜单那侧读 7 个 —— 改列数时两边都要跟着改。
+`whistle_resolve_idle_panes` 因此**把命令列整列去掉**再往下传，输出的列布局是
+`<前导列> | pane_id | 有效态 | 通知态 | 活动态 | 消息`（消息在末位）；
+`whistle_aggregate` 只读 **5** 个变量，菜单那侧读 **9** 个 —— 改列数时两边都要跟着改。
 
 **`gone` 不是用户能报的状态**：只有 `SessionEnd` 会写它（`whistle_forget_agent`）。
 它解决的是一个具体竞态：钩子跑的时候 agent 进程**还没退出**，

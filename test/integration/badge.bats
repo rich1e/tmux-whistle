@@ -144,12 +144,29 @@ teardown() {
     wt_load core
     wt_load status-line
     wt set -g @whistle_badge off
+    # 关掉动画才能断言到静态 ▶ —— 开着时那一格是 Braille 帧
+    wt set -g @whistle_spin off
     whistle_status_right_publish
+    wt set -g status-right ''
     whistle_status_right_patch
-    wt set -g @whistle_pending 2
 
-    run opt 'status-right'
-    assert_contains "$output" 'whistle_status_right'
+    wt set -g @whistle_pending 0
+    wt set -g @whistle_count_running 2
+    wt set -g @whistle_count_idle 0
+    wt set -g @whistle_count_done 0
+    wt set -g @whistle_count_wait 0
+    wt set -g @whistle_count_error 0
+
+    # 窗口徽章：开关关着，什么符号都不出
+    wt set -w -t w1 @whistle_win "done"
+    whistle_format_patch window-status-format
+    run wt_render_windows
+    assert_contains "$output" 'w1'
+    assert_not_contains "$output" '◆'
+
+    # 状态栏计数：照常显示（跨 session 可见性不能一起被关掉）
+    run wt display -pF '#{E:status-right}'
+    assert_contains "$output" '▶ 2'
 }
 
 # -- KP-2: #{E:@whistle_mark} 二次展开保留窗口上下文 -------------------------
@@ -740,4 +757,207 @@ teardown() {
     wt set -w -t w1 @whistle_win "done"
     run wt_render_windows
     assert_contains "$output" 'w1◆'
+}
+
+# -- 双通道模型：省 fork 的做法是「写 option 时算好，format 只读一个值」 --------
+#
+# 两个通道（活动 @whistle / 通知 @whistle_notice）合成有效态的工作在 core 里做，
+# 渲染只读派生值 @whistle_eff（pane）/ @whistle_win（window）。
+# 所以这里的 format 结构与层数**必须**保持不变 —— 加深一层嵌套就多一处
+# 「配错大括号 → tmux 静默渲染成空字符串」的机会。
+
+# 在指定 pane 的上下文里展开 pane 徽章串。
+# @whistle_eff 是 pane option；display -p -t <pane> 的 item 上下文就是那个 pane，
+# 与真实路径（pane-border-format 里的 #{E:@whistle_pane_mark}）同一条展开链路。
+render_pane_mark() {
+    wt display -p -t "$1" -F '#{E:@whistle_pane_mark}'
+}
+
+@test "pane 徽章: 按 @whistle_eff 渲染（done → ◆，活动通道是 running 也不串）" {
+    wt_load core
+    wt_load status-line
+    whistle_pane_mark_publish
+    local p
+    p=$(wt display -p -t w1 '#{pane_id}')
+
+    # 活动通道 running + 通知通道 done → 有效态是 done。
+    # 徽章必须显示 ◆（有效态），不是 ▶（活动通道）。
+    wt set -p -t "$p" @whistle "running"
+    wt set -p -t "$p" @whistle_eff "done"
+
+    run render_pane_mark "$p"
+    assert_contains "$output" '◆'
+    assert_not_contains "$output" '▶'
+}
+
+@test "pane 徽章: @whistle_eff 为 running 时显示 ▶" {
+    wt_load core
+    wt_load status-line
+    whistle_pane_mark_publish
+    local p
+    p=$(wt display -p -t w1 '#{pane_id}')
+
+    wt set -p -t "$p" @whistle "running"
+    wt set -p -t "$p" @whistle_eff "running"
+
+    run render_pane_mark "$p"
+    assert_contains "$output" '▶'
+    assert_not_contains "$output" '◆'
+}
+
+@test "pane 徽章: @whistle_eff 为空时什么都不显示" {
+    wt_load core
+    wt_load status-line
+    whistle_pane_mark_publish
+    local p
+    p=$(wt display -p -t w1 '#{pane_id}')
+
+    wt set -p -t "$p" -u @whistle_eff
+    # 活动通道里有值也不该漏出来 —— 徽章只认有效态
+    wt set -p -t "$p" @whistle "running"
+
+    run render_pane_mark "$p"
+    assert_not_contains "$output" '◆'
+    assert_not_contains "$output" '▶'
+    assert_not_contains "$output" '◉'
+}
+
+@test "pane 徽章: 五态各自渲染自己的符号" {
+    wt_load core
+    wt_load status-line
+    whistle_pane_mark_publish
+    local p
+    p=$(wt display -p -t w1 '#{pane_id}')
+
+    for pair in 'done ◆' 'wait ◔' 'error ⚠' 'running ▶' 'idle ◉'; do
+        local st="${pair% *}" sym="${pair#* }"
+        wt set -p -t "$p" @whistle_eff "$st"
+        run render_pane_mark "$p"
+        assert_contains "$output" "$sym"
+        local other
+        for other in ◆ ◔ ⚠ ▶ ◉; do
+            [ "$other" = "$sym" ] && continue
+            assert_not_contains "$output" "$other"
+        done
+    done
+}
+
+@test "pane 徽章: format 大括号配平（畸形会被 tmux 静默渲染成空）" {
+    wt_load core
+    wt_load status-line
+    whistle_pane_mark_publish
+
+    run opt '@whistle_pane_mark'
+    local open close
+    open=$(printf '%s' "$output" | tr -cd '{' | wc -c | tr -d ' ')
+    close=$(printf '%s' "$output" | tr -cd '}' | wc -c | tr -d ' ')
+    assert_eq "$open" "$close"
+    # 层数没有加深：读的是派生值 @whistle_eff，不是两个通道各判一遍
+    assert_contains "$output" '#{@whistle_eff}'
+}
+
+@test "窗口徽章: 同一窗口里 running 的 pane 与 done 的 pane → 窗口显示 ◆" {
+    # 走真实链路：两个 pane 各占一条通道，重算后窗口取有效态 rank 高者。
+    wt_load core
+    wt_load status-line
+    wt split-window -t w1
+    local p1 p2 w
+    p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+    p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+    w=$(wt display -p -t w1 '#{window_id}')
+
+    whistle_activity_set running "$p1" manual '在跑'
+    whistle_notice_set 'done' '做完了' '' "$p2"
+    whistle_recompute_window "$w"
+
+    assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'done'
+    # 两条通道各有一个 pane 命中 —— 计数不该互相排斥
+    assert_eq "$(wt show -wv -t "$w" @whistle_win_notice)" 'done'
+
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+    run wt_render_windows
+    assert_contains "$output" 'w1◆'
+    assert_not_contains "$output" '▶'
+}
+
+@test "窗口徽章: 窗口里只有活动通道（running）时显示 ▶" {
+    wt_load core
+    wt_load status-line
+    local p w
+    p=$(wt display -p -t w1 '#{pane_id}')
+    w=$(wt display -p -t w1 '#{window_id}')
+
+    whistle_activity_set running "$p" manual '在跑'
+    whistle_recompute_window "$w"
+    assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'running'
+
+    whistle_mark_publish
+    whistle_format_patch window-status-format
+    run wt_render_windows
+    assert_contains "$output" 'w1▶'
+    assert_not_contains "$output" '◆'
+}
+
+# -- 汇总段：两组计数互不排斥 ------------------------------------------------
+
+@test "status-right: ▶ 与 ◆ 可以同时非零（同一个 pane 同时 running + done）" {
+    # 活动通道与通知通道是正交的：一个 pane 可以同时在 count_running 和
+    # count_done 里。汇总必须两格都显示，不能一格顶掉另一格。
+    wt_load core
+    wt_load status-line
+    wt set -g @whistle_spin off
+    whistle_status_right_publish
+    wt set -g status-right ''
+    whistle_status_right_patch
+
+    wt set -g @whistle_pending 1
+    wt set -g @whistle_count_running 1
+    wt set -g @whistle_count_idle 0
+    wt set -g @whistle_count_done 1
+    wt set -g @whistle_count_wait 0
+    wt set -g @whistle_count_error 0
+
+    run wt display -pF '#{E:status-right}'
+    assert_contains "$output" '▶ 1'
+    assert_contains "$output" '◆ 1'
+    assert_contains "$output" '⚑ 1'
+}
+
+@test "status-right: 只有通知计数非零（活动全零）时整段仍然出现" {
+    wt_load core
+    wt_load status-line
+    wt set -g @whistle_spin off
+    whistle_status_right_publish
+    wt set -g status-right ''
+    whistle_status_right_patch
+
+    wt set -g @whistle_pending 1
+    wt set -g @whistle_count_running 0
+    wt set -g @whistle_count_idle 0
+    wt set -g @whistle_count_done 1
+    wt set -g @whistle_count_wait 0
+    wt set -g @whistle_count_error 0
+
+    run wt display -pF '#{E:status-right}'
+    assert_contains "$output" '◆ 1'
+    assert_contains "$output" '▶ 0'
+}
+
+@test "status-right: 五格与 pending 全为 0 时整段为空，其余内容保留" {
+    wt_load core
+    wt_load status-line
+    whistle_status_right_publish
+    wt set -g status-right 'TAIL'
+    whistle_status_right_patch
+
+    wt set -g @whistle_pending 0
+    wt set -g @whistle_count_running 0
+    wt set -g @whistle_count_idle 0
+    wt set -g @whistle_count_done 0
+    wt set -g @whistle_count_wait 0
+    wt set -g @whistle_count_error 0
+
+    run wt display -pF '#{E:status-right}'
+    assert_eq "$output" 'TAIL'
 }

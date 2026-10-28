@@ -2,6 +2,10 @@
 # shellcheck shell=bash
 #
 # 状态读写、窗口聚合、全局计数、清除、列表。
+#
+# 两条正交通道：活动（@whistle）与通知（@whistle_notice）。
+# 本文件守的最要紧的一条是「已读只清通知通道」——
+# 以前已读清的是整个 @whistle，于是「在跑 → 空闲」的降级有了执行者。
 
 load '../test_helper/whistle'
 
@@ -22,38 +26,156 @@ pane_of() {
   wt display -p -t w1 '#{pane_id}'
 }
 
-# -- 置状态 ----------------------------------------------------------------
+# -- 活动通道 ---------------------------------------------------------------
 
-@test "set: 写全部四个 pane option" {
-  run whistle_state_set "done" '重构完成'
+@test "activity_set: 写活动通道的五个 option" {
+  run whistle_activity_set running '' manual '在跑'
   assert_eq "$status" 0
 
   local p
   p=$(pane_of)
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'done'
-  assert_eq "$(wt show -pqv -t "$p" @whistle_msg)" '重构完成'
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_msg)" '在跑'
   [ -n "$(wt show -pqv -t "$p" @whistle_at)" ]
   assert_eq "$(wt show -pqv -t "$p" @whistle_src)" 'manual'
 }
 
-@test "set: 未知状态被拒且不写任何东西" {
+@test "activity_set: 未知状态被拒且不写任何东西" {
   local p
   p=$(pane_of)
-  run whistle_state_set banana 'x'
+  run whistle_activity_set banana '' manual 'x'
   assert_eq "$status" 1
   assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
 }
 
-@test "set: 消息落盘前已消毒（KP-3）" {
-  whistle_state_set "done" '#{evil}{x}|y'
-  local p
+@test "activity_set: 消息落盘前已消毒（KP-3）" {
+  whistle_activity_set running '' manual '#{evil}{x}|y'
+  local p m
   p=$(pane_of)
-  local m
   m=$(wt show -pqv -t "$p" @whistle_msg)
   assert_not_contains "$m" '#'
   assert_not_contains "$m" '{'
   assert_not_contains "$m" '}'
   assert_not_contains "$m" '|'
+}
+
+@test "activity_set: 绝不碰通知通道" {
+  local p
+  p=$(pane_of)
+  whistle_notice_set 'done' '做完了' '' "$p"
+  whistle_activity_set running "$p" manual '在跑'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" 'done'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice_msg)" '做完了'
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+}
+
+# -- 通知通道 ---------------------------------------------------------------
+
+@test "notice_set: 写通知通道的四个 option，活动通道不受影响" {
+  local p
+  p=$(pane_of)
+  whistle_activity_set running "$p" manual '在跑'
+
+  run whistle_notice_set 'done' '做完了' '正文在这里'
+  assert_eq "$status" 0
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" 'done'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice_msg)" '做完了'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice_body)" '正文在这里'
+  [ -n "$(wt show -pqv -t "$p" @whistle_notice_at)" ]
+
+  # 活动通道一个字节都没动
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_msg)" '在跑'
+}
+
+@test "notice_set: 未知状态被拒且不写任何东西" {
+  local p
+  p=$(pane_of)
+  run whistle_notice_set running 'x' ''
+  assert_eq "$status" 1
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
+}
+
+@test "state_set: 按状态分流到两条通道（兼容入口）" {
+  local p
+  p=$(pane_of)
+  whistle_state_set running '在跑' "$p"
+  whistle_state_set 'done' '做完了' "$p"
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" 'done'
+}
+
+@test "state_set: 未知状态被拒" {
+  run whistle_state_set banana 'x'
+  assert_eq "$status" 1
+}
+
+# -- 已读路径：只清通知通道 -------------------------------------------------
+
+@test "read: state_clear 只清通知通道，活动通道原样保留" {
+  # 这一条守本次的 bug：已读以前清的是整个 @whistle，
+  # 于是「在跑 → 空闲」的降级有了执行者 —— 主 agent 明明还在干活，
+  # 用户切进窗口读掉一条通知，活动态就被清空，接着被「按进程发现空闲」
+  # 判成 idle，徽章从此显示「空闲」，且零报错。
+  local p
+  p=$(pane_of)
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+
+  whistle_state_clear "$p" > /dev/null
+
+  # 活动通道原样
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_msg)" '在跑'
+  # 通知通道被清空
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice_msg)" ''
+}
+
+@test "read_window: 切进窗口走已读路径，只清通知不动活动态" {
+  # 走真实的 whistle_read_window（渲染层）：它按 @whistle_win（有效态）判断
+  # 「这个窗口有事等我」。有效态是通知态时才会清 —— 清的是通知通道。
+  wt_load status-line
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'done'
+
+  whistle_read_window "$w"
+
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_notice)" ''
+}
+
+@test "read: 读完通知后，正在跑的 agent 不降级成 idle（核心回归）" {
+  # whistle_read_pane 在 lib/status-line.sh（渲染层），
+  # 它的判据必须看 @whistle_notice 而不是 @whistle ——
+  # 否则活动通道里的 running 被当成「不是待处理」，通知永远清不掉。
+  wt_load status-line
+  local cmd p
+  cmd=$(wt display -p -t w1 '#{pane_current_command}')
+  wt set -g @whistle_agent_cmds "$cmd"
+  p=$(pane_of)
+
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(opt '@whistle_count_done')" '1'
+  assert_eq "$(opt '@whistle_count_idle')" '0'
+
+  whistle_read_pane "$p"
+
+  # 活动态仍是 running —— 不被降级成 idle
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(opt '@whistle_count_idle')" '0'
+  # 通知通道被清空
+  assert_eq "$(opt '@whistle_count_done')" '0'
 }
 
 # -- 窗口聚合 --------------------------------------------------------------
@@ -99,6 +221,42 @@ pane_of() {
 
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'wait'
   assert_eq "$(wt show -wv -t "$w" @whistle_win_pane)" "$p2"
+}
+
+@test "recompute: 窗口通知态与通知消息单独记一份" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+  whistle_recompute_window "$w"
+
+  # 有效态 = 通知（rank 高）
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'done'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_msg)" '做完了'
+  # 通知态与通知消息
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_notice)" 'done'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_notice_msg)" '做完了'
+}
+
+@test "recompute: 没有通知时窗口通知态为空" {
+  local w
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_activity_set running "$(pane_of)" manual '在跑'
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'running'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_notice)" ''
+  assert_eq "$(wt show -wv -t "$w" @whistle_win_notice_msg)" ''
+}
+
+@test "recompute: pane 级有效态写进 @whistle_eff（徽章读它）" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'done'
 }
 
 @test "recompute: pane 状态清掉后 @whistle_win_pane 回落为空" {
@@ -165,6 +323,21 @@ pane_of() {
   assert_eq "$(opt '@whistle_pending')" '2'
 }
 
+@test "recompute_global: 分通道计数 —— 同一 pane 同时 running 与 done 各计一次" {
+  # 双通道模型的核心语义：▶1 ◆1 说的可能就是同一个 pane ——
+  # 一个 agent 在跑，同时有一条通知等你处理。两组**互不排斥**。
+  local p
+  p=$(pane_of)
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(opt '@whistle_count_done')" '1'
+  assert_eq "$(opt '@whistle_pending')" '1'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'done'
+}
+
 @test "recompute_global: 没上报过但前台跑着 agent 的 pane 算 idle" {
   # 「按进程发现空闲」：测试里 pane 跑的是当前 shell，把它写进 agent 清单
   # 就能触发。真实场景是 resurrect 拉起来的 claude --continue ——
@@ -179,8 +352,9 @@ pane_of() {
 
   whistle_recompute_global
   # w1 从没上报过，但前台跑着「agent」→ 算空闲
-  assert_eq "$(opt '@whistle_count_idle')" '1'
-  # w2 有待处理通知 → 不算空闲
+  # w2 的通知在**通知通道**，活动通道是空的 → 同样被推导成空闲，
+  # 但它的 done 通知照旧算待处理（两条通道互不排斥）。
+  assert_eq "$(opt '@whistle_count_idle')" '2'
   assert_eq "$(opt '@whistle_count_done')" '1'
 }
 
@@ -192,27 +366,6 @@ pane_of() {
 
   whistle_recompute_window "$w"
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'idle'
-}
-
-@test "read: 读完 done 之后 agent 还活着 → 那一格算回 idle" {
-  # 「按进程发现」的核心承诺：读完一条通知 ≠ agent 走了。
-  # 通知被清空后，那一格要靠「前台还跑着 agent」重新算回 ◉，
-  # 否则「活着但在等」这件事会随你读没读而忽隐忽现。
-  wt_load status-line
-  local cmd p
-  cmd=$(wt display -p -t w1 '#{pane_current_command}')
-  wt set -g @whistle_agent_cmds "$cmd"
-  p=$(pane_of)
-
-  whistle_state_set "done" '做完了' "$p"
-  whistle_recompute_global
-  assert_eq "$(opt '@whistle_count_done')" '1'
-  assert_eq "$(opt '@whistle_count_idle')" '0'
-
-  whistle_read_pane "$p"
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
-  assert_eq "$(opt '@whistle_count_done')" '0'
-  assert_eq "$(opt '@whistle_count_idle')" '1'
 }
 
 @test "recompute_global: 只数待处理状态，running 不算" {
@@ -241,6 +394,54 @@ pane_of() {
   whistle_state_set "error" 'c' "$pa"
   whistle_recompute_global
   assert_eq "$(opt '@whistle_pending')" '2'
+}
+
+# -- 子 agent 标记 ---------------------------------------------------------
+
+@test "sub_set: start → 活动态合成为 running" {
+  local p
+  p=$(pane_of)
+  whistle_sub_set start "$p" > /dev/null
+  [ -n "$(wt show -pqv -t "$p" @whistle_sub)" ]
+
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'running'
+}
+
+@test "sub_set: stop → 标记清空，活动态回落" {
+  local p
+  p=$(pane_of)
+  whistle_sub_set start "$p" > /dev/null
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+
+  whistle_sub_set stop "$p" > /dev/null
+  assert_eq "$(wt show -pqv -t "$p" @whistle_sub)" ''
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '0'
+}
+
+@test "sub_set: 标记过期后活动态回落（TTL 自愈，不永久误报 running）" {
+  local p
+  p=$(pane_of)
+  # 直接写一个已经过期的标记
+  wt set -p -t "$p" @whistle_sub 1
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '0'
+
+  # 未来的标记 → 强制 running
+  wt set -p -t "$p" @whistle_sub 9999999999
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+}
+
+@test "activity_set idle: 子 agent 标记有效时实际写 running" {
+  local p
+  p=$(pane_of)
+  wt set -p -t "$p" @whistle_sub 9999999999
+  whistle_activity_set idle "$p" manual '闲着'
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
 }
 
 # -- 清除 ------------------------------------------------------------------
@@ -292,9 +493,24 @@ pane_of() {
   whistle_state_set "wait" 'b' "$pb"
 
   whistle_clear_all
-  assert_eq "$(wt show -pqv -t "$pa" @whistle)" ''
-  assert_eq "$(wt show -pqv -t "$pb" @whistle)" ''
+  assert_eq "$(wt show -pqv -t "$pa" @whistle_notice)" ''
+  assert_eq "$(wt show -pqv -t "$pb" @whistle_notice)" ''
   assert_eq "$(opt '@whistle_pending')" '0'
+}
+
+# -- agent 退出 -------------------------------------------------------------
+
+@test "forget_agent: 活动通道置 gone，通知通道不动" {
+  local p
+  p=$(pane_of)
+  whistle_activity_set running "$p" manual '在跑'
+  whistle_notice_set 'done' '做完了' '' "$p"
+
+  whistle_forget_agent "$p" > /dev/null
+
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'gone'
+  # agent 走了不等于你已经看过那条通知
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" 'done'
 }
 
 # -- 查询 ------------------------------------------------------------------
@@ -348,7 +564,7 @@ pane_of() {
   whistle_state_set "done" '做完了' "$p2"
 
   run whistle_agent_windows
-  # 第 5 列是胜出状态的 pane id（session|window_id|window_name|index|pane|state|msg）
+  # 第 5 列是胜出状态的 pane id（session|window_id|window_name|index|pane|…）
   assert_eq "$(printf '%s\n' "$output" | cut -d'|' -f5)" "$p2"
 }
 
@@ -378,4 +594,9 @@ pane_of() {
   wt set -g @whistle_os on
   run whistle_conf '@whistle_os'
   assert_eq "$output" 'on'
+}
+
+@test "conf: 子 agent 标记的 TTL 默认 1800 秒（用户可配）" {
+  run whistle_conf '@whistle_sub_ttl'
+  assert_eq "$output" '1800'
 }
