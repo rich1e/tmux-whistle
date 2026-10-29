@@ -71,10 +71,20 @@ cd tmux-whistle
 
 1. 把仓库软链到 `~/.local/share/tmux-whistle`
 2. 把 CLI 软链到 `~/.local/bin/tmux-whistle`（hook 与命令行都要能找到它）
-3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块
-4. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`
+3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块（改前备份原文件）
+4. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`（改前备份，只管理带 `tmux-whistle` marker 的条目）
 
-先看它会改什么：`./install.sh --dry-run`。卸载：`./install.sh --uninstall`。
+常用参数：
+
+```sh
+./install.sh --dry-run     # 预览安装与配置改动
+./install.sh --no-hooks    # 不修改 Claude Code 的 settings.json
+./install.sh --cleanup     # 额外清理失效的 tmux-notify 按键绑定
+./install.sh --uninstall   # 移除本插件的 marker 配置块与两个软链
+```
+
+卸载不会动 Claude Code hooks；也要移除的话，再跑
+`lib/install-hooks.sh --uninstall`，它只摘除本插件的条目。
 
 > **两条路别混用。** `install.sh` 会往 `tmux.conf.local` 写一行加载插件的命令；
 > 如果 tpm 也装了同一个插件，就会加载两份、互相覆盖 `@whistle_root`。选一条即可。
@@ -86,10 +96,11 @@ tmux source-file ~/.config/tmux/tmux.conf    # 或 prefix + r
 tmux-whistle doctor
 ```
 
-> **升级插件后要重跑一次 `tmux-whistle install-hooks`。** hooks 是快照式写进
-> `settings.json` 的，新增的事件（`StopFailure` / `SessionEnd`）不会自己出现 ——
-> 不重跑的话 agent 因 API 错误中断时不会亮 `⚠`，退出后 `▶` 也不会自己灭。
-> 该命令是幂等的，其它 hook 原样保留。
+> **升级插件后要重跑一次 `tmux-whistle install-hooks`。** 当前共管理 8 个事件；
+> hooks 是快照式写进 `settings.json` 的，这次新增的 `PreToolUse` /
+> `SubagentStop` 不会自己出现。不重跑的话，工具调用（含 plan 批准后继续跑）与
+> 后台/子 agent 的状态不会完整上报。该命令幂等，其它 hook 原样保留；
+> 重跑后需重启 Claude Code 或开新会话才生效。
 
 ### macOS：系统通知授权（**必做**，否则系统通知静默失效）
 
@@ -122,13 +133,13 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_os` | `off` | 桌面系统通知 |
 | **行为** | | |
 | `@whistle_self` | `off` | 是否也提示自己所在的 session |
-| `@whistle_clear_on_focus` | `on` | 切进窗口自动清除 |
+| `@whistle_clear_on_focus` | `on` | 切进窗口自动把通知标为已读（不清 `running` / `idle`） |
 | `@whistle_display_ms` | `0` | 瞬时提示显示时长，`0` = 跟随 tmux 的 `display-time` |
 | **外观** | | |
 | `@whistle_color_done` | `#af5fff` | 完成色（紫） |
 | `@whistle_color_wait` | `#af8700` | 等待色 |
 | `@whistle_color_error` | `#d70000` | 错误色 |
-| `@whistle_color_running` | `#00af00` | 运行中色（与 `done` 同色，靠图标形状区分；想更开可换 `#5faf00`） |
+| `@whistle_color_running` | `#00af00` | 运行中色（绿） |
 | `@whistle_color_idle` | `#8a8a8a` | 空闲色（灰） |
 | `@whistle_color_pending` | `#5fd7d7` | 待处理总数 `⚑N` 的颜色（青色，独立于等待色） |
 | `@whistle_icon_pending` | `⚑` | 全局计数前面的图标 |
@@ -143,11 +154,24 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
 | `@whistle_recompute_every` | `60` | 推进器每 N 帧触发一次全局重算（配 0.5 秒 ≈ 30 秒）；用来让过期的后台 agent 标记自行回落 |
 | `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
-| **调试** | | |
-| `@whistle_debug` | `off` | 写调试日志到 `${TMPDIR:-/tmp}/tmux-whistle.log` |
+| **调试与兜底检测** | | |
+| `@whistle_debug` | `off` | 同时写投递日志与 hook 事件日志（路径见下） |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
 | `@whistle_detect_interval` | `15` | 兜底检测的轮询间隔（秒） |
 | `@whistle_detect_idle` | `180` | 输出静默多少秒判为完成 |
+| `@whistle_detect_wait-re` | 见下 | 等待关键词的扩展正则（ERE） |
+| `@whistle_detect_done-re` | 见下 | 完成关键词的扩展正则（ERE），还要满足静默时长 |
+
+调试日志分两份：投递层写 `${TMPDIR:-/tmp}/tmux-whistle.log`，hook 接入层写
+`${TMPDIR:-/tmp}/tmux-whistle-hooks.log`；可分别用环境变量 `WHISTLE_LOG` 与
+`WHISTLE_HOOK_LOG` 覆盖路径。
+
+兜底检测的两个正则未设置时使用以下默认值，也可以照这个形式自定义：
+
+```tmux
+set -g @whistle_detect_wait-re 'esc to interrupt|Do you want to|❯ 1\. Yes|waiting for your input'
+set -g @whistle_detect_done-re '⏵⏵|Bypass Permissions on'
+```
 
 ### 改完怎么生效
 
@@ -159,7 +183,7 @@ set -g @whistle_badge off          # 关掉窗口徽章，只留全局计数
 set -g @whistle_border off         # 关掉 pane 边框变色
 set -g @whistle_self on            # 也提示自己所在的 session
 set -g @whistle_color_done '#00af00'  # 改色
-set -g @whistle_color_running '#5faf00'  # 让运行中的 ▶ 换个绿（与 ◆ 区分）
+set -g @whistle_color_running '#5faf00'  # 运行中的 ▶ 换另一种绿色
 set -g @whistle_display_ms 3000    # 瞬时提示显示 3 秒
 ```
 
