@@ -72,7 +72,7 @@ fmt-check: ## 格式检查（有未格式化文件则非零退出）
 
 ## -- 测试 ------------------------------------------------------------------
 
-test: lint fmt-check test-unit test-integration ## 完整检查（同 check）
+test: lint fmt-check test-unit test-integration check-no-stray-servers ## 完整检查（同 check）
 
 test-unit: ## L1 纯函数单测（不碰 tmux）
 	@command -v $(BATS) >/dev/null 2>&1 || { echo '缺 bats，先跑 make deps'; exit 1; }
@@ -82,7 +82,23 @@ test-integration: ## L2/L3 tmux 集成与端到端（隔离 socket）
 	@command -v $(BATS) >/dev/null 2>&1 || { echo '缺 bats，先跑 make deps'; exit 1; }
 	$(BATS) --print-output-on-failure test/integration test/e2e
 
-check: lint fmt-check test-unit test-integration ## 提交前完整检查
+check: lint fmt-check test-unit test-integration check-no-stray-servers ## 提交前完整检查
+
+# 断言测试没留下隔离 server。
+#
+# 不只是「攒 socket 文件」：tmux-continuum 把「存在第二个 tmux server」当成
+# 「另一个环境在跑」，于是**静默关闭自动恢复与自动保存** —— 用户重启 tmux 后
+# 会话恢复不出来，而界面上完全看不出原因（TODO-20）。
+check-no-stray-servers: ## 断言测试没留下隔离 tmux server
+	@stray=$$(ps -u $$(id -u) -o pid=,command= \
+	  | grep -E '^[[:space:]]*[0-9]+[[:space:]]+tmux -L whistle-test-' || true); \
+	if [ -n "$$stray" ]; then \
+	  echo '!! 测试留下了隔离 tmux server：'; echo "$$stray"; \
+	  echo '   它会让 tmux-continuum 认为「另一个 server 在跑」，静默关闭自动恢复与自动保存。'; \
+	  echo '   清理：tmux -L <上面那个名字> kill-server'; \
+	  exit 1; \
+	fi; \
+	echo '  没有残留的隔离 server'
 
 ## -- 安装与自检 ------------------------------------------------------------
 

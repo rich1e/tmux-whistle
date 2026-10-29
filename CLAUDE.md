@@ -276,6 +276,13 @@ helper（`test/test_helper/whistle.bash`）的约定：
   （表现是 `Executed N instead of expected M`，而不是 `not ok`）。清理交给 `teardown()`。
 - `teardown` 必须 kill-server **并显式删掉 socket 文件**（`kill-server` 不总会 unlink，
   反复跑会攒出几百个残留）。
+- **残留的隔离 server 不只是攒文件**：tmux-continuum 把「存在第二个 tmux server」
+  当成「另一个环境在跑」，于是**静默关闭自动恢复与自动保存** —— 用户重启 tmux 后
+  会话恢复不出来，而界面上完全看不出原因（踩过，见 `docs/todo.md` 的 TODO-20）。
+  两道防线：`wt_start` 会先清掉「owner 已死」的残留 socket（`wt_reap_stale_sockets`）；
+  `make check` 末尾的 `check-no-stray-servers` 断言跑完没有 `whistle-test-*` 活着。
+  **用 `pkill` 杀 bats 会让 `teardown` 跑不到**，那之后务必看一眼这个断言。
+  `tmux-whistle doctor` 也会报「本机还有别的 tmux server」。
 - `display -pF` 不解析 `#[...]` 样式，断言前要剥掉（helper 的 `wt_render_windows` 已处理）。
 - hook 走 `run-shell -b` 是异步的，断言前用 `wt_wait_until` 轮询，别 sleep 一下就假定好了。
 - **`optw` 读的是 global option**（实现是 `show -gwv`）。要读 window 级 option 得用

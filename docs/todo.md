@@ -24,6 +24,7 @@
 ## 已修复
 
 - [x] **TODO-17** 后台/子 agent 在跑时，徽章显示「空闲」（活动与通知挤在一个状态槽里）
+- [x] **TODO-20** 测试残留的隔离 tmux server 会静默关掉 tmux-continuum 的自动恢复/自动保存
 - [x] **TODO-3** 菜单第 10 项起没有快捷键
 - [x] **TODO-4** `make fmt-check` 实际没有检查 bash 测试文件
 - [x] **TODO-5** `@whistle_badge` 没有任何代码读
@@ -1121,6 +1122,65 @@ format 只读一个现成的值 —— 往 `#{?...}` 里再叠一层去合成，
 双写入点、已读路径、`@whistle_eff` 派生）、`hooks/claude-code.sh`（事件映射）、
 `lib/install-hooks.sh`（订阅 6→8 个事件）、`lib/status-line.sh`（pane 徽章读
 `@whistle_eff`）、`bin/tmux-whistle`（CLI 分流 + 4 个内部子命令）、`lib/spin.sh`。
+
+---
+
+## TODO-20 · 测试残留的隔离 tmux server 会静默关掉 tmux-continuum
+
+✅ 已加固（`wt_reap_stale_sockets` + `make check-no-stray-servers` + doctor 新段落）
+
+**现象**：`tmux kill-server` 之后重新进 tmux，**之前的会话一个都没恢复**。
+状态栏、菜单、日志全都正常，**看不出任何异常**。存档文件其实完好。
+
+**触发**：本机同时有第二个 tmux server 在跑。2026-10-29 那次的现场是
+`tmux -L whistle-test-115 -f /dev/null new-session ...` —— 一个**测试遗留的隔离
+server**，已经挂了 15 小时。
+
+**原因**：tmux-continuum 的自动恢复与自动保存都以「本机只有一个 tmux server」
+为前提，两处各有一道门：
+
+```sh
+# continuum_restore.sh
+if auto_restore_enabled && ! another_tmux_server_running_on_startup; then ... restore ...
+# continuum.tmux（自动保存的唯一入口）
+if ! another_tmux_server_running; then add_resurrect_save_interpolation; fi
+```
+
+判据是 `ps -u <uid> -o command | grep '^tmux'` 数进程。**只要还有第二个 server，
+就既不恢复也不保存**（设计意图：怕两个环境互相覆盖存档），而且**完全静默**。
+
+同一个门也解释了另一个观察：存档在 10-27 14:54 之后**整整两天没再产生过**
+（`status-right` 里已经看不到 `#(continuum_save.sh)` 这个插值了 —— 它只在插件
+加载时注入，被跳过一次就一直不在）。
+
+**为什么测试会留下它**：`teardown` 负责 `kill-server` + 删 socket，但**进程被
+外部杀掉时 teardown 根本不会跑**。开发时为了停掉卡住的测试用 `pkill` 杀 bats，
+隔离 server 就活了下来。
+
+**加固**：
+
+1. `test/test_helper/whistle.bash` 新增 `wt_reap_stale_sockets`，`wt_start` 先清掉
+   「owner 已死」的残留 socket（每个进程只跑一次，避免每个测试都 fork）。
+2. `make check` 末尾新增 `check-no-stray-servers`：跑完断言没有
+   `whistle-test-*` 活着，否则**报错并列出 pid**。
+   ⚠️ 判据必须锚定 `ps` 行首的 pid 之后紧跟 `tmux` —— 只 grep
+   `'tmux -L whistle-test-'` 会把**执行检查的那条 shell 命令行**也匹配上（假阳性，
+   实测踩到）。
+3. `tmux-whistle doctor` 新增「多个 tmux server」段：判据与 continuum 逐字一致
+   （除当前 server 外的 tmux 进程数 > 当前 client 数），命中时明说
+   「continuum 的自动恢复与自动保存已被静默关闭」。
+
+**恢复办法（存档还在时）**：
+
+```sh
+ln -sfn <那一份>.txt ~/.local/share/tmux/resurrect/last
+~/.config/tmux/plugins/tmux-resurrect/scripts/restore.sh
+# 自动保存的插值要重新注入（它只在插件加载时加）：
+~/.config/tmux/plugins/tmux-continuum/continuum.tmux
+```
+
+⚠️ 存档目录是 `${XDG_DATA_HOME:-~/.local/share}/tmux/resurrect`，
+**不是** `~/.tmux/resurrect` —— 排查时别找错地方。
 
 ---
 

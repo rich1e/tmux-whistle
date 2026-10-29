@@ -1076,6 +1076,10 @@ seed_running_windows() {
   run "$CLI" doctor
   assert_contains "$output" 'tmux'
   assert_contains "$output" '投递渠道'
+  # 多 server 检查：段头必须出现。**不断言结论** —— 判据基于 `ps -u <uid>`，
+  # 在开发机上会把用户真实跑着的 tmux 也算进去，结论随环境变化；这里只锁
+  # 「这一项存在且被检查过」，否则哪天整段被删了没人发现（那是 TODO-20 的坑）。
+  assert_contains "$output" '多个 tmux server'
   # 未安装状态下的"未注入"只是提醒，不该让 doctor 整体失败
   [[ "$output" == *'未注入'* ]] || [[ "$output" == *'已注入'* ]]
 }

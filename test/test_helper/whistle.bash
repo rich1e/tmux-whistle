@@ -22,9 +22,44 @@ wt() {
   tmux -L "$WHISTLE_TEST_SOCK" "$@"
 }
 
+# 隔离 socket 所在目录（与 tmux 自己的算法一致：${TMUX_TMPDIR:-/tmp}/tmux-<uid>）。
+# 缓存 —— 每个测试都 fork 一次 `id -u` 不值得。
+wt_sock_dir() {
+  if [ -z "${WHISTLE_SOCK_DIR:-}" ]; then
+    WHISTLE_SOCK_DIR="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+    export WHISTLE_SOCK_DIR
+  fi
+  printf '%s' "$WHISTLE_SOCK_DIR"
+}
+
+# 清掉「owner 已死」的残留隔离 socket。
+#
+# 为什么需要：teardown 负责 kill-server + 删 socket，但**进程被外部杀掉时
+# teardown 根本不会跑**（CI 超时、或开发时 pkill 掉 bats）。留下的 server
+# 不只是「攒文件」—— tmux-continuum 会把「存在第二个 tmux server」当成
+# 「另一个环境在跑」，从而**静默关闭自动恢复与自动保存**。用户的会话因此
+# 恢复不出来，而界面上完全看不出原因（踩过一次，见 docs/todo.md 的 TODO-20）。
+#
+# 每个进程只跑一次：`tmux -L <sock> ls` 每个 socket 一次 fork，
+# 跑几百个测试都做一遍纯属浪费。
+wt_reap_stale_sockets() {
+  [ -z "${_WT_REAPED:-}" ] || return 0
+  _WT_REAPED=1
+  local dir sock
+  dir="$(wt_sock_dir)"
+  [ -d "$dir" ] || return 0
+  for sock in "$dir"/whistle-test-*; do
+    [ -S "$sock" ] || continue
+    # 还有活 server 就跳过 —— 可能是另一个测试套件正在跑
+    tmux -L "${sock##*/}" ls > /dev/null 2>&1 && continue
+    command rm -f "$sock" 2> /dev/null || true
+  done
+}
+
 # 起一个独立 server，并用 -f /dev/null 阻断用户真实配置的加载。
 # 同时把 socket 路径导出，供被测 CLI 通过 WHISTLE_TMUX_SOCKET 定位。
 wt_start() {
+  wt_reap_stale_sockets
   tmux -L "$WHISTLE_TEST_SOCK" -f /dev/null new-session -d -s main -n w1
   WHISTLE_TMUX_SOCKET="$(wt display -p '#{socket_path}')"
   export WHISTLE_TMUX_SOCKET

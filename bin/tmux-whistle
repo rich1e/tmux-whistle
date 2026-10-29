@@ -838,6 +838,36 @@ cmd_doctor() {
     fi
   fi
 
+  # -- 多个 tmux server：会静默关掉 tmux-continuum --------------------------
+  #
+  # tmux-continuum 的**自动恢复**与**自动保存**都以「本机只有一个 tmux server」
+  # 为前提：`continuum_restore.sh` 与 `continuum.tmux` 里各有一道
+  # `another_tmux_server_running` 门，不满足就**静默跳过**（设计意图是怕两个
+  # 环境互相覆盖存档）。症状是「重启 tmux 后会话恢复不出来」，而且状态栏上看
+  # 不出任何异常 —— 所以这里必须明说。
+  #
+  # 判据与 continuum 逐字一致：除当前 server 外的 tmux 进程数 > 当前 client 数。
+  # ⚠️ 不能数 socket 文件：socket 可能残留，而 server 早没了。
+  printf '\n多个 tmux server（影响 tmux-continuum 的自动恢复/自动保存）\n'
+  _dg_uid=$(id -u)
+  # 刻意用 ps 而不是 pgrep：这里要**复刻 continuum 自己的判据**
+  # （`ps -u <uid> -o command | grep '^tmux'`）。换成 pgrep 会得到另一个数，
+  # 报出来的结论就和 continuum 的实际决定对不上了 —— 那才是最坏的情况：
+  # doctor 说没问题，而自动恢复其实早就被关掉了。
+  # shellcheck disable=SC2009
+  _dg_procs=$(ps -u "$_dg_uid" -o command= 2> /dev/null | grep -c '^tmux' || true)
+  _dg_clients=$(whistle_tmux list-clients -F '#{client_name}' 2> /dev/null | wc -l | tr -d ' ')
+  case "$_dg_procs" in '' | *[!0-9]*) _dg_procs=0 ;; esac
+  case "$_dg_clients" in '' | *[!0-9]*) _dg_clients=0 ;; esac
+  if [ $((_dg_procs - 1)) -gt "$_dg_clients" ]; then
+    _warn_line "本机还有别的 tmux server（tmux 进程 ${_dg_procs} 个，本 server 的 client ${_dg_clients} 个）"
+    printf '    → tmux-continuum 会认为「另一个 server 在跑」，静默关闭自动恢复与自动保存。\n'
+    printf '    → 查是哪个：ps -u %s -o pid=,command= | grep tmux\n' "$_dg_uid"
+    printf '    → 清掉：tmux -L <上一步看到的 socket 名> kill-server\n'
+  else
+    _ok_line "只有本 server（tmux 进程 ${_dg_procs} 个，client ${_dg_clients} 个）"
+  fi
+
   printf '\n状态栏\n'
   _fmt=$(whistle_tmux show -gwv window-status-format 2> /dev/null)
   _n=$(printf '%s' "$_fmt" | grep -o -F "$WHISTLE_MARK_SENTINEL" | wc -l | tr -d ' ')
