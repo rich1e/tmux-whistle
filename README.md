@@ -94,12 +94,13 @@ cd tmux-whistle
 ```sh
 tmux source-file ~/.config/tmux/tmux.conf    # 或 prefix + r
 tmux-whistle doctor
-tmux-whistle --version
+tmux-whistle version             # 或 tmux-whistle --version
 # tmux-whistle 0.1.0-alpha.1+20261030.1
 ```
 
-版本由「主版.次版.修订 + 内测/公测阶段 + 构建日期与流水号」组成，规则见
-[版本号与发布规范](docs/versioning.md)。
+版本由「主版.次版.修订 + 内测/公测阶段 + 构建日期与流水号」组成。
+当前首个内测 tag 为 `v0.1.0-alpha.1`；tag 只含 SemVer base，CLI 输出还包含构建 metadata。
+完整规则见 [版本号与发布规范](docs/versioning.md)。
 
 > **升级插件后要重跑一次 `tmux-whistle install-hooks`。** 当前共管理 8 个事件；
 > hooks 是快照式写进 `settings.json` 的，这次新增的 `PreToolUse` /
@@ -436,6 +437,7 @@ tmux-whistle clear                 # 清当前窗口
 tmux-whistle clear -a              # 全清
 tmux-whistle on | off              # 总开关
 tmux-whistle doctor                # 自检
+tmux-whistle version               # 显示完整版本（--version 同义）
 ```
 
 不给 `-t` 时默认作用于当前 pane（`$TMUX_PANE`）；也支持 `-t %3` / `-t other:api`。
