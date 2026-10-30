@@ -102,15 +102,26 @@ tmux-whistle doctor
 > 后台/子 agent 的状态不会完整上报。该命令幂等，其它 hook 原样保留；
 > 重跑后需重启 Claude Code 或开新会话才生效。
 
-### macOS：系统通知授权（**必做**，否则系统通知静默失效）
+### macOS：桌面通知（可选，默认关）
+
+需要离开 tmux 也能收到提醒时，推荐安装 **terminal-notifier 3.1+**
+（v3 要求 macOS 10.14+）。它是可选依赖，插件不会自动安装：
+
+```sh
+brew install terminal-notifier
+terminal-notifier -diagnose    # 检查通知授权、提醒样式与 Focus 等系统设置
+tmux set -g @whistle_os on     # 默认 off；确认授权后再开
+```
+
+若诊断显示未授权，去 **系统设置 → 通知 → terminal-notifier** 打开「允许通知」。
+旧版本不支持 `-diagnose` 时请升级到 3.1+；`tmux-whistle doctor` 也会提示。
+
+没有 terminal-notifier 时可降级使用 `osascript`。它的通知由 Script Editor 路由，
+授权位置是 **系统设置 → 通知 → Script Editor**，未授权时可能静默失败：
 
 ```sh
 osascript -e 'display notification "tmux-whistle 测试"'
 ```
-
-没看到弹窗？去 **系统设置 → 通知 → Script Editor** 打开"允许通知"。
-`osascript` 的通知是通过系统的 Script Editor 路由的；未授权时它**静默失败，不报错**。
-装了 `terminal-notifier` 的话会优先用它，没有这个问题。
 
 ---
 
@@ -131,6 +142,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_border_status` | `off` | pane 边框状态行：`top` / `bottom`，分屏时按 pane 显示符号 |
 | `@whistle_display` | `on` | 状态栏瞬时提示 |
 | `@whistle_os` | `off` | 桌面系统通知 |
+| `@whistle_os_app` | 空 | 点击通知时要激活的 macOS 应用 bundle ID，如 `com.googlecode.iterm2` / `com.apple.Terminal`；无法识别终端时省略激活 |
 | **行为** | | |
 | `@whistle_self` | `off` | 是否也提示自己所在的 session |
 | `@whistle_clear_on_focus` | `on` | 切进窗口自动把通知标为已读（不清 `running` / `idle`） |
@@ -436,31 +448,49 @@ tmux-whistle done --title '重构完成' --body '第一段…第二段…（全�
 
 | 参数 | 存到哪 | 上限 |
 |---|---|---|
-| `--title` | `@whistle_msg` —— 徽章与菜单显示的就是它 | 80 字符 |
-| `--body` | `@whistle_body` —— 完整内容（会消毒：剔掉 `# { } \|`、折叠换行） | 400 字符 |
+| `--title` | 通知命令 `done` / `wait` / `error` 存 `@whistle_notice_msg`；活动命令 `running` / `idle` 存 `@whistle_msg` —— 徽章与菜单显示的就是它 | 80 字符 |
+| `--body` | 通知命令 `done` / `wait` / `error` 存 `@whistle_notice_body`；活动命令 `running` / `idle` 存 `@whistle_body` —— 完整内容（会消毒：剔掉 `# { } \|`、折叠换行） | 400 字符 |
 
 只给 `--body` 时徽章会显示正文的前 80 字；都不给就只有一个普通消息。
 Claude Code 的回复全文也会自动作为 `--body` 存下来。
 
-> `@whistle_body` 目前**存了但没有界面能看**。手工查：
-> `tmux show -pqv -t %<pane_id> @whistle_body`。
+> 完整正文目前**存了但没有正文详情界面**，也不会默认塞进桌面横幅。
+> 桌面通知只显示短消息，点击后跳到对应 pane；以上面的 `done` 为例，手工查完整正文：
+> `tmux show -pqv -t %<pane_id> @whistle_notice_body`。
 
 ---
 
 ## 桌面通知（可选，默认关）
 
-开了之后离开 tmux 也能收到：
-
-```sh
-osascript -e 'display notification "test"'    # ① 先测，必须看到弹窗
-#  没弹窗 → 系统设置 → 通知 → Script Editor → 允许通知
-```
+推荐 terminal-notifier 3.1+；安装、授权与开启命令见
+[macOS：桌面通知](#macos桌面通知可选默认关)。也可以按需指定点击时要激活的终端：
 
 ```tmux
-set -g @whistle_os on                          # ② 确认能弹窗后再开
+set -g @whistle_os on
+set -g @whistle_os_app 'com.googlecode.iterm2'  # iTerm2
+# set -g @whistle_os_app 'com.apple.Terminal'   # macOS 终端
 ```
 
-不先授权就开，它会**静默失败** —— 你以为开了，其实什么都收不到。
+`@whistle_os_app` 默认空：插件会尝试识别终端，无法识别时省略应用激活，
+不会猜成某个终端。activate 只负责把应用带到前台；终端有多个 macOS 窗口或标签时，
+**不保证所有终端都能精确聚焦对应的 OS 标签**。tmux 内的 client / window / pane 跳转另行处理。
+
+使用 terminal-notifier 时：
+
+- 通知按 pane 分组：同一 pane 的新通知替换旧通知，不同 pane 的通知可以并存。
+- 点击通知会激活可识别的终端，并跳到精确 client / window / pane。
+  **只有完整跳转成功才标为已读**；没有 attached client、目标 pane 已消失或任一切换失败时，
+  通知仍保留，可以处理后再次点击。
+- 在 tmux 内 `clear`、切窗 / 菜单已读，或桌面跳转成功，都会同步撤回清除范围内对应的
+  macOS 通知。即使之后已经关掉 `@whistle_os`，旧通知也仍会撤回。
+- 已读与撤回只清通知通道，**不会清掉活动通道的 `running` / `idle`**。
+
+terminal-notifier 不存在或发送失败时，可降级到 `osascript` / `notify-send`；
+降级渠道只有基本提醒，**没有精确点击跳转、逐 pane 替换与 group 撤回**。
+桌面投递失败不影响 agent 状态写入。
+
+桌面横幅仍只显示短消息；`--body` 的完整正文保存在 tmux 中，不会默认放进横幅，
+点击通知也不是正文详情查看器。
 
 ## 兜底检测（可选，默认关）
 
@@ -494,8 +524,14 @@ source /path/to/tmux-whistle/share/whistle.zsh
 
 ```sh
 tmux-whistle doctor                  # 逐项自检：版本 / 注入 / 渠道 / hooks / 失效绑定
+terminal-notifier -diagnose          # 3.x：检查通知授权与系统投递设置；旧版请升级
 tmux-whistle list                    # 状态确实写进去了吗
 ```
+
+桌面通知异常时，doctor 会对 terminal-notifier 3.x 调用 `-diagnose`，区分
+「命令存在」与「通知已授权」；旧版本会提示升级，而不是把缺少该选项误报成未授权。
+注意 doctor 的 PATH 与 Claude Code hook 的运行环境可能不同，doctor 通过不代表
+hook 或通知点击回调一定能找到同样的命令。
 
 还查不出来就开调试日志：
 

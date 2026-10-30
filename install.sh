@@ -210,8 +210,26 @@ say ''
 say '完成。接下来：'
 say '  1. tmux source-file ~/.config/tmux/tmux.conf    （或 prefix + r）'
 say '  2. tmux-whistle doctor'
-say '  3. macOS 上先跑一次 osascript 测试通知，并在系统设置里给 Script Editor 授权：'
-say '     osascript -e '"'"'display notification "test"'"'"''
+if command -v terminal-notifier > /dev/null 2>&1; then
+  _in_tn_ver=$(terminal-notifier -version 2> /dev/null)
+  _in_tn_major=$(printf '%s\n' "$_in_tn_ver" | sed -n 's/^terminal-notifier \([0-9][0-9]*\)\..*$/\1/p')
+  case "$_in_tn_major" in
+  [3-9] | [1-9][0-9]*)
+    say '  3. macOS 桌面通知：先检查 terminal-notifier 授权与提醒设置：'
+    say '     terminal-notifier -diagnose'
+    ;;
+  *)
+    say "  3. terminal-notifier 版本较旧或无法识别（${_in_tn_ver:-未知}），建议升级到 3.1+；当前版本不支持 -diagnose。"
+    ;;
+  esac
+elif command -v osascript > /dev/null 2>&1; then
+  say '  3. macOS 上先跑一次 osascript 测试通知，并在系统设置里给 Script Editor 授权：'
+  say '     osascript -e '"'"'display notification "test"'"'"''
+elif command -v notify-send > /dev/null 2>&1; then
+  say '  3. 桌面通知使用 notify-send；请按当前桌面环境检查通知权限。'
+else
+  say '  3. 未检测到桌面通知后端（terminal-notifier / osascript / notify-send）；桌面通知将不可用。'
+fi
 [ "$DRY" = 1 ] && say ''
 [ "$DRY" = 1 ] && say '（dry-run：以上改动均未真正落盘）'
 exit 0

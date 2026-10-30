@@ -149,6 +149,26 @@ win_of() {
   assert_eq "$(wt show -wv -t "$w1" @whistle_win)" ''
 }
 
+@test "公共撤回: focus read 入口只撤回本窗口 group，off 仍生效且 running 保留" {
+  wt set -g @whistle_os off
+  local p w
+  p=$(wt display -p -t w1 '#{pane_id}')
+  w=$(win_of w1)
+  whistle_state_set running '还在跑' "$p" > /dev/null
+  whistle_state_set "done" '做完了' "$p" > /dev/null
+  whistle_recompute_window "$w"
+  : > "$WHISTLE_TEST_TN_LOG"
+
+  run "$WHISTLE_CLI" --read-window "$w"
+
+  assert_eq "$status" 0
+  assert_eq "$(wt_tn_removed_groups)" "tmux-whistle:$WHISTLE_TMUX_SOCKET:$p"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_notice)" ''
+}
+
 @test "已读：读别的窗口不影响本窗口（KP-7 多 client 风险的最小对照）" {
   wt new-window -d -n w2
   local p w1
@@ -183,13 +203,19 @@ win_of() {
   # p1 同时「在跑」和「有事等我」：已读只能清掉后者
   whistle_state_set "running" '还在跑' "$p1" > /dev/null
   whistle_state_set "done" 'a' "$p1" > /dev/null
+  whistle_state_set "idle" '待命' "$p2" > /dev/null
   whistle_state_set "wait" 'b' "$p2" > /dev/null
+  : > "$WHISTLE_TEST_TN_LOG"
 
   whistle_read_pane "$p1"
 
+  assert_eq "$(wt_tn_removed_groups)" "tmux-whistle:$WHISTLE_TMUX_SOCKET:$p1"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
   assert_eq "$(wt show -pqv -t "$p1" @whistle_notice)" ''
   # 活动通道**原样保留** —— 读掉通知不该把正在干活的 agent 降级成空闲
   assert_eq "$(wt show -pqv -t "$p1" @whistle)" 'running'
+  assert_eq "$(wt show -pqv -t "$p2" @whistle)" 'idle'
   assert_eq "$(wt show -pqv -t "$p2" @whistle_notice)" 'wait'
 }
 

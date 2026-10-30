@@ -23,6 +23,74 @@ pane_of() {
   wt display -p -t w1 '#{pane_id}'
 }
 
+# 给 whistle_finish 接一个 deliver spy：CLI 与其余核心逻辑都跑真的，
+# 只在最终投递边界记录参数，避免把「窗口聚合赢家」误当来源 pane。
+make_deliver_spy_cli() {
+  local root="$BATS_TEST_TMPDIR/deliver-spy"
+  mkdir -p "$root/bin" "$root/lib"
+  cp "$CLI" "$root/bin/tmux-whistle"
+  ln -s "$WHISTLE_ROOT/lib/core.sh" "$root/lib/core.sh"
+  ln -s "$WHISTLE_ROOT/lib/status-line.sh" "$root/lib/status-line.sh"
+  cat > "$root/lib/deliver.sh" <<'EOF'
+whistle_deliver() {
+  printf '%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "${4:-}" >> "$DELIVER_LOG"
+}
+EOF
+  SPY_CLI="$root/bin/tmux-whistle"
+}
+
+# 桌面通知点击不能靠测试附着真实 client。这个 tmux stub 只伪造
+# list-clients 与三步切换，其余查询和状态写入仍委派给隔离 server。
+make_desktop_tmux_stub() {
+  DESKTOP_REAL_TMUX=$(command -v tmux)
+  DESKTOP_TMUX_BIN="$BATS_TEST_TMPDIR/desktop-tmux-bin"
+  DESKTOP_TMUX_LOG="$BATS_TEST_TMPDIR/desktop-tmux.log"
+  mkdir -p "$DESKTOP_TMUX_BIN"
+  cat > "$DESKTOP_TMUX_BIN/tmux" <<'EOF'
+#!/bin/sh
+_socket="$FAKE_TMUX_SOCKET"
+if [ "${1:-}" = '-S' ]; then
+  _socket="$2"
+  shift 2
+fi
+{
+  _sep=''
+  for _arg do
+    printf '%s%s' "$_sep" "$_arg"
+    _sep=' '
+  done
+  printf '\n'
+} >> "$FAKE_TMUX_LOG"
+case "${1:-}" in
+list-clients)
+  case " $* " in
+  *client_activity*) printf '%s\n' "${FAKE_TMUX_CLIENTS:-}" ;;
+  esac
+  exit 0
+  ;;
+switch-client | select-window | select-pane)
+  if [ "${FAKE_TMUX_FAIL:-}" = "$1" ]; then
+    printf 'stub: %s 失败\n' "$1" >&2
+    exit 1
+  fi
+  exit 0
+  ;;
+esac
+exec "$REAL_TMUX" -S "$_socket" "$@"
+EOF
+  chmod +x "$DESKTOP_TMUX_BIN/tmux"
+}
+
+run_desktop_jump() {
+  run env PATH="$DESKTOP_TMUX_BIN:$PATH" \
+    REAL_TMUX="$DESKTOP_REAL_TMUX" \
+    FAKE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    FAKE_TMUX_LOG="$DESKTOP_TMUX_LOG" \
+    FAKE_TMUX_CLIENTS="${FAKE_TMUX_CLIENTS:-}" \
+    FAKE_TMUX_FAIL="${FAKE_TMUX_FAIL:-}" \
+    "$CLI" --desktop-jump "$1"
+}
+
 # -- 菜单 ------------------------------------------------------------------
 
 @test "menu-args: 每项是 label / key / command 三元组" {
@@ -538,6 +606,172 @@ seed_running_windows() {
   assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
 }
 
+# -- 桌面通知：来源 pane 与严格跳转 -----------------------------------------
+
+@test "deliver-pane: 通知写入把来源 pane 作为第四参下传" {
+  make_deliver_spy_cli
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+
+  run env DELIVER_LOG="$BATS_TEST_TMPDIR/deliver.log" \
+    "$SPY_CLI" "done" '完成' -t "$p"
+  assert_eq "$status" 0
+  assert_eq "$(cat "$BATS_TEST_TMPDIR/deliver.log")" "4|$w|done|完成|$p"
+}
+
+@test "deliver-pane: 有旧通知时的活动写入也把来源 pane 作为第四参下传" {
+  make_deliver_spy_cli
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  export DELIVER_LOG="$BATS_TEST_TMPDIR/deliver.log"
+
+  "$SPY_CLI" "done" '旧通知' -t "$p"
+  : > "$DELIVER_LOG"
+  run "$SPY_CLI" running '继续干活' -t "$p"
+
+  assert_eq "$status" 0
+  assert_eq "$(cat "$DELIVER_LOG")" "4|$w|running|继续干活|$p"
+}
+
+@test "desktop-jump: 选择最近活动的 client，严格依次切换后才清通知" {
+  make_desktop_tmux_stub
+  wt set -g @whistle_spin off
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  "$CLI" running -t "$p"
+  "$CLI" "done" '点击读我' -t "$p"
+  FAKE_TMUX_CLIENTS=$'old|100\nnewest|300\nmiddle|200'
+
+  run_desktop_jump "$p"
+
+  assert_eq "$status" 0
+  assert_eq "$(wt_tn_removed_groups)" "tmux-whistle:$WHISTLE_TMUX_SOCKET:$p"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
+  local switches
+  switches=$(grep -E '^(switch-client|select-window|select-pane)' "$DESKTOP_TMUX_LOG")
+  assert_eq "$switches" "switch-client -c newest -t main
+select-window -t $w
+select-pane -t $p"
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  # 已读只清通知通道，正在干活的活动态绝不能被顺带抹掉。
+  assert_eq "$(optp @whistle "$p")" 'running'
+}
+
+@test "desktop-jump: 没有 attached client 时失败并保留通知" {
+  make_desktop_tmux_stub
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '还不能读' -t "$p"
+  FAKE_TMUX_CLIENTS=''
+
+  run_desktop_jump "$p"
+
+  assert_eq "$status" 1
+  assert_contains "$output" '没有 attached client'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_contains "$(cat "$DESKTOP_TMUX_LOG")" 'list-clients'
+}
+
+@test "desktop-jump: 目标 pane 已死时失败且不清其它通知" {
+  make_desktop_tmux_stub
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '不能误清' -t "$p"
+  FAKE_TMUX_CLIENTS='client|100'
+
+  run_desktop_jump '%999'
+
+  assert_eq "$status" 1
+  assert_contains "$output" '找不到目标 pane'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+}
+
+@test "desktop-jump: switch-client 失败时保留通知且不继续切换" {
+  make_desktop_tmux_stub
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '不能误清' -t "$p"
+  FAKE_TMUX_CLIENTS='client|100'
+  FAKE_TMUX_FAIL='switch-client'
+
+  run_desktop_jump "$p"
+
+  assert_eq "$status" 1
+  assert_contains "$output" 'switch-client'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'select-window'
+}
+
+@test "desktop-jump: select-window 失败时保留通知且不选择 pane" {
+  make_desktop_tmux_stub
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '不能误清' -t "$p"
+  FAKE_TMUX_CLIENTS='client|100'
+  FAKE_TMUX_FAIL='select-window'
+
+  run_desktop_jump "$p"
+
+  assert_eq "$status" 1
+  assert_contains "$output" 'select-window'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+  assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'select-pane'
+}
+
+@test "desktop-jump: select-pane 失败时保留通知" {
+  make_desktop_tmux_stub
+  local p
+  p=$(pane_of)
+  "$CLI" "done" '不能误清' -t "$p"
+  FAKE_TMUX_CLIENTS='client|100'
+  FAKE_TMUX_FAIL='select-pane'
+
+  run_desktop_jump "$p"
+
+  assert_eq "$status" 1
+  assert_contains "$output" 'select-pane'
+  assert_eq "$(optp @whistle_notice "$p")" 'done'
+}
+
+@test "state_clear: core 独立加载且没有 os_forget 时仍能清通知" {
+  local p
+  p=$(pane_of)
+  "$CLI" running -t "$p"
+  "$CLI" "done" '读我' -t "$p"
+  unset -f whistle_os_forget 2> /dev/null || true
+
+  run whistle_state_clear "$p"
+
+  assert_eq "$status" 0
+  assert_eq "$output" "$p"
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  assert_eq "$(optp @whistle "$p")" 'running'
+}
+
+@test "state_clear: 有 os_forget 时按 pane 撤回，失败也不回滚已读" {
+  local p
+  p=$(pane_of)
+  "$CLI" running -t "$p"
+  "$CLI" "done" '读我' -t "$p"
+  DESKTOP_FORGET_LOG="$BATS_TEST_TMPDIR/forget.log"
+  whistle_os_forget() {
+    printf '%s\n' "$1" >> "$DESKTOP_FORGET_LOG"
+    return 1
+  }
+
+  run whistle_state_clear "$p"
+
+  assert_eq "$status" 0
+  assert_eq "$output" "$p"
+  assert_eq "$(cat "$DESKTOP_FORGET_LOG")" "$p"
+  assert_eq "$(optp @whistle_notice "$p")" ''
+  assert_eq "$(optp @whistle "$p")" 'running'
+}
+
 # -- 列表 / 清除 / 开关 -----------------------------------------------------
 
 @test "list: 无待处理时给出友好提示" {
@@ -567,6 +801,58 @@ seed_running_windows() {
   assert_eq "$(opt '@whistle_pending')" '0'
 }
 
+@test "公共撤回: window clear 在同窗口多 pane 上逐 group 撤回，off 仍生效且活动不变" {
+  wt split-window -t w1
+  wt set -g @whistle_os off
+  local p1 p2 w expected
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  w=$(wt display -p -t w1 '#{window_id}')
+  "$CLI" running -t "$p1"
+  "$CLI" idle -t "$p2"
+  "$CLI" "done" 'a' -t "$p1"
+  "$CLI" wait 'b' -t "$p2"
+  : > "$WHISTLE_TEST_TN_LOG"
+
+  run "$CLI" clear -t "$w"
+
+  assert_eq "$status" 0
+  expected=$(printf 'tmux-whistle:%s:%s\ntmux-whistle:%s:%s\n' \
+    "$WHISTLE_TMUX_SOCKET" "$p1" "$WHISTLE_TMUX_SOCKET" "$p2" | sort)
+  assert_eq "$(wt_tn_removed_groups | sort)" "$expected"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
+  assert_eq "$(optp @whistle "$p1")" 'running'
+  assert_eq "$(optp @whistle "$p2")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p1")" ''
+  assert_eq "$(optp @whistle_notice "$p2")" ''
+}
+
+@test "公共撤回: clear all 只撤回有通知的 pane，不误清活动通道" {
+  wt new-session -d -s other -n w2
+  local pa pb pc expected
+  pa=$(wt display -p -t main:w1 '#{pane_id}')
+  pb=$(wt display -p -t other:w2 '#{pane_id}')
+  pc=$(wt split-window -d -t other:w2 -P -F '#{pane_id}')
+  "$CLI" running -t "$pa"
+  "$CLI" idle -t "$pc"
+  "$CLI" "done" 'a' -t "$pa"
+  "$CLI" wait 'b' -t "$pb"
+  : > "$WHISTLE_TEST_TN_LOG"
+
+  run "$CLI" clear -a
+
+  assert_eq "$status" 0
+  expected=$(printf 'tmux-whistle:%s:%s\ntmux-whistle:%s:%s\n' \
+    "$WHISTLE_TMUX_SOCKET" "$pa" "$WHISTLE_TMUX_SOCKET" "$pb" | sort)
+  assert_eq "$(wt_tn_removed_groups | sort)" "$expected"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
+  assert_eq "$(optp @whistle "$pa")" 'running'
+  assert_eq "$(optp @whistle "$pc")" 'idle'
+  assert_eq "$(optp @whistle_notice "$pc")" ''
+}
+
 @test "开关: on 与 off 写全局标志" {
   run "$CLI" off
   assert_eq "$(opt '@whistle_enabled')" 'off'
@@ -590,6 +876,13 @@ seed_running_windows() {
   done
   # run 单独断言 —— 光靠 "run" 会被 "running" 满足，等于没断言
   assert_contains "$output" 'run [--'
+}
+
+@test "--help: 说明 terminal-notifier 要激活的应用 bundle ID 配置" {
+  run "$CLI" --help
+  assert_eq "$status" 0
+  assert_contains "$output" '@whistle_os_app'
+  assert_contains "$output" 'bundle ID'
 }
 
 @test "done 带 -t 指定目标 pane" {
@@ -948,6 +1241,9 @@ seed_running_windows() {
 
   run "$CLI" --read-pane "$p"
   assert_eq "$status" 0
+  assert_eq "$(wt_tn_removed_groups)" "tmux-whistle:$WHISTLE_TMUX_SOCKET:$p"
+  run awk '$0 == "ALL"' "$WHISTLE_TEST_TN_LOG"
+  assert_eq "$output" ''
   assert_eq "$(optp @whistle_notice "$p")" ''
   assert_eq "$(optp @whistle "$p")" 'running'
   assert_eq "$(optp @whistle_eff "$p")" 'running'

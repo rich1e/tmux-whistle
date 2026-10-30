@@ -597,6 +597,34 @@ EOF
   assert_eq "$output" ''
 }
 
+@test "e2e: Stop 桌面通知携带来源 pane 的精确点击回调" {
+  wt set -g @whistle_os on
+  local fake_bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$fake_bin"
+  cat > "$fake_bin/terminal-notifier" << 'EOF'
+#!/bin/sh
+{
+  printf 'call\n'
+  printf '%s\n' "$@"
+} >> "$WHISTLE_TEST_TN_ARGS"
+EOF
+  chmod +x "$fake_bin/terminal-notifier"
+  export WHISTLE_TEST_TN_ARGS="$BATS_TEST_TMPDIR/tn.args"
+  PATH="$fake_bin:$PATH"
+  export PATH
+
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"桌面通知跳转"}
+EOF
+
+  local args
+  args=$(cat "$WHISTLE_TEST_TN_ARGS")
+  assert_contains "$args" "tmux-whistle:$WHISTLE_TMUX_SOCKET:$TMUX_PANE"
+  assert_contains "$args" '-execute'
+  assert_contains "$args" '--desktop-jump'
+  assert_contains "$args" "$TMUX_PANE"
+}
+
 # -- JSON 解析降级 ---------------------------------------------------------
 
 @test "e2e: 无 jq 时 sed 启发式也能取出字段" {

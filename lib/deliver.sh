@@ -227,44 +227,150 @@ whistle_osa_escape() {
   printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# terminal-notifier 的通知身份：socket 隔离 server，pane ID 隔离来源。
+# 发送与撤回都必须走这里，不能各自拼一份，更不能用 -remove ALL。
+whistle_os_group() {
+  _og_pane="${1:-}"
+  _og_socket=$(whistle_tmux display-message -p -t "$_og_pane" '#{socket_path}' 2> /dev/null)
+  printf 'tmux-whistle:%s:%s' "$_og_socket" "$_og_pane"
+}
+
+# NSUserDefaults 会把这些首字符当成 property list 语法；上游约定加前导反斜杠。
+whistle_tn_value() {
+  case "${1:-}" in
+  \[* | \(* | \{* | \"* | \'*) printf '\\%s' "$1" ;;
+  *) printf '%s' "${1:-}" ;;
+  esac
+}
+
+# -execute 会交给 /bin/sh -c。每个拼接值都独立 single-quote，
+# whistle_sanitize 是 tmux format 消毒，不能拿来代替 shell quoting。
+whistle_shell_quote() {
+  printf "'"
+  printf '%s' "${1:-}" | sed "s/'/'\"'\"'/g"
+  printf "'"
+}
+
+# 只接受显式配置或可靠环境信息；未知终端宁可省略，也不猜 bundle ID。
+whistle_os_app() {
+  _oa_app=$(whistle_conf '@whistle_os_app')
+  if [ -z "$_oa_app" ] && [ -n "${__CFBundleIdentifier:-}" ]; then
+    _oa_app="$__CFBundleIdentifier"
+  fi
+  if [ -z "$_oa_app" ]; then
+    case "${TERM_PROGRAM:-}" in
+    iTerm.app) _oa_app='com.googlecode.iterm2' ;;
+    Apple_Terminal) _oa_app='com.apple.Terminal' ;;
+    esac
+  fi
+  printf '%s' "$_oa_app"
+}
+
 whistle_os_notify() {
-  _win="$1"
-  _state="$2"
-  _msg="$3"
+  _on_win="$1"
+  _on_state="$2"
+  _on_msg="$3"
+  _on_pane="${4:-}"
 
   [ "$(whistle_conf '@whistle_os')" = on ] || return 0
+  case "$_on_state" in
+  running | idle) return 0 ;;
+  esac
 
-  _sess=$(whistle_tmux display-message -p -t "$_win" '#{session_name}' 2> /dev/null)
-  _title="tmux · $_sess"
-  _body="$(whistle_state_label "$_state")"
-  [ -n "$_msg" ] && _body="$_body: $_msg"
+  _on_sess=$(whistle_tmux display-message -p -t "$_on_win" '#{session_name}' 2> /dev/null)
+  _on_wname=$(whistle_tmux display-message -p -t "$_on_win" '#{window_name}' 2> /dev/null)
+  _on_title="tmux · $_on_sess"
+  _on_body="$(whistle_state_label "$_on_state")"
+  [ -n "$_on_msg" ] && _on_body="$_on_body: $_on_msg"
+  _on_found=0
 
   if command -v terminal-notifier > /dev/null 2>&1; then
-    # 优先：不经 Script Editor 中转，归属可控（KP-9 第 2 条问题不存在）
-    terminal-notifier -title "$_title" -message "$_body" -group tmux-whistle \
-      > /dev/null 2>&1 || whistle_log "terminal-notifier 失败"
-  elif command -v osascript > /dev/null 2>&1; then
+    _on_found=1
+    # 优先：不经 Script Editor 中转，归属可控（KP-9 第 2 条问题不存在）。
+    # POSIX sh 没有数组，先保存入参，再用 set -- 累积原始 argv。
+    set -- -title "$(whistle_tn_value "$_on_title")" \
+      -subtitle "$(whistle_tn_value "$_on_wname")" \
+      -message "$(whistle_tn_value "$_on_body")"
+
+    if [ -n "$_on_pane" ]; then
+      _on_socket=$(whistle_tmux display-message -p -t "$_on_pane" '#{socket_path}' 2> /dev/null)
+      _on_group=$(whistle_os_group "$_on_pane")
+      set -- "$@" -group "$(whistle_tn_value "$_on_group")"
+
+      # 老调用方可省略 pane；生产路径必须同时有绝对 CLI 与 socket 才生成点击回调。
+      case "${WHISTLE_SELF:-}" in
+      /*)
+        if [ -n "$_on_socket" ]; then
+          _on_tmux=$(command -v tmux 2> /dev/null)
+          _on_tmux_dir=${_on_tmux%/*}
+          _on_path="$_on_tmux_dir:/usr/bin:/bin:/usr/sbin:/sbin"
+          _on_execute="PATH=$(whistle_shell_quote "$_on_path") WHISTLE_TMUX_SOCKET=$(whistle_shell_quote "$_on_socket") $(whistle_shell_quote "$WHISTLE_SELF") --desktop-jump $(whistle_shell_quote "$_on_pane")"
+          set -- "$@" -execute "$(whistle_tn_value "$_on_execute")"
+        fi
+        ;;
+      esac
+    fi
+
+    _on_app=$(whistle_os_app)
+    if [ -n "$_on_app" ]; then
+      set -- "$@" -activate "$(whistle_tn_value "$_on_app")"
+    fi
+
+    if terminal-notifier "$@" > /dev/null 2>&1; then
+      return 0
+    fi
+    whistle_log "terminal-notifier 失败，尝试降级"
+  fi
+
+  if command -v osascript > /dev/null 2>&1; then
+    _on_found=1
     # 注意：osascript 经系统的 Script Editor 应用路由通知。
     # 若 Script Editor 未获通知权限，这里会静默失败（KP-9）。
-    osascript -e "display notification \"$(whistle_osa_escape "$_body")\" with title \"$(whistle_osa_escape "$_title")\"" \
-      > /dev/null 2>&1 || whistle_log "osascript 失败（Script Editor 可能未授权，见 doctor）"
-  elif command -v notify-send > /dev/null 2>&1; then
-    notify-send "$_title" "$_body" > /dev/null 2>&1 || whistle_log "notify-send 失败"
-  else
-    whistle_log "没有可用的桌面通知命令（terminal-notifier / osascript / notify-send）"
+    if osascript -e "display notification \"$(whistle_osa_escape "$_on_body")\" with title \"$(whistle_osa_escape "$_on_title")\"" \
+      > /dev/null 2>&1; then
+      return 0
+    fi
+    whistle_log "osascript 失败（Script Editor 可能未授权，见 doctor），尝试降级"
   fi
+
+  if command -v notify-send > /dev/null 2>&1; then
+    _on_found=1
+    if notify-send "$_on_title" "$_on_body" > /dev/null 2>&1; then
+      return 0
+    fi
+    whistle_log "notify-send 失败"
+  fi
+
+  [ "$_on_found" -eq 1 ] || whistle_log "没有可用的桌面通知命令（terminal-notifier / osascript / notify-send）"
+  # 桌面通道永远 fire-and-forget，失败不能影响状态写入或命令退出码。
+  return 0
+}
+
+# 撤回只针对精确 group；@whistle_os off 也要能清掉此前已经送达的通知。
+whistle_os_forget() {
+  _of_pane="${1:-}"
+  [ -n "$_of_pane" ] || return 0
+  command -v terminal-notifier > /dev/null 2>&1 || return 0
+
+  _of_group=$(whistle_os_group "$_of_pane")
+  if ! terminal-notifier -remove "$(whistle_tn_value "$_of_group")" > /dev/null 2>&1; then
+    whistle_log "terminal-notifier 撤回失败: $_of_group"
+  fi
+  return 0
 }
 
 # -- 编排 ------------------------------------------------------------------
 
-# whistle_deliver <window> <有效态> <消息>
+# whistle_deliver <window> <有效态> <消息> <pane>
 #
 # 第二个参数是**有效态**（pane 的 @whistle_eff）—— 活动通道 @whistle 与
 # 通知通道 @whistle_notice 按 rank 合成后的那一个值，由调用方（CLI）在写完状态
 # 并重算之后读出来传入。第三个参数是**与它对应的消息**：有效态是通知态时是
 # 通知消息，否则是活动消息。
 #
-# 签名与旧的「原始状态」版本完全一致，所以这里一行都不用改 —— 见下面两个判定。
+# 第四个参数是触发本条通知的精确 pane，桌面 group 与点击跳转都直接使用它；
+# 不能从 @whistle_win_pane 反推，那是窗口聚合赢家，不一定是本次来源。
+# 空 pane 只保留普通通知能力，不生成猜测目标的回调。
 #
 # 徽章通道没有独立步骤：badge 的数据来自 window 上的 @whistle_win，
 # 真正要做的是"让状态栏立刻重画"，即 whistle_refresh_sessions。
@@ -288,6 +394,6 @@ whistle_deliver() {
   # 多读一次反而会把「同一条通知」判成两种口径。
   if whistle_is_notified "$2"; then
     whistle_display_fanout "$1" "$2" "$3"
-    whistle_os_notify "$1" "$2" "$3"
+    whistle_os_notify "$1" "$2" "$3" "${4:-}"
   fi
 }

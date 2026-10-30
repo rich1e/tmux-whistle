@@ -56,10 +56,44 @@ wt_reap_stale_sockets() {
   done
 }
 
+# 默认把 terminal-notifier 换成只记录 argv 的 fake。
+#
+# 已读撤回刻意不受 @whistle_os off 门控，所以不只是桌面发送测试需要隔离：
+# 任何 clear/read 入口都可能执行 terminal-notifier。wt_start 统一前置 fake，
+# CLI 子进程也会继承；自定义 fake 只要再前置自己的目录即可覆盖，
+# 无后端用例则直接换成只含所需命令的 PATH。
+wt_install_default_terminal_notifier() {
+  WHISTLE_TEST_TN_BIN="$BATS_TEST_TMPDIR/default-tn-bin"
+  WHISTLE_TEST_TN_LOG="$BATS_TEST_TMPDIR/default-tn.log"
+  export WHISTLE_TEST_TN_BIN WHISTLE_TEST_TN_LOG
+  mkdir -p "$WHISTLE_TEST_TN_BIN"
+  : > "$WHISTLE_TEST_TN_LOG"
+  cat > "$WHISTLE_TEST_TN_BIN/terminal-notifier" << 'EOF'
+#!/bin/sh
+{
+  printf 'CALL terminal-notifier\n'
+  for _arg do
+    printf '%s\n' "$_arg"
+  done
+  printf 'END\n'
+} >> "$WHISTLE_TEST_TN_LOG"
+exit "${WHISTLE_TEST_TN_RC:-0}"
+EOF
+  chmod +x "$WHISTLE_TEST_TN_BIN/terminal-notifier"
+  PATH="$WHISTLE_TEST_TN_BIN:$PATH"
+  export PATH
+}
+
+# 每次 -remove 的 group 各占一行；CALL/END 与其它 argv 不混进结果。
+wt_tn_removed_groups() {
+  awk 'previous == "-remove" { print } { previous = $0 }' "$WHISTLE_TEST_TN_LOG"
+}
+
 # 起一个独立 server，并用 -f /dev/null 阻断用户真实配置的加载。
 # 同时把 socket 路径导出，供被测 CLI 通过 WHISTLE_TMUX_SOCKET 定位。
 wt_start() {
   wt_reap_stale_sockets
+  wt_install_default_terminal_notifier
   tmux -L "$WHISTLE_TEST_SOCK" -f /dev/null new-session -d -s main -n w1
   WHISTLE_TMUX_SOCKET="$(wt display -p '#{socket_path}')"
   export WHISTLE_TMUX_SOCKET

@@ -72,6 +72,7 @@ Claude Code 集成：
   @whistle_border on|off             面板边框变色（默认 on）
   @whistle_display on|off            状态栏瞬时提示（默认 on）
   @whistle_os on|off                 桌面系统通知（默认 off）
+  @whistle_os_app <bundle ID>        点击通知时激活的 macOS 应用（默认空）
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
   @whistle_color_done|wait|error|running|idle   徽章与菜单颜色
@@ -149,7 +150,7 @@ whistle_finish() {
   if whistle_is_activity "$_ff_wrote" && whistle_is_notified "$_ff_eff"; then
     # 活动通道的写入遇上了未读通知：不重新扇出那条旧通知
     _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
-    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")"
+    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane"
     return 0
   fi
 
@@ -158,7 +159,7 @@ whistle_finish() {
   else
     _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
   fi
-  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")"
+  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane"
 }
 
 # cmd_set <状态> [选项...] [消息...]
@@ -673,6 +674,15 @@ cmd_jump() {
   whistle_clear_window "$_wid"
 }
 
+# 桌面通知点击：严格跳转全部成功后，才复用 cmd_clear 的
+# window 级已读、边框释放与刷新。不能借用会忽略切换错误的 cmd_jump。
+cmd_desktop_jump() {
+  _cdj_pane="${1:-}"
+  [ -n "$_cdj_pane" ] || whistle_die "用法：$WHISTLE_PROG --desktop-jump <pane>"
+  whistle_desktop_jump "$_cdj_pane" || return 1
+  cmd_clear -t "$_cdj_pane"
+}
+
 # -- 开关 ------------------------------------------------------------------
 
 cmd_toggle() {
@@ -887,7 +897,23 @@ cmd_doctor() {
 
   if [ "$(whistle_conf '@whistle_os')" = on ]; then
     if command -v terminal-notifier > /dev/null 2>&1; then
-      _ok_line 'terminal-notifier 可用'
+      _dg_tn_ver=$(terminal-notifier -version 2> /dev/null)
+      _dg_tn_major=$(printf '%s\n' "$_dg_tn_ver" | sed -n 's/^terminal-notifier \([0-9][0-9]*\)\..*$/\1/p')
+      case "$_dg_tn_major" in
+      [3-9] | [1-9][0-9]*)
+        _dg_tn_diag=$(terminal-notifier -diagnose 2>&1)
+        _dg_tn_rc=$?
+        printf '%s\n' "$_dg_tn_diag" | sed 's/^/    /'
+        if [ "$_dg_tn_rc" -eq 0 ]; then
+          _ok_line 'terminal-notifier 已授权（其它投递设置见上方诊断）'
+        else
+          _warn_line 'terminal-notifier 未授权或诊断失败：系统设置 → 通知 → terminal-notifier'
+        fi
+        ;;
+      *)
+        _warn_line "terminal-notifier 版本较旧或无法识别（${_dg_tn_ver:-未知}），建议升级到 3.x 以使用 -diagnose"
+        ;;
+      esac
     elif command -v osascript > /dev/null 2>&1; then
       osascript -e 'display notification "tmux-whistle doctor 测试" with title "tmux-whistle"' \
         > /dev/null 2>&1 || true
@@ -1002,6 +1028,10 @@ install-hooks)
   ;;
 -h | --help | help)
   whistle_usage
+  ;;
+--desktop-jump)
+  shift
+  cmd_desktop_jump "${1:-}"
   ;;
 --read-window)
   shift

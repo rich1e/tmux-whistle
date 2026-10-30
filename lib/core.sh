@@ -161,6 +161,7 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_border_status off
 @whistle_display on
 @whistle_os off
+@whistle_os_app
 @whistle_self off
 @whistle_clear_on_focus on
 @whistle_color_done #af5fff
@@ -539,6 +540,57 @@ whistle_pane_window() {
   whistle_tmux display-message -p -t "$1" '#{window_id}' 2> /dev/null
 }
 
+# whistle_desktop_jump <pane>
+#
+# 桌面通知点击后的严格跳转：先验证 pane，再在点击当下选择最近活动的 client，
+# 依次 switch-client → select-window → select-pane。任何一步失败都原样保留通知，
+# 由调用方决定后续清除；本函数自身绝不清状态。
+whistle_desktop_jump() {
+  _dj_pane="${1:-}"
+  _dj_target=''
+  if [ -n "$_dj_pane" ]; then
+    _dj_target=$(whistle_tmux display-message -p -t "$_dj_pane" \
+      '#{window_id}|#{session_name}' 2> /dev/null) || _dj_target=''
+  fi
+  _dj_win=${_dj_target%%|*}
+  _dj_session=${_dj_target#*|}
+  if [ -z "$_dj_target" ] || [ -z "$_dj_win" ] || [ -z "$_dj_session" ] \
+    || [ "$_dj_session" = "$_dj_target" ]; then
+    printf 'tmux-whistle: 找不到目标 pane [%s]\n' "$_dj_pane" >&2
+    return 1
+  fi
+
+  _dj_clients=$(whistle_tmux list-clients -F '#{client_name}|#{client_activity}' \
+    2> /dev/null) || _dj_clients=''
+  _dj_client=$(printf '%s\n' "$_dj_clients" | awk -F'|' '
+    $1 != "" && $2 ~ /^[0-9]+$/ {
+      if (!found || $2 + 0 > activity) {
+        found = 1
+        name = $1
+        activity = $2 + 0
+      }
+    }
+    END { if (found) print name }
+  ')
+  if [ -z "$_dj_client" ]; then
+    printf 'tmux-whistle: 桌面跳转失败：没有 attached client\n' >&2
+    return 1
+  fi
+
+  if ! whistle_tmux switch-client -c "$_dj_client" -t "$_dj_session" 2> /dev/null; then
+    printf 'tmux-whistle: 桌面跳转失败：switch-client\n' >&2
+    return 1
+  fi
+  if ! whistle_tmux select-window -t "$_dj_win" 2> /dev/null; then
+    printf 'tmux-whistle: 桌面跳转失败：select-window\n' >&2
+    return 1
+  fi
+  if ! whistle_tmux select-pane -t "$_dj_pane" 2> /dev/null; then
+    printf 'tmux-whistle: 桌面跳转失败：select-pane\n' >&2
+    return 1
+  fi
+}
+
 # whistle_activity_set <running|idle|gone> [pane] [src] [msg] [body]
 #
 # 写**活动通道**：@whistle / @whistle_msg / @whistle_at / @whistle_src / @whistle_body
@@ -728,6 +780,12 @@ whistle_state_clear() {
     \; set -p -t "$_pane" -u @whistle_notice_msg \
     \; set -p -t "$_pane" -u @whistle_notice_body \
     \; set -p -t "$_pane" -u @whistle_notice_at || return 1
+
+  # deliver 层可选：core 独立加载时没有这个函数。tmux 已读成功后
+  # 才撤回对应桌面通知；撤回失败不回滚状态，也不污染 stdout 的 pane id。
+  if command -v whistle_os_forget > /dev/null 2>&1; then
+    whistle_os_forget "$_pane" > /dev/null 2>&1 || true
+  fi
 
   printf '%s' "$_pane"
 }
