@@ -3,6 +3,28 @@
 #
 # 唯一状态写入点。agent 调它写状态，状态栏与各渠道读它渲染。
 
+# 唯一版本真源。构建日期与流水号在发布时更新，不在运行时取当天日期。
+WHISTLE_VERSION='0.1.0-alpha.1'
+WHISTLE_BUILD_DATE='20261030'
+WHISTLE_BUILD_NUMBER='1'
+WHISTLE_VERSION_FULL="${WHISTLE_VERSION}+${WHISTLE_BUILD_DATE}.${WHISTLE_BUILD_NUMBER}"
+
+whistle_version() {
+  printf 'tmux-whistle %s\n' "$WHISTLE_VERSION_FULL"
+}
+
+# 版本查询必须在 lib、tmux、git 与 PATH 都不可用时也能工作。
+case "${1:-}" in
+--version | version)
+  if [ "$#" -ne 1 ]; then
+    printf 'tmux-whistle: 用法：%s --version\n' "$0" >&2
+    exit 1
+  fi
+  whistle_version
+  exit 0
+  ;;
+esac
+
 # 解析符号链接后再定位 lib/。
 # 安装时 bin/tmux-whistle 被链接到 ~/.local/bin，此时 $0 是链接路径，
 # 直接 dirname 会得到 ~/.local/lib —— 找不到模块，整个 CLI 不可用。
@@ -34,7 +56,7 @@ WHISTLE_SELF=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/$WHISTLE_PROG
 
 whistle_usage() {
   cat << EOF
-$WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
+$WHISTLE_PROG $WHISTLE_VERSION_FULL — tmux 内跨 session 的 agent 状态通知
 
 状态分两条正交通道，互不顶掉：
   通知通道  done | wait | error      有事等你（待处理，会被 list / menu 列出）
@@ -55,6 +77,7 @@ $WHISTLE_PROG — tmux 内跨 session 的 agent 状态通知
                                      跳到指定窗口并清除
   $WHISTLE_PROG on | off             总开关
   $WHISTLE_PROG doctor               环境自检
+  $WHISTLE_PROG version | --version  显示完整版本（阶段 + 构建日期 + 流水号）
 
 选项：
   -t, --target <pane|window>        指定目标（默认当前 pane）
@@ -830,7 +853,7 @@ cmd_doctor() {
     _ok=1
   }
 
-  printf '\ntmux-whistle doctor\n\n'
+  printf '\n%s doctor\n\n' "$(whistle_version)"
 
   printf 'tmux\n'
   if ! command -v tmux > /dev/null 2>&1; then

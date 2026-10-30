@@ -94,7 +94,12 @@ cd tmux-whistle
 ```sh
 tmux source-file ~/.config/tmux/tmux.conf    # 或 prefix + r
 tmux-whistle doctor
+tmux-whistle --version
+# tmux-whistle 0.1.0-alpha.1+20261030.1
 ```
+
+版本由「主版.次版.修订 + 内测/公测阶段 + 构建日期与流水号」组成，规则见
+[版本号与发布规范](docs/versioning.md)。
 
 > **升级插件后要重跑一次 `tmux-whistle install-hooks`。** 当前共管理 8 个事件；
 > hooks 是快照式写进 `settings.json` 的，这次新增的 `PreToolUse` /
@@ -543,6 +548,7 @@ set -g @whistle_debug on
 ## 文档
 
 - [开发文档](docs/development.md) —— 本地开发、测试、目录结构、贡献
+- [版本号与发布规范](docs/versioning.md) —— SemVer、alpha/beta、构建戳与发布流程
 - [功能待办](docs/todo.md) —— 已知问题与限制
 - [需求分析](docs/requirements-analysis.md) —— 需求来源与竞品调研
 - [设计方案评审](docs/notify-design-review.md) —— 「事件收件箱」形态的取舍与吸收路线

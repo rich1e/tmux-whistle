@@ -55,10 +55,13 @@ EOF
 
 @test "install: terminal-notifier 3.x 提示 diagnose 而不是 Script Editor" {
   fake_install_tn '3.1.0.'
+  local expected_version
+  expected_version=$("$WHISTLE_ROOT/bin/tmux-whistle" --version)
 
   run_install_dry
 
   assert_eq "$status" 0
+  assert_contains "$output" "$expected_version 安装"
   assert_contains "$output" 'terminal-notifier -diagnose'
   assert_not_contains "$output" 'Script Editor'
   [ ! -e "$INSTALL_UNEXPECTED" ]

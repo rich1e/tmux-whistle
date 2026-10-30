@@ -31,7 +31,9 @@ make fmt              # shfmt 原地格式化
 make fmt-check        # 格式检查（CI 用）
 make test-unit        # L1 纯函数单测，不碰 tmux
 make test-integration # L2/L3，隔离 socket
-make check            # 提交前跑这条 = lint + fmt-check + 全部测试
+make check            # 提交前跑这条 = 版本校验 + lint + fmt-check + 全部测试
+make version          # 显示完整版本
+make check-version    # 校验 SemVer、阶段、构建日期与流水号
 make clean            # 清临时产物
 ```
 
@@ -49,7 +51,7 @@ bats --print-output-on-failure test/unit        # 失败时打印输出
 改代码 → make fmt → make check → git commit
 ```
 
-`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了。四道关卡依次过，
+`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了。五道关卡依次过，
 任一关红了就就地停住；全绿才允许提交：
 
 ```mermaid
@@ -57,21 +59,22 @@ sequenceDiagram
     autonumber
     participant Dev as 开发者
     participant mk as make
-    participant gate as 四道关卡
+    participant gate as 五道关卡
     participant git as git
 
     Dev->>Dev: 改代码
     Dev->>mk: make fmt
     mk-->>Dev: shfmt -w（posix 档 + bash 档各一次）
     Dev->>mk: make check
-    mk->>gate: ① lint —— ShellCheck
-    mk->>gate: ② fmt-check —— shfmt -l
-    mk->>gate: ③ test-unit —— L1 纯函数，不碰 tmux
-    mk->>gate: ④ test-integration —— L2/L3，隔离 socket
+    mk->>gate: ① check-version —— 版本格式与输出一致
+    mk->>gate: ② lint —— ShellCheck
+    mk->>gate: ③ fmt-check —— shfmt -l
+    mk->>gate: ④ test-unit —— L1 纯函数，不碰 tmux
+    mk->>gate: ⑤ test-integration —— L2/L3，隔离 socket
     alt 任一关卡失败
         gate-->>Dev: ✗ 就地停住，报出文件与行号
-    else 四关全绿
-        gate-->>Dev: ✓ 207 项通过
+    else 五关全绿
+        gate-->>Dev: ✓ 全部检查通过
         Dev->>git: git commit
     end
 ```
@@ -79,6 +82,19 @@ sequenceDiagram
 关卡的分工是刻意的：**ShellCheck 兜底 POSIX 合规**（`shell=sh` 下 `[[ ]]`、数组、
 `mapfile` 会直接报错），**测试才是唯一能抓静默出错的地方**（比如 pane/window 同名
 option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值才会红）。
+
+## 版本与发布
+
+版本真源只在 `bin/tmux-whistle` 顶部。首个版本为 `0.1.0-alpha.1+20261030.1`：
+主版/次版/修订表达兼容性，`alpha` / `beta` 区分内测与公测，`+` 后记录构建日期与流水号。
+
+```sh
+make version
+make check-version
+```
+
+发布前必须跑完整 `make check`。tag 使用 `v<base>`，不带 build metadata，不自动 push。
+完整的升版规则、构建戳约定与手工发布清单见 [versioning.md](versioning.md)。
 
 ## 目录结构
 
@@ -95,7 +111,8 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 ├── hooks/
 │   └── claude-code.sh          # Claude Code hook 适配器：stdin JSON → 状态
 ├── scripts/
-│   └── setup.sh                # 插件加载时的初始化：发布 mark、幂等 patch、注册 hooks
+│   ├── setup.sh                # 插件加载时的初始化：发布 mark、幂等 patch、注册 hooks
+│   └── check-version.sh        # 校验 CLI 版本常量与 --version 输出
 ├── share/
 │   └── whistle.zsh             # 可选 OSC 133 片段
 ├── test/
@@ -119,6 +136,7 @@ option 的影子遮蔽 —— 代码完全正常，只有断言最终 option 值
 │   ├── development.md          # 本文档
 │   ├── notify-design-review.md # 「事件收件箱」形态的取舍评审
 │   ├── requirements-analysis.md
+│   ├── versioning.md           # SemVer、阶段、构建戳与手工发布规范
 │   ├── superpowers/            # 执行计划（plans/），带 checkbox 的步骤清单
 │   └── todo.md                 # 已知问题与功能待办
 ├── tmux-whistle.tmux           # tpm / tpack 入口（可执行文件，tpm 不 source 它）

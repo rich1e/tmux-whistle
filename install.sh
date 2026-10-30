@@ -151,9 +151,9 @@ fi
 
 # -- 安装 ------------------------------------------------------------------
 
-say 'tmux-whistle 安装'
-
 [ -f "$ROOT/bin/tmux-whistle" ] || die "$ROOT 不像插件仓库（缺 bin/tmux-whistle）"
+_in_version=$("$ROOT/bin/tmux-whistle" --version)
+say "$_in_version 安装"
 [ -x "$ROOT/hooks/claude-code.sh" ] || run chmod +x "$ROOT/hooks/claude-code.sh"
 [ -x "$ROOT/tmux-whistle.tmux" ] || run chmod +x "$ROOT/tmux-whistle.tmux"
 [ -x "$ROOT/scripts/setup.sh" ] || run chmod +x "$ROOT/scripts/setup.sh"

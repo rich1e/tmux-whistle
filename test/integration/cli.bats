@@ -1369,7 +1369,10 @@ select-pane -t $p"
 # -- doctor ----------------------------------------------------------------
 
 @test "doctor: 能跑完并报告 tmux 版本" {
+  local expected_version
+  expected_version=$("$CLI" --version)
   run "$CLI" doctor
+  assert_contains "$output" "$expected_version doctor"
   assert_contains "$output" 'tmux'
   assert_contains "$output" '投递渠道'
   # 多 server 检查：段头必须出现。**不断言结论** —— 判据基于 `ps -u <uid>`，

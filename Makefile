@@ -3,13 +3,14 @@ SHELL := /bin/sh
 BATS  ?= bats
 SHFMT ?= shfmt
 TMUX  ?= tmux
+WHISTLE_CLI ?= bin/tmux-whistle
 
 # shfmt 可能装在 ~/.local/bin（二进制直装）或 brew
 export PATH := $(HOME)/.local/bin:$(PATH)
 
 LIB_SH   := $(wildcard lib/*.sh)
 HOOK_SH  := $(wildcard hooks/*.sh)
-BIN_SH   := bin/tmux-whistle install.sh
+BIN_SH   := bin/tmux-whistle install.sh scripts/check-version.sh
 POSIX_SH := $(LIB_SH) $(HOOK_SH) $(BIN_SH)
 
 # 测试辅助脚本是 bash，交给 shfmt。
@@ -21,7 +22,7 @@ BATS_SH := $(shell find test -name '*.bats' 2>/dev/null)
 SHFMT_FLAGS := -i 2 -bn -sr
 
 .PHONY: help deps deps-shfmt lint fmt fmt-check check test test-unit test-integration \
-        install uninstall doctor clean
+        install uninstall doctor clean version check-version
 
 help: ## 显示所有可用命令
 	@printf 'tmux-whistle 开发命令\n\n'
@@ -50,6 +51,14 @@ deps-shfmt: ## 只安装 shfmt（brew tap 不可用时回退到官方二进制�
 	chmod +x $(HOME)/.local/bin/$(SHFMT); \
 	$(SHFMT) --version
 
+## -- 版本 ------------------------------------------------------------------
+
+version: ## 显示完整版本（SemVer + 构建日期与流水号）
+	@"$(WHISTLE_CLI)" --version
+
+check-version: ## 校验 SemVer、阶段、构建戳与实际输出一致
+	@./scripts/check-version.sh "$(WHISTLE_CLI)"
+
 ## -- 质量 ------------------------------------------------------------------
 
 lint: ## ShellCheck 静态检查
@@ -72,7 +81,7 @@ fmt-check: ## 格式检查（有未格式化文件则非零退出）
 
 ## -- 测试 ------------------------------------------------------------------
 
-test: lint fmt-check test-unit test-integration check-no-stray-servers ## 完整检查（同 check）
+test: check-version lint fmt-check test-unit test-integration check-no-stray-servers ## 完整检查（同 check）
 
 test-unit: ## L1 纯函数单测（不碰 tmux）
 	@command -v $(BATS) >/dev/null 2>&1 || { echo '缺 bats，先跑 make deps'; exit 1; }
@@ -82,7 +91,7 @@ test-integration: ## L2/L3 tmux 集成与端到端（隔离 socket）
 	@command -v $(BATS) >/dev/null 2>&1 || { echo '缺 bats，先跑 make deps'; exit 1; }
 	$(BATS) --print-output-on-failure test/integration test/e2e
 
-check: lint fmt-check test-unit test-integration check-no-stray-servers ## 提交前完整检查
+check: check-version lint fmt-check test-unit test-integration check-no-stray-servers ## 提交前完整检查
 
 # 断言测试没留下隔离 server。
 #
