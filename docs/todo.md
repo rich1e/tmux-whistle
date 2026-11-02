@@ -1198,6 +1198,10 @@ ln -sfn <那一份>.txt ~/.local/share/tmux/resurrect/last
 事件**。TODO-17 修好的是「后台/子 **agent**」的可见性（`PreToolUse` 的
 `Agent`/`Task` 调用能点亮 `▶`），后台 **Bash** 仍然看不见。
 
+**范围缩小过（2026-11-02）**：相邻的另一个错已经修掉 —— `SubagentStop` 事件原先会写
+`--activity idle`，把「派了子 agent、正等结果」的**主 agent**标成空闲（提交 `80ca3a1`）。
+本条目剩下的只有一种场景：**主回合已经结束**，只剩后台 Bash 还在跑。
+
 **为什么单独列出来**：2026-10-28 那次「后台在跑、徽章显示空闲」的现场取证
 （见下方诊断记录）显示，那个会话里**从来没有 `run_in_background: true` 的
 `Agent`/`Task` 调用**，所有后台调用都是 `Bash(xcodebuild test)` —— 也就是说，
