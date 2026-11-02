@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 488 项测试（88 单测 + 339 集成 + 61 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 489 项测试（88 单测 + 340 集成 + 61 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -215,6 +215,12 @@ agent 显示成「空闲」，**全程零报错**。新增任何一种「要告�
 安全阀：宁可漏报 `running`（回到旧行为），不可永久误报。让过期真正落地的是
 `lib/spin.sh` 每 `@whistle_recompute_every` 帧触发的一次全局重算 ——
 挂在推进器上不是偶然，它**只在 `count_running > 0` 时活着**，恰好就是需要自愈的场景。
+
+**`SubagentStop` 只清标记，绝不写活动态。** 子 agent 结束时，主 agent 那一轮
+通常**还在跑**（它派了子 agent、正等结果）—— 早先这里写 idle，把正在干活的
+主 agent 标成「空闲」，状态栏与菜单都显示错且全程零报错（2026-11-02 实测）。
+活动态的收尾只有两个出口：主回合结束的 `Stop` 事件写 idle；`SessionEnd` 写 gone。
+「主回合已结束、子 agent 还在跑」由标记兜底（推导层把活动态钉成 running）。
 
 **带 `|` 的行要按固定列数读**：POSIX 的 `read` 在字段数多于变量数时，会把余下的
 （含分隔符）全塞进**最后一个**变量。所以「消息」必须在**末位**（它拿到的是余下的

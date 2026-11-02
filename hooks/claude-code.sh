@@ -288,11 +288,17 @@ PreToolUse)
 SubagentStop)
   # 子 agent 结束。
   #
-  # ⚠️ 顺序：**先清标记，再报 idle**。反过来的话，报 idle 时标记还有效，
-  # core 会把它写成 running；而 @whistle 上的 running 没有 TTL ——
-  # 那正是「永久 ▶」，这个项目最恨的一类缺陷。
+  # **只清标记，绝不动活动通道**。
+  #
+  # 主 agent 这一轮很可能还在跑 —— 它派了子 agent，正等着结果回来。
+  # 早先这里无条件写 idle，把**正在干活的主 agent**标成「空闲」：
+  # 状态栏与菜单都显示错，而且全程零报错（2026-11-02 用户实测截图：
+  # 子 agent 刚结束，主 agent 还在跑，菜单里却已经是「空闲」）。
+  #
+  # 活动态的收尾有别的出口：主回合结束时 Stop 事件写 idle；
+  # 后台 agent 那种「主回合已结束、子 agent 还在跑」的情况由标记兜底
+  # （推导层见 @whistle_sub 的过期时间戳）。
   _hk_cli --sub-agent-stop
-  _hk_cli --activity idle
   ;;
 Notification)
   # 只处理"需要用户做点什么"的类型，其余（auth_success / elicitation_complete /

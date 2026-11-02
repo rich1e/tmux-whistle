@@ -276,7 +276,15 @@ EOF
   assert_eq "$(pane_notice)" 'done'
 }
 
-@test "e2e: SubagentStop 清标记并把活动收回 idle" {
+@test "e2e: SubagentStop 只清标记，不动活动通道（主 agent 可能还在跑）" {
+  # 回归（2026-11-02 用户实测截图）：子 agent 结束时把活动态写成 idle，
+  # 会把**正在等结果的主 agent**标成「空闲」—— 状态栏与菜单都显示错，
+  # 且全程零报错。活动态的收尾归 Stop 事件管。
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+
   feed <<'EOF'
 {"hook_event_name":"PreToolUse","tool_name":"Agent"}
 EOF
@@ -286,6 +294,21 @@ EOF
 {"hook_event_name":"SubagentStop"}
 EOF
   assert_eq "$(pane_sub)" ''
+  # 主 agent 这一轮还没结束（Stop 才是收尾），所以活动态保持 running。
+  # 修复前这里是 idle。
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_eff)" 'running'
+}
+
+@test "e2e: 主回合结束后活动态才回到 idle" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+
+  feed <<'EOF'
+{"hook_event_name":"Stop"}
+EOF
   assert_eq "$(pane_act)" 'idle'
 }
 
