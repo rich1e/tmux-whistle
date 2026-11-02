@@ -698,6 +698,22 @@ whistle_menu_activate() {
   cmd_clear -t "$1" --select "$2"
 }
 
+# whistle_menu_refresh_clients
+#
+# 画完一帧后**主动**让客户端重画。
+#
+# 为什么需要：popup 的内容写进它的 pty 之后，tmux 不一定马上把 popup 区域画到
+# 屏幕上 —— 实测要等下一个输入或刷新事件才出现（用户按一下方向键，文字才冒出来；
+# 没有 running agent、没人动键盘时，能等好几秒）。所以画完自己敲一下客户端刷新。
+#
+# refresh-client（不带 -S）刷的是整个屏幕，popup 也在里面；-S 只刷状态栏，不够。
+whistle_menu_refresh_clients() {
+  _mrc_clients=$(whistle_tmux list-clients -F '#{client_name}' 2> /dev/null) || return 0
+  for _mrc_c in $_mrc_clients; do
+    whistle_tmux refresh-client -t "$_mrc_c" 2> /dev/null || true
+  done
+}
+
 # whistle_menu_paint_row <索引> <是否选中 1/0>
 #
 # 只重画一项，**不整屏重绘**。方向键移动时整屏重绘要清屏并把 26 行逐行 clip
@@ -734,6 +750,8 @@ whistle_menu_move() {
   _mu_selected=${_mu_selection%%|*}
   whistle_menu_paint_row "$_mm_old" 0
   whistle_menu_paint_row "$_mu_index" 1
+  # 同理：移动后的高亮也要立刻可见，不能等下一次输入。
+  whistle_menu_refresh_clients
 }
 
 # whistle_menu_ui：display-popup -E 内的完整交互进程。
@@ -801,6 +819,8 @@ whistle_menu_ui() {
       fi
       _mu_dirty=0
       whistle_menu_timing "ui-frame-done cols=$_mu_columns"
+      # 画完主动刷新客户端：否则内容要等下一次输入才显示（实测能等好几秒）。
+      whistle_menu_refresh_clients
     fi
 
     _mu_octets=$(whistle_menu_read_key)
