@@ -2,14 +2,14 @@
 # running 状态的 Braille 帧推进器。
 #
 # 由 whistle_spin_ensure 用 `tmux run-shell -b` 拉起，**只在真有 running 时活着**：
-# 计数归零、或 @whistle_spin 被关掉，下一轮循环就退出并清掉 pidfile。
+# 计数归零、或 @whistle_spin 被关掉，下一轮循环就退出并清掉自己那份 PID 记录。
 #
 # 它只做两件事，都很廉价：帧号加一、重画状态栏。
 # 之所以需要它 —— status-right 里的徽章串是预先算好存在 global option 里的
 # **纯 format**（零 fork 是硬红线）。format 是静态的，tmux 没有「每 N 帧换字符」
 # 的原生能力，所以得有个东西去改 @whistle_spin，format 在下次重画时读出新值。
 #
-# 单实例：pidfile 守卫。进程由 tmux 的 run-shell -b 托管，
+# 单实例：server 自己的 option 里记着 PID。进程由 tmux 的 run-shell -b 托管，
 # 这个循环本身就是被 run-shell 托管的那条命令。
 
 set -u
@@ -22,22 +22,25 @@ export WHISTLE_ROOT
 # shellcheck source=/dev/null
 . "$WHISTLE_ROOT/lib/deliver.sh"
 
-PIDFILE=$(whistle_spin_pidfile)
-
-if [ -f "$PIDFILE" ]; then
-  _old=''
-  read -r _old < "$PIDFILE" 2> /dev/null || true
-  if [ -n "$_old" ] && kill -0 "$_old" 2> /dev/null; then
-    exit 0 # 已有实例
-  fi
+# 单实例守卫：PID 记在**这个 server 自己的 option** 里，不是磁盘 pidfile ——
+# pidfile 按用户命名、不含 socket，两个 server 会共用一份，隔离 server 的
+# whistle_spin_stop 会把用户真 server 的推进器 kill 掉（详见 lib/core.sh）。
+_spin_old=$(whistle_spin_pid)
+if [ -n "$_spin_old" ] && kill -0 "$_spin_old" 2> /dev/null; then
+  exit 0 # 已有实例
 fi
+whistle_spin_pid_set "$$"
 
-mkdir -p "$(dirname "$PIDFILE")" 2> /dev/null || exit 1
-printf '%s' "$$" > "$PIDFILE"
-
+# 退出时只清「还属于自己」的那份：别人已经换过 PID 就别动它。
+#
 # trap EXIT 在这里是对的（它不是 bats 的测试文件 —— helper 里装 trap EXIT
 # 会吞掉 bats 自己的失败，见 test_helper/whistle.bash 的注释）。
-trap 'rm -f "$PIDFILE" 2>/dev/null; exit 0' INT TERM EXIT
+_spin_cleanup() {
+  _spin_cur=$(whistle_spin_pid)
+  [ "$_spin_cur" = "$$" ] && whistle_spin_pid_set ''
+  exit 0
+}
+trap '_spin_cleanup' INT TERM EXIT
 
 # -- 自愈节拍：每 N 帧触发一次全局重算 ---------------------------------------
 #
@@ -83,8 +86,8 @@ while :; do
   # ⚠️ 这条路径**可能把本进程自己杀掉**，而这是预期行为：
   #   标记过期 → 重算把 @whistle_count_running 降到 0 →
   #   whistle_recompute_global 末尾的 whistle_spin_sync 发现没有 running →
-  #   调 whistle_spin_stop，而 pidfile 里存的就是本进程的 $$。
-  # 收到 SIGTERM 后走上面的 trap（rm -f pidfile + exit 0），与「循环顶部
+  #   调 whistle_spin_stop，而 server option 里存的就是本进程的 $$。
+  # 收到 SIGTERM 后走上面的 trap（清掉自己那份 PID 记录 + exit 0），与「循环顶部
   # 读到计数为 0 而 break」等价 —— 自愈之后推进器本就该退出。
   # 不会死循环（kill 之后的本轮循环立刻结束，不存在再重算的下一轮），
   # 也不会留残骸（whistle_spin_stop 先 rm 一次、trap 再 rm 一次，幂等）。

@@ -16,12 +16,10 @@
 load '../test_helper/whistle'
 
 setup() {
-  # whistle_spin_pidfile 落在 ${XDG_RUNTIME_DIR:-$TMPDIR} 下，**路径里不含 socket** ——
-  # 不隔离的话，本文件里的 whistle_recompute_global 会走到 whistle_spin_sync 的
-  # 「没有 running」分支、调 whistle_spin_stop，去 kill / 删开发机上真实推进器的
-  # pidfile。给每个用例一个自己的 XDG_RUNTIME_DIR，把它挡在隔离区里。
-  SUB_TMP=$(mktemp -d "${TMPDIR:-/tmp}/whistle-sub.XXXXXX")
-  export XDG_RUNTIME_DIR="$SUB_TMP"
+  # 推进器的 PID 记在**目标 server 自己的 option** 里（@whistle_spin_pid），
+  # 不再落按用户命名的 pidfile —— 所以本文件里的 whistle_recompute_global 即使
+  # 走到「没有 running」分支去 stop 推进器，也只碰隔离 server 自己的那份，
+  # 不会去 kill 开发机上真实推进器（2026-11-02 修掉的跨 server 副作用）。
 
   wt_start
   wt_load core
@@ -38,7 +36,6 @@ setup() {
 
 teardown() {
   wt_stop
-  [ -n "${SUB_TMP:-}" ] && command rm -rf "$SUB_TMP" 2> /dev/null || true
   unset XDG_RUNTIME_DIR
 }
 

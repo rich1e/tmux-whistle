@@ -245,7 +245,14 @@ agent 显示成「空闲」，**全程零报错**。新增任何一种「要告�
 只会静默渲染成空字符串。存字符而不是序号，帧数随便加。
 
 `lib/spin.sh` 是独立的推进器进程：只在真有 running 时被 `run-shell -b` 拉起，
-running 归零时下一轮循环 break 并清 pidfile，不常驻。
+running 归零时下一轮循环 break 并清掉自己那份 PID 记录，不常驻。
+
+**推进器的 PID 记在目标 server 自己的 option（`@whistle_spin_pid`）里，不是磁盘
+pidfile。** 早先的 pidfile 路径按用户命名、**不含 socket** —— 用户的真 server 与
+测试的隔离 server 共用一份，于是隔离 server 的 `whistle_spin_stop` 会把**用户真
+server 的推进器 kill 掉**，用户那边下一次重算又拉起来：状态栏汇总格反复重画，
+CPU 跟着抖（2026-11-02 实测）。凡是「按 server 隔离」的状态，一律放进 server
+自己的 option，别落按用户命名的文件。
 
 **帧外面必须再套一层「有没有 running」的判断**：推进器退出后 `@whistle_spin_char`
 还留着最后一帧，不判计数的话状态栏会一直挂着 `⠋ 0` —— 动画早停了、字形还在，

@@ -1116,12 +1116,30 @@ whistle_pending_windows() {
 # 这些函数由 whistle_deliver 调用（每次状态变化都会经过那里）。
 # 它们**不常驻**：真有 running 才拉起 lib/spin.sh，running 归零时它自己退出。
 #
-# pidfile 路径不含 $(id -u) —— 那是命令替换，会在每次 CLI 调用时 fork 一个进程。
-# 用 $USER（环境变量，零 fork）。
+# 推进器的 PID 记在**目标 server 自己的 option** 里（@whistle_spin_pid），
+# 不用磁盘上的 pidfile。
+#
+# 为什么不用 pidfile：pidfile 路径按用户命名，**不含 socket** —— 同一台机器上
+# 跑着两个 tmux server（用户的真 server + 测试的隔离 server）时，它们共用
+# 同一个 pidfile。隔离 server 的 whistle_spin_stop 会把**用户真 server 的推进器**
+# kill 掉，用户那边下一次重算又把它拉起来 —— 状态栏汇总格于是反复重画，
+# CPU 跟着抖（2026-11-02 实测）。option 跟着 server 走，天然隔离；
+# server 一死它也一起没了，不留残骸。
+#
+# 代价：多一次 tmux 调用。这不在 0.5 秒一次的高频路径上 —— 高频路径只有
+# 推进器自己改 @whistle_spin_char。
+whistle_spin_pid() {
+  _sp_pid=$(whistle_tmux show -gqv '@whistle_spin_pid' 2> /dev/null) || _sp_pid=''
+  case "$_sp_pid" in
+  '' | *[!0-9]*) _sp_pid='' ;;
+  esac
+  printf '%s' "$_sp_pid"
+}
 
-whistle_spin_pidfile() {
-  printf '%s/tmux-whistle-spin-%s.pid' \
-    "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}" "${USER:-whistle}"
+# 写入推进器 PID；空串表示「当前没有推进器」。
+# 用空串而不是 unset：unset 的参数形式在 tmux 版本间有差异，写空串更稳。
+whistle_spin_pid_set() {
+  whistle_tmux set -g '@whistle_spin_pid' "${1:-}" 2> /dev/null || true
 }
 
 # 推进器脚本的位置。优先环境变量（测试用），其次 tmux 的 @whistle_root。
@@ -1162,16 +1180,11 @@ whistle_spin_sync() {
   fi
 }
 
-# 单实例守卫：pidfile 里的进程还活着就什么都不做。
+# 单实例守卫：server 里记着的进程还活着就什么都不做。
 whistle_spin_ensure() {
-  _se_f=$(whistle_spin_pidfile)
-  if [ -f "$_se_f" ]; then
-    _se_old=''
-    # 用 read 而不是 $(cat ...)：后者每次都要 fork
-    read -r _se_old < "$_se_f" 2> /dev/null || true
-    if [ -n "$_se_old" ] && kill -0 "$_se_old" 2> /dev/null; then
-      return 0
-    fi
+  _se_pid=$(whistle_spin_pid)
+  if [ -n "$_se_pid" ] && kill -0 "$_se_pid" 2> /dev/null; then
+    return 0
   fi
 
   _se_script=$(whistle_spin_script) || return 0
@@ -1187,11 +1200,9 @@ whistle_spin_ensure() {
 }
 
 whistle_spin_stop() {
-  _sx_f=$(whistle_spin_pidfile)
-  [ -f "$_sx_f" ] || return 0
-  _sx_pid=''
-  read -r _sx_pid < "$_sx_f" 2> /dev/null || true
+  _sx_pid=$(whistle_spin_pid)
   [ -n "$_sx_pid" ] && kill "$_sx_pid" 2> /dev/null
-  rm -f "$_sx_f" 2> /dev/null || true
+  # 只清这个 server 的记录 —— 不碰别的 server 的推进器（见 whistle_spin_pid）。
+  whistle_spin_pid_set ''
   return 0
 }
