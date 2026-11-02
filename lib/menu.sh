@@ -257,13 +257,30 @@ whistle_menu_ansi_fg() {
   esac
 }
 
-# whistle_menu_clip <文本> <显示列数> → 可安全写入终端的纯文本
+# whistle_menu_clip <文本> <显示列数> [模式] → 可安全写入终端的纯文本
 #
 # awk 在 C locale 下逐字节解码 UTF-8，因此截断只会落在完整码位边界。
 # 控制字符（包括 ESC 与 C1 CSI）不会进入输出，#[...] 也不会被当成样式。
 # 先在这里处理显示宽度，再由调用方添加 SGR，转义字节不会占用 columns。
+#
+# 模式：
+#   clip     （默认）按显示列数截断后输出
+#   width    输出这一行的显示列数（不截断）
+#   maxwidth 从 stdin 读多行，输出最长一行的显示列数（用于按内容定宽）
 whistle_menu_clip() {
-  printf '%s\n' "${1:-}" | LC_ALL=C awk -v max="${2:-80}" '
+  case "${3:-clip}" in
+  maxwidth)
+    _wmc_run maxwidth 100000
+    ;;
+  *)
+    printf '%s\n' "${1:-}" | _wmc_run "${3:-clip}" "${2:-80}"
+    ;;
+  esac
+}
+
+# awk 程序只写一份，三种模式共用 —— 两份拷贝迟早会改岔。
+_wmc_run() {
+  LC_ALL=C awk -v max="$2" -v mode="$1" '
     BEGIN {
       for (i = 0; i < 256; i++) ord[sprintf("%c", i)] = i
     }
@@ -415,12 +432,19 @@ whistle_menu_clip() {
         used += w
         i += n
       }
+      WIDTH = used
+      OUT = out
       return out
     }
 
     {
-      printf "%s", clip($0)
+      clip($0)
+      if (mode == "width") { printf "%d\n", WIDTH; next }
+      if (mode == "maxwidth") { if (WIDTH > MW) MW = WIDTH; next }
+      printf "%s", OUT
     }
+
+    END { if (mode == "maxwidth") printf "%d\n", MW }
   '
 }
 
@@ -434,14 +458,47 @@ whistle_menu_item_style() {
   printf '%s %s' "$_mis_icon" "$_mis_fg"
 }
 
+# whistle_menu_item_plain <键位> <图标> <状态> <session> <窗口> <消息> → 未截断的纯文本
+#
+# 截断交给 whistle_menu_clip。定宽时要的是**未截断**的宽度，所以拆出这一层。
+whistle_menu_item_plain() {
+  printf '(%s) %s %s [%s]: %s' "$1" "$2" "$(whistle_state_label "$3")" "$4" "$5"
+  [ -z "${6:-}" ] || printf ' %s' "$6"
+}
+
 # whistle_menu_item_text <键位> <图标> <状态> <session> <窗口> <消息> <列数> → 纯文本一行
 #
 # 整帧绘制与单行重绘共用这一处拼装，两边格式不会分叉。
 whistle_menu_item_text() {
-  _mit_text=$(printf '(%s) %s %s [%s]: %s' \
-    "$1" "$2" "$(whistle_state_label "$3")" "$4" "$5")
-  [ -z "${6:-}" ] || _mit_text="$_mit_text $6"
-  whistle_menu_clip "$_mit_text" "${7:-80}"
+  whistle_menu_clip \
+    "$(whistle_menu_item_plain "$1" "$2" "$3" "$4" "$5" "${6:-}")" "${7:-80}"
+}
+
+# whistle_menu_model_width <调色板> ← 菜单模型 → 最长一行的显示列数
+#
+# popup 的宽度按内容定：先算出最长的一行有多宽，再让 popup 正好装下它。
+# 整批只跑一次 awk（maxwidth 模式），不是每行一次。
+# 标题与溢出提示也参与取最大值 —— 它们同样是画在框里的内容。
+whistle_menu_model_width() {
+  _mmw_pal=${1:-}
+  {
+    printf 'tmux-whistle\n'
+    while IFS='|' read -r _mmw_kind _mmw_key _mmw_wid _mmw_pid _mmw_s _mmw_wn _mmw_eff _mmw_msg; do
+      case "$_mmw_kind" in
+      item)
+        _mmw_style=$(whistle_menu_palette_pick "$_mmw_eff" "$_mmw_pal")
+        _mmw_icon=${_mmw_style%% *}
+        whistle_menu_item_plain "$_mmw_key" "$_mmw_icon" "$_mmw_eff" \
+          "$_mmw_s" "$_mmw_wn" "$_mmw_msg"
+        printf '\n'
+        ;;
+      overflow)
+        _mmw_hint=$(whistle_menu_overflow "$_mmw_key")
+        printf '%s\n' "${_mmw_hint#- }"
+        ;;
+      esac
+    done
+  } | whistle_menu_clip '' 0 maxwidth
 }
 
 # whistle_menu_palette_pick <状态> <调色板文本> → "<图标> <SGR 前景>"（纯 shell，不 fork）

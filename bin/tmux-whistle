@@ -445,6 +445,21 @@ EOF
 # -- 菜单 / 跳转 -----------------------------------------------------------
 
 cmd_menu() {
+  # 可选参数：--max-width N（主窗口宽度上限；绑定里传 #{window_width}）。
+  _mn_max_width=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --max-width)
+      shift
+      _mn_max_width=${1:-}
+      ;;
+    --max-width=*)
+      _mn_max_width=${1#--max-width=}
+      ;;
+    esac
+    shift
+  done
+
   whistle_menu_timing 'cmd-menu-start'
   _items=$(whistle_agent_windows)
   whistle_menu_timing "cmd-menu-items lines=$(printf '%s\n' "$_items" | grep -c .)"
@@ -456,6 +471,35 @@ cmd_menu() {
     return 0
   fi
 
+  # 模型：宽度与行数都按它算（菜单项 ≤26，多的折进溢出提示）。
+  _mn_model=$(printf '%s\n' "$_items" | whistle_menu_model)
+
+  # 宽度按内容定：最长的一行有多宽，popup 就装多宽（+2 是左右边框）。
+  # 这样内容少时不会留一大片空白；内容多时靠 whistle_menu_clip 截断，不会撑破布局。
+  _mn_pal=$(whistle_menu_palette)
+  _mn_inner=$(printf '%s\n' "$_mn_model" | whistle_menu_model_width "$_mn_pal")
+  case "$_mn_inner" in
+  '' | *[!0-9]*) _mn_inner=40 ;;
+  esac
+  _mn_width=$((_mn_inner + 2))
+
+  # 上限：不许超过主窗口宽度。绑定里传的是 #{window_width}；
+  # 没传（比如手动跑 tmux-whistle menu）就用最宽的那个 client。
+  case "$_mn_max_width" in
+  '' | *[!0-9]*) _mn_max_width='' ;;
+  esac
+  if [ -z "$_mn_max_width" ]; then
+    _mn_max_width=$(whistle_tmux list-clients -F '#{client_width}' 2> /dev/null \
+      | sort -n | tail -1)
+    case "$_mn_max_width" in
+    '' | *[!0-9]*) _mn_max_width='' ;;
+    esac
+  fi
+  if [ -n "$_mn_max_width" ] && [ "$_mn_width" -gt "$_mn_max_width" ]; then
+    _mn_width=$_mn_max_width
+  fi
+  [ "$_mn_width" -ge 12 ] || _mn_width=12
+
   # popup 标题由 UI 首行绘制；不用 tmux 3.3 才加入的 display-popup -T。
   #
   # 路径包成 shell 的**单引号**字面量：popup 会把这串交给 shell 执行，只用双引号
@@ -466,14 +510,15 @@ cmd_menu() {
   # 高度按内容要：默认高度装不下 26 项 + 标题 + 溢出提示时，先画的行会被顶出
   # 屏幕，高亮还能移到看不见的地方。tmux 会把 popup 夹在 client 尺寸内，
   # 所以这里只按项数要，不用自己读终端高度。+4 = 标题 1 + 溢出提示 1 + 上下边框 2。
-  _mn_rows=$(printf '%s\n' "$_items" | wc -l | tr -d ' ')
+  _mn_rows=$(printf '%s\n' "$_mn_model" | grep -c '^item|')
   case "$_mn_rows" in
   '' | *[!0-9]*) _mn_rows=1 ;;
   esac
   [ "$_mn_rows" -gt 26 ] && _mn_rows=26
   _mn_rows=$((_mn_rows + 4))
-  whistle_menu_timing "cmd-menu-popup-invoke rows=$_mn_rows"
-  if ! whistle_tmux display-popup -E -h "$_mn_rows" "'$_mn_self' --menu-ui" 2> /dev/null; then
+  whistle_menu_timing "cmd-menu-popup-invoke w=$_mn_width h=$_mn_rows"
+  if ! whistle_tmux display-popup -E -w "$_mn_width" -h "$_mn_rows" \
+    "'$_mn_self' --menu-ui" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
     # 纯文本降级，没有菜单可选中，所以不带样式转义。
     while IFS='|' read -r s _wid wn _wi _pid eff _notice _activity msg; do

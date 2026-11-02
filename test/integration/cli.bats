@@ -147,8 +147,8 @@ run_menu_popup_spy() {
   run_menu_popup_spy
 
   assert_eq "$status" 0
-  assert_eq "$(sed -n 3p "$MENU_POPUP_TMUX_LOG")" '-h'
-  assert_eq "$(sed -n 4p "$MENU_POPUP_TMUX_LOG")" '5'
+  assert_eq "$(sed -n 5p "$MENU_POPUP_TMUX_LOG")" '-h'
+  assert_eq "$(sed -n 6p "$MENU_POPUP_TMUX_LOG")" '5'
 }
 
 @test "menu popup: CLI 路径按单引号字面量交给 popup 的 shell" {
@@ -159,7 +159,32 @@ run_menu_popup_spy() {
   run_menu_popup_spy
 
   assert_eq "$status" 0
-  assert_eq "$(sed -n 5p "$MENU_POPUP_TMUX_LOG")" "'$CLI' --menu-ui"
+  assert_eq "$(sed -n 7p "$MENU_POPUP_TMUX_LOG")" "'$CLI' --menu-ui"
+}
+
+@test "menu popup: 宽度按内容定，不留大片空白" {
+  # 内容短时 popup 就该窄：宽度 = 最长的一行 + 2（左右边框）。
+  # 断言只看「有 -w 且是个合理的窄值」，具体列宽由单测钉住。
+  "$CLI" idle
+  make_menu_popup_spy
+
+  run_menu_popup_spy
+
+  assert_eq "$status" 0
+  assert_eq "$(sed -n 3p "$MENU_POPUP_TMUX_LOG")" '-w'
+  local w
+  w="$(sed -n 4p "$MENU_POPUP_TMUX_LOG")"
+  case "$w" in
+  '' | *[!0-9]*) echo "popup 宽度不是数字：$w"; return 1 ;;
+  esac
+  [ "$w" -ge 12 ] || {
+    echo "popup 宽度太小：$w"
+    return 1
+  }
+  [ "$w" -le 60 ] || {
+    echo "popup 宽度没按内容收窄：$w"
+    return 1
+  }
 }
 
 @test "menu popup: popup 启动失败时保留原纯文本降级" {

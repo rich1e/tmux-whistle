@@ -305,6 +305,20 @@ EOF
     assert_contains "$output" '(2) ◆ 完成'
 }
 
+@test "menu model: 最长一行的显示列数就是 popup 的内容宽度" {
+    # popup 按内容定宽，所以「多宽」必须和渲染时用的宽度算法一致（同一套 awk）。
+    local line width
+    line='(1) ◉ 空闲 [main]: w1'
+    width="$(printf '%s\n' "$line" | whistle_menu_clip '' 0 maxwidth)"
+
+    run whistle_menu_model_width "$(whistle_menu_palette)" << EOF
+item|1|@1|%1|main|w1|idle|
+EOF
+    assert_eq "$status" 0
+    # 标题 "tmux-whistle" 也参与取最大值，但这一行更长。
+    assert_eq "$output" "$width"
+}
+
 @test "menu render: 🚀 等 U+1F680 之后的 emoji 也按两列计算" {
     # 独立评审 finding #5：宽字符表早先止于 U+1F67F，🚀(U+1F680) 被当成 1 列，
     # clip 出来的行会比 popup 还宽。max=4 应恰好放下 ab + 🚀；max=3 则停在 ab。
