@@ -18,6 +18,14 @@ setup() {
 teardown() {
   # 兜底：万一推进器还活着，别泄漏到后续测试 / 开发机上
   whistle_spin_stop 2> /dev/null || true
+  # 跨 server 用例拉起的第二个 server 也在这里收：kill-server **并删 socket**，
+  # 否则中断或失败时会留下活 server（continuum 会因此静默关闭自动保存）。
+  if [ -n "${SPIN_SOCK2:-}" ]; then
+    tmux -L "$SPIN_SOCK2" kill-server 2> /dev/null || true
+    [ -n "${SPIN_SOCK2_PATH:-}" ] && command rm -f "$SPIN_SOCK2_PATH" 2> /dev/null || true
+    SPIN_SOCK2=''
+    SPIN_SOCK2_PATH=''
+  fi
   wt_stop
 }
 
@@ -207,20 +215,18 @@ spin_wait_pid() {
   }
 
   # 起第二个 server 扮演「别人的隔离 server」，让它 stop 自己的推进器。
-  local sock2="whistle-test-2-$$"
-  local path2
-  tmux -L "$sock2" -f /dev/null new-session -d -s other 2> /dev/null
-  path2="$(tmux -L "$sock2" display -p '#{socket_path}' 2> /dev/null)"
-  if [ -z "$path2" ]; then
+  # 清理登记到 teardown（见上），即使后面断言失败也不会留下活 server 或 socket。
+  SPIN_SOCK2="whistle-test-2-$$"
+  tmux -L "$SPIN_SOCK2" -f /dev/null new-session -d -s other 2> /dev/null
+  SPIN_SOCK2_PATH="$(tmux -L "$SPIN_SOCK2" display -p '#{socket_path}' 2> /dev/null)"
+  if [ -z "$SPIN_SOCK2_PATH" ]; then
     echo "第二个 server 没起来，这条用例就验不到隔离性"
-    tmux -L "$sock2" kill-server 2> /dev/null || true
     return 1
   fi
   local saved_sock="$WHISTLE_TMUX_SOCKET"
-  WHISTLE_TMUX_SOCKET="$path2"
+  WHISTLE_TMUX_SOCKET="$SPIN_SOCK2_PATH"
   whistle_spin_stop
   WHISTLE_TMUX_SOCKET="$saved_sock"
-  tmux -L "$sock2" kill-server 2> /dev/null || true
 
   # 本 server 的推进器必须毫发无损。
   kill -0 "$pid" 2> /dev/null || {
@@ -228,4 +234,52 @@ spin_wait_pid() {
     return 1
   }
   assert_eq "$(wt show -gqv @whistle_spin_pid)" "$pid"
+}
+
+@test "spin: option 里的 PID 被 OS 复用时不会误杀无关进程" {
+  # 回归（独立评审 finding #1）：推进器被 SIGKILL 后 @whistle_spin_pid 会残留，
+  # OS 复用这个 PID 后，裸 kill 会杀到无关进程。stop 必须先确认那确实是推进器。
+  sleep 30 &
+  local other=$!
+  wt set -g @whistle_spin_pid "$other"
+
+  whistle_spin_stop
+
+  kill -0 "$other" 2> /dev/null || {
+    echo "无关进程被误杀了"
+    return 1
+  }
+  kill "$other" 2> /dev/null || true
+  # 记录本身仍要清掉，否则 ensure 会一直以为有推进器。
+  assert_eq "$(wt show -gqv @whistle_spin_pid)" ''
+}
+
+@test "spin: PID 属于无关进程时 ensure 不会误判成已有推进器" {
+  # 同一条 finding 的另一半：PID 复用会让「已有实例」判断假阳性，动画从此不转。
+  # shellcheck disable=SC2030,SC2031
+  export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_interval 0.1
+  wt set -g @whistle_count_running 1
+  sleep 30 &
+  local other=$!
+  wt set -g @whistle_spin_pid "$other"
+
+  whistle_spin_ensure
+  kill "$other" 2> /dev/null || true
+
+  # 等 option 被真正的推进器改写。**不能用 spin_wait_pid** —— 这里 option 一开始
+  # 就非空（装着无关进程的 PID），那个等待会立刻返回，用例就成了假绿。
+  _w=0
+  _pid_now=''
+  while [ "$_w" -lt 25 ]; do
+    _pid_now="$(wt show -gqv @whistle_spin_pid)"
+    [ -n "$_pid_now" ] && [ "$_pid_now" != "$other" ] && break
+    _w=$((_w + 1))
+    sleep 0.2
+  done
+  [ -n "$_pid_now" ] && [ "$_pid_now" != "$other" ] || {
+    echo "ensure 把无关进程当成了推进器，没有拉起真正的推进器"
+    return 1
+  }
 }

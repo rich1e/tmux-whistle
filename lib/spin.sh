@@ -26,7 +26,7 @@ export WHISTLE_ROOT
 # pidfile 按用户命名、不含 socket，两个 server 会共用一份，隔离 server 的
 # whistle_spin_stop 会把用户真 server 的推进器 kill 掉（详见 lib/core.sh）。
 _spin_old=$(whistle_spin_pid)
-if [ -n "$_spin_old" ] && kill -0 "$_spin_old" 2> /dev/null; then
+if whistle_spin_alive "$_spin_old"; then
   exit 0 # 已有实例
 fi
 whistle_spin_pid_set "$$"

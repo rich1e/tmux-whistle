@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 479 项测试（85 单测 + 334 集成 + 60 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 484 项测试（86 单测 + 338 集成 + 60 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -253,6 +253,11 @@ pidfile。** 早先的 pidfile 路径按用户命名、**不含 socket** —— 
 server 的推进器 kill 掉**，用户那边下一次重算又拉起来：状态栏汇总格反复重画，
 CPU 跟着抖（2026-11-02 实测）。凡是「按 server 隔离」的状态，一律放进 server
 自己的 option，别落按用户命名的文件。
+
+**杀 / 认推进器之前先确认那确实是推进器**（`whistle_spin_alive`）：推进器被 SIGKILL 后
+option 里的 PID 会残留，OS 复用 PID 之后 `kill -0` 对一个**无关进程**也会成功 ——
+裸 `kill` 会误伤别人，裸 `kill -0` 守卫又会让动画再也不转。所以 `whistle_spin_stop` /
+`whistle_spin_ensure` / `lib/spin.sh` 的守卫都要过 `ps` 确认命令行里是 `spin.sh`。
 
 **帧外面必须再套一层「有没有 running」的判断**：推进器退出后 `@whistle_spin_char`
 还留着最后一帧，不判计数的话状态栏会一直挂着 `⠋ 0` —— 动画早停了、字形还在，

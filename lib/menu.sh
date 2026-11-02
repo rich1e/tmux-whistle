@@ -337,11 +337,13 @@ whistle_menu_clip() {
           (cp >= 8400 && cp <= 8431) || (cp >= 65024 && cp <= 65039) ||
           (cp >= 917760 && cp <= 917999)) return 0
 
+      # 宽字符：CJK 与 emoji。emoji 段要到 U+1FAFF —— 早先止于 U+1F67F，
+      # 🚀(U+1F680) 及之后的 emoji 被当成 1 列，clip 出来的行会比 popup 还宽。
       if ((cp >= 4352 && cp <= 4447) ||
           (cp >= 11904 && cp <= 42191 && cp != 12351) ||
           (cp >= 44032 && cp <= 55215) || (cp >= 63744 && cp <= 64255) ||
           (cp >= 65072 && cp <= 65103) || (cp >= 65281 && cp <= 65376) ||
-          (cp >= 65504 && cp <= 65510) || (cp >= 126976 && cp <= 129023) ||
+          (cp >= 65504 && cp <= 65510) || (cp >= 126976 && cp <= 129535) ||
           (cp >= 131072 && cp <= 196607) || (cp >= 196608 && cp <= 262141)) return 2
       return 1
     }
@@ -424,15 +426,54 @@ whistle_menu_render() {
   _mu_model=$(cat)
   [ -n "$_mu_model" ] || return 0
 
+  # 五态的图标与颜色在一帧里是固定的，先各取一次。
+  # 否则 26 项就是 52 次 tmux 配置查询 —— 菜单每约 0.5 秒可能重绘一次，
+  # 这部分开销纯粹是重复的（评审 finding #11）。
+  _mu_ic_running=$(whistle_menu_state_icon running)
+  _mu_ic_idle=$(whistle_menu_state_icon idle)
+  _mu_ic_done=$(whistle_menu_state_icon 'done')
+  _mu_ic_wait=$(whistle_menu_state_icon wait)
+  _mu_ic_error=$(whistle_menu_state_icon error)
+  _mu_fg_running=$(whistle_menu_ansi_fg "$(whistle_menu_state_color running)")
+  _mu_fg_idle=$(whistle_menu_ansi_fg "$(whistle_menu_state_color idle)")
+  _mu_fg_done=$(whistle_menu_ansi_fg "$(whistle_menu_state_color 'done')")
+  _mu_fg_wait=$(whistle_menu_ansi_fg "$(whistle_menu_state_color wait)")
+  _mu_fg_error=$(whistle_menu_ansi_fg "$(whistle_menu_state_color error)")
+
   while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
     case "$_mu_kind" in
     item)
+      case "$_mu_eff" in
+      running)
+        _mu_icon=$_mu_ic_running
+        _mu_fg=$_mu_fg_running
+        ;;
+      idle)
+        _mu_icon=$_mu_ic_idle
+        _mu_fg=$_mu_fg_idle
+        ;;
+      done)
+        _mu_icon=$_mu_ic_done
+        _mu_fg=$_mu_fg_done
+        ;;
+      wait)
+        _mu_icon=$_mu_ic_wait
+        _mu_fg=$_mu_fg_wait
+        ;;
+      error)
+        _mu_icon=$_mu_ic_error
+        _mu_fg=$_mu_fg_error
+        ;;
+      *)
+        _mu_icon=''
+        _mu_fg=$(whistle_menu_ansi_fg '')
+        ;;
+      esac
       _mu_plain=$(printf '(%s) %s %s [%s]: %s' \
-        "$_mu_key" "$(whistle_menu_state_icon "$_mu_eff")" \
+        "$_mu_key" "$_mu_icon" \
         "$(whistle_state_label "$_mu_eff")" "$_mu_s" "$_mu_wn")
       [ -z "$_mu_msg" ] || _mu_plain="$_mu_plain $_mu_msg"
       _mu_plain=$(whistle_menu_clip "$_mu_plain" "$_mu_columns")
-      _mu_fg=$(whistle_menu_ansi_fg "$(whistle_menu_state_color "$_mu_eff")")
       if [ "$_mu_wid" = "$_mu_selected" ]; then
         printf '\033[7m%s%s\033[0m\n' "$_mu_fg" "$_mu_plain"
       else
@@ -514,7 +555,7 @@ whistle_menu_restore() {
   _mu_terminal_ready=0
   printf '\033[0m\033[?25h'
   stty "$_mu_terminal_state" 2> /dev/null || true
-  trap - EXIT HUP INT TERM
+  trap - EXIT HUP INT TERM WINCH
 }
 
 whistle_menu_activate() {
@@ -531,13 +572,19 @@ whistle_menu_activate() {
 # 因此每次空读（约 0.5 秒）重新读一次模型：变了就重绘，没变就不动。
 # 用空读当节拍而不是每秒 fork 一次 date —— 热循环里少一个进程。
 whistle_menu_ui() {
+  # 初始模型就为空也要**留下来说一句**，而不是直接退出：cmd_menu 看到有项、
+  # 但 popup 进程第一次查询之前 agent 刚好被清掉或退出时，直接 return 会让
+  # 用户看到 popup 一闪而过，什么解释都没有。
   _mu_model=$(whistle_agent_windows | whistle_menu_model)
-  [ -n "$_mu_model" ] || return 0
-
-  _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' 1)
-  [ -n "$_mu_selection" ] || return 0
+  _mu_selection=''
+  if [ -n "$_mu_model" ]; then
+    _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' 1)
+  fi
   _mu_selected=${_mu_selection%%|*}
   _mu_index=${_mu_selection##*|}
+  case "$_mu_index" in
+  '' | *[!0-9]*) _mu_index=1 ;;
+  esac
   _mu_count=$(printf '%s\n' "$_mu_model" | grep -c '^item|')
 
   _mu_terminal_state=$(stty -g 2> /dev/null) || return 1
@@ -547,6 +594,9 @@ whistle_menu_ui() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  # 终端改大小时重绘：模型没变也要按新的 stty size 重算列宽，否则行宽停在旧值。
+  # trap 在 dd 返回后才执行（最多晚 0.5 秒），不需要在热循环里每秒 fork 一次 stty。
+  trap '_mu_dirty=1' WINCH
 
   # 保留 isig 与输出后处理；关掉 icrnl 让 Enter 按 CR(13) 交给解码器。
   #

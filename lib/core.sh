@@ -1142,6 +1142,21 @@ whistle_spin_pid_set() {
   whistle_tmux set -g '@whistle_spin_pid' "${1:-}" 2> /dev/null || true
 }
 
+# 这个 PID 是不是「活着的、且确实是我们的推进器」。
+#
+# 只看 kill -0 不够：推进器被 SIGKILL 后 option 里的 PID 会残留，OS 复用 PID 之后
+# kill -0 对一个**无关进程**也会成功 —— 于是 stop 可能 kill 错人，ensure 也会误判
+# 「已经有推进器」而再也不拉起。多一次 ps 只在启停路径上，不在高频路径上。
+whistle_spin_alive() {
+  [ -n "${1:-}" ] || return 1
+  kill -0 "$1" 2> /dev/null || return 1
+  _sa_cmd=$(ps -p "$1" -o command= 2> /dev/null) || return 1
+  case "$_sa_cmd" in
+  *spin.sh*) return 0 ;;
+  esac
+  return 1
+}
+
 # 推进器脚本的位置。优先环境变量（测试用），其次 tmux 的 @whistle_root。
 whistle_spin_script() {
   if [ -n "${WHISTLE_SPIN_SCRIPT:-}" ]; then
@@ -1180,10 +1195,10 @@ whistle_spin_sync() {
   fi
 }
 
-# 单实例守卫：server 里记着的进程还活着就什么都不做。
+# 单实例守卫：server 里记着的推进器还活着就什么都不做。
 whistle_spin_ensure() {
   _se_pid=$(whistle_spin_pid)
-  if [ -n "$_se_pid" ] && kill -0 "$_se_pid" 2> /dev/null; then
+  if whistle_spin_alive "$_se_pid"; then
     return 0
   fi
 
@@ -1201,7 +1216,8 @@ whistle_spin_ensure() {
 
 whistle_spin_stop() {
   _sx_pid=$(whistle_spin_pid)
-  [ -n "$_sx_pid" ] && kill "$_sx_pid" 2> /dev/null
+  # 只杀「确实是推进器」的那个 PID：残留的 PID 被 OS 复用后，裸 kill 会误伤无关进程。
+  whistle_spin_alive "$_sx_pid" && kill "$_sx_pid" 2> /dev/null
   # 只清这个 server 的记录 —— 不碰别的 server 的推进器（见 whistle_spin_pid）。
   whistle_spin_pid_set ''
   return 0

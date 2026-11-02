@@ -455,8 +455,22 @@ cmd_menu() {
   fi
 
   # popup 标题由 UI 首行绘制；不用 tmux 3.3 才加入的 display-popup -T。
-  # 命令串里显式引用 CLI 路径，安装路径带空格时仍只是一个程序名。
-  if ! whistle_tmux display-popup -E "\"$WHISTLE_SELF\" --menu-ui" 2> /dev/null; then
+  #
+  # 路径包成 shell 的**单引号**字面量：popup 会把这串交给 shell 执行，只用双引号
+  # 挡不住二次求值 —— 路径里的 `$` / 反引号 / `$(...)` 会被再展开一次。
+  # 单引号自身按 '\'' 转义（POSIX 唯一可靠的写法）。
+  _mn_self=$(printf '%s' "$WHISTLE_SELF" | sed "s/'/'\\\\''/g")
+  #
+  # 高度按内容要：默认高度装不下 26 项 + 标题 + 溢出提示时，先画的行会被顶出
+  # 屏幕，高亮还能移到看不见的地方。tmux 会把 popup 夹在 client 尺寸内，
+  # 所以这里只按项数要，不用自己读终端高度。+4 = 标题 1 + 溢出提示 1 + 上下边框 2。
+  _mn_rows=$(printf '%s\n' "$_items" | wc -l | tr -d ' ')
+  case "$_mn_rows" in
+  '' | *[!0-9]*) _mn_rows=1 ;;
+  esac
+  [ "$_mn_rows" -gt 26 ] && _mn_rows=26
+  _mn_rows=$((_mn_rows + 4))
+  if ! whistle_tmux display-popup -E -h "$_mn_rows" "'$_mn_self' --menu-ui" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
     # 纯文本降级，没有菜单可选中，所以不带样式转义。
     while IFS='|' read -r s _wid wn _wi _pid eff _notice _activity msg; do

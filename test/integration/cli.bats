@@ -138,6 +138,30 @@ run_menu_popup_spy() {
   assert_not_contains "$(cat "$MENU_POPUP_TMUX_LOG")" '-T'
 }
 
+@test "menu popup: 高度按项数要，条目不会被顶出屏幕" {
+  # 独立评审 finding #3：默认高度装不下 26 项 + 标题时，先画的行被顶出屏幕，
+  # 高亮还会移到看不见的地方。这里 1 项 → 1 + 4（标题/溢出提示/上下边框）= 5。
+  "$CLI" idle
+  make_menu_popup_spy
+
+  run_menu_popup_spy
+
+  assert_eq "$status" 0
+  assert_eq "$(sed -n 3p "$MENU_POPUP_TMUX_LOG")" '-h'
+  assert_eq "$(sed -n 4p "$MENU_POPUP_TMUX_LOG")" '5'
+}
+
+@test "menu popup: CLI 路径按单引号字面量交给 popup 的 shell" {
+  # 独立评审 finding #4：双引号挡不住二次求值，路径里的 $ / 反引号会被再展开。
+  "$CLI" idle
+  make_menu_popup_spy
+
+  run_menu_popup_spy
+
+  assert_eq "$status" 0
+  assert_eq "$(sed -n 5p "$MENU_POPUP_TMUX_LOG")" "'$CLI' --menu-ui"
+}
+
 @test "menu popup: popup 启动失败时保留原纯文本降级" {
   "$CLI" "done" '做完了'
   make_menu_popup_spy

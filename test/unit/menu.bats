@@ -278,6 +278,18 @@ EOF
     assert_eq "$status" 0
 }
 
+@test "menu render: 🚀 等 U+1F680 之后的 emoji 也按两列计算" {
+    # 独立评审 finding #5：宽字符表早先止于 U+1F67F，🚀(U+1F680) 被当成 1 列，
+    # clip 出来的行会比 popup 还宽。max=4 应恰好放下 ab + 🚀；max=3 则停在 ab。
+    run whistle_menu_clip 'ab🚀cd' 4
+    assert_eq "$status" 0
+    assert_eq "$output" 'ab🚀'
+
+    run whistle_menu_clip 'ab🚀cd' 3
+    assert_eq "$status" 0
+    assert_eq "$output" 'ab'
+}
+
 @test "menu render: overflow 只有不可选提示且没有快捷键" {
     run whistle_menu_render '@1' 120 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|一
