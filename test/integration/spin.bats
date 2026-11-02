@@ -31,21 +31,21 @@ spin_wait_char_moved() {
   return 1
 }
 
-spin_wait_no_pidfile() {
+spin_wait_no_pid() {
   _w=0
   while [ "$_w" -lt 25 ]; do
-    [ ! -f "$(whistle_spin_pidfile)" ] && return 0
+    [ -z "$(wt show -gqv @whistle_spin_pid)" ] && return 0
     _w=$((_w + 1))
     sleep 0.2
   done
   return 1
 }
 
-# 等 pidfile 出现（推进器是异步拉起的，setup.sh 返回时它可能还没写出来）
-spin_wait_pidfile() {
+# 等 server option 里出现推进器 PID（推进器是异步拉起的，setup.sh 返回时它可能还没写出来）
+spin_wait_pid() {
   _w=0
   while [ "$_w" -lt 25 ]; do
-    [ -f "$(whistle_spin_pidfile)" ] && return 0
+    [ -n "$(wt show -gqv @whistle_spin_pid)" ] && return 0
     _w=$((_w + 1))
     sleep 0.2
   done
@@ -84,8 +84,8 @@ spin_wait_pidfile() {
   whistle_spin_sync
 
   assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
-  [ ! -f "$(whistle_spin_pidfile)" ] || {
-    echo "off 时不该留下 pidfile"
+  [ -z "$(wt show -gqv @whistle_spin_pid)" ] || {
+    echo "off 时不该留下推进器 PID"
     return 1
   }
 }
@@ -98,8 +98,8 @@ spin_wait_pidfile() {
   whistle_spin_sync
 
   assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
-  [ ! -f "$(whistle_spin_pidfile)" ] || {
-    echo "不该留下 pidfile"
+  [ -z "$(wt show -gqv @whistle_spin_pid)" ] || {
+    echo "不该留下推进器 PID"
     return 1
   }
 }
@@ -114,7 +114,7 @@ spin_wait_pidfile() {
     return 1
   }
   whistle_spin_sync
-  [ ! -f "$(whistle_spin_pidfile)" ] || return 1
+  [ -z "$(wt show -gqv @whistle_spin_pid)" ] || return 1
 }
 
 @test "spin: 真有 running 时推进器会换帧，running 归零后自行退出" {
@@ -132,9 +132,9 @@ spin_wait_pidfile() {
     return 1
   }
 
-  # running 归零 → 下一轮循环 break → 自己退出并清 pidfile
+  # running 归零 → 下一轮循环 break → 自己退出并清掉 PID 记录
   wt set -g @whistle_count_running 0
-  spin_wait_no_pidfile || {
+  spin_wait_no_pid || {
     echo "running 归零后推进器没有退出"
     return 1
   }
@@ -155,7 +155,7 @@ spin_wait_pidfile() {
   run "$WHISTLE_ROOT/bin/tmux-whistle" --recompute
   assert_eq "$status" 0
 
-  spin_wait_pidfile || {
+  spin_wait_pid || {
     echo "--recompute 没有拉起推进器"
     return 1
   }
@@ -175,8 +175,54 @@ spin_wait_pidfile() {
   run "$WHISTLE_ROOT/scripts/setup.sh" "$(wt display -p '#{socket_path}')"
   assert_eq "$status" 0
 
-  spin_wait_pidfile || {
+  spin_wait_pid || {
     echo "setup.sh 没有拉起推进器"
     return 1
   }
+}
+
+@test "spin: 另一个 server 的 whistle_spin_stop 不会误杀本 server 的推进器" {
+  # 回归（2026-11-02 实测）：推进器的 PID 原先记在**按用户命名、不含 socket**
+  # 的 pidfile 里 —— 用户的真 server 与测试的隔离 server 共用一份。隔离 server
+  # 一 stop 就把用户真 server 的推进器 kill 掉，用户那边下一次重算又拉起来，
+  # 状态栏汇总格于是反复重画、CPU 跟着抖。PID 记进 server 自己的 option 后，
+  # 两个 server 天然隔离。
+  # shellcheck disable=SC2030,SC2031
+  export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
+  wt set -g @whistle_spin_interval 0.1
+  wt set -g @whistle_spin on
+  wt set -g @whistle_count_running 1
+
+  whistle_spin_sync
+
+  spin_wait_pid || {
+    echo "推进器没起来"
+    return 1
+  }
+  local pid
+  pid="$(wt show -gqv @whistle_spin_pid)"
+  [ -n "$pid" ] || {
+    echo "server option 里没有推进器 PID"
+    return 1
+  }
+
+  # 起第二个 server 扮演「别人的隔离 server」，让它 stop 自己的推进器。
+  local sock2="whistle-test-2-$$"
+  local path2
+  tmux -L "$sock2" -f /dev/null new-session -d -s other 2> /dev/null
+  path2="$(tmux -L "$sock2" display -p '#{socket_path}' 2> /dev/null)"
+  if [ -z "$path2" ]; then
+    echo "第二个 server 没起来，这条用例就验不到隔离性"
+    tmux -L "$sock2" kill-server 2> /dev/null || true
+    return 1
+  fi
+  WHISTLE_TMUX_SOCKET="$path2" whistle_spin_stop
+  tmux -L "$sock2" kill-server 2> /dev/null || true
+
+  # 本 server 的推进器必须毫发无损。
+  kill -0 "$pid" 2> /dev/null || {
+    echo "推进器被另一个 server 误杀了"
+    return 1
+  }
+  assert_eq "$(wt show -gqv @whistle_spin_pid)" "$pid"
 }
