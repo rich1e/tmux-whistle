@@ -77,6 +77,99 @@ sys.stdout.write(v if isinstance(v, str) else "")' "$_hk_k" 2> /dev/null
   printf '%s' "$_hk_j" | sed -n "s/.*\"$_hk_k\":\"\\([^\"]*\\)\".*/\\1/p" 2> /dev/null
 }
 
+# -- 后台任务：Stop / SubagentStop 输入里的 background_tasks -----------------
+#
+# Claude Code 从 v2.1.145 起，在 Stop / SubagentStop 的 hook 输入里带一个
+# background_tasks 数组，列出**本会话还在飞的后台工作**：
+#
+#   { id, type, status, description, command?, agent_type?, ... }
+#
+# type 是友好标签（不是内部类型名）：
+#   shell（后台 Bash）/ subagent / workflow / monitor / MCP task / teammate …
+#
+# 数组只收「已后台化且 status ∈ {running, pending}」的任务 —— 前台任务和
+# 已经结束的任务都不在里面。于是「数组里有条目」= 「还有活没干完」。
+#
+# 覆盖范围只取 shell / subagent / workflow 三类：monitor（长驻监视器）与
+# MCP task 若也算在跑，▶ 会长期亮着，反而更吵。
+#
+# 输出：<个数>|<描述>（个数为 0 时输出**空**）。描述取不到时为空，
+# 调用方退化成「后台: N 个任务」。
+#
+# 取不到字段 / 不是数组 / 老版本没有这个字段 → 一律输出空，走老路径。
+whistle_json_bg_tasks() {
+  _hk_bj="$1"
+
+  if command -v jq > /dev/null 2>&1; then
+    printf '%s' "$_hk_bj" | jq -r '
+      [ .background_tasks[]?
+        | select(.type == "shell" or .type == "subagent" or .type == "workflow")
+      ] as $t
+      | if ($t | length) == 0 then ""
+        else "\($t | length)|\(
+          ($t[0].description // $t[0].command // $t[0].agent_type // "")
+          | tostring | gsub("[\n\r]"; " ")
+        )"
+        end' 2> /dev/null
+    return 0
+  fi
+
+  if command -v python3 > /dev/null 2>&1; then
+    printf '%s' "$_hk_bj" | python3 -c \
+      'import json,sys
+try:
+    tasks = json.load(sys.stdin).get("background_tasks") or []
+    if not isinstance(tasks, list):
+        tasks = []
+    want = ("shell", "subagent", "workflow")
+    hit = [t for t in tasks if isinstance(t, dict) and t.get("type") in want]
+    if not hit:
+        sys.exit(0)
+    first = hit[0]
+    desc = first.get("description") or first.get("command") or first.get("agent_type") or ""
+    desc = " ".join(str(desc).split())
+    sys.stdout.write("%d|%s" % (len(hit), desc))
+except Exception:
+    sys.exit(0)' 2> /dev/null
+    return 0
+  fi
+
+  # 最后兜底：没有 jq 也没有 python3 时只能数个数，取不到描述。
+  # 整个载荷里 grep —— Stop 的载荷里没有 tool_input，
+  # 唯一可能误命中的是 last_assistant_message（正文里出现
+  # 字面量 "type":"shell" 的概率约等于零）。
+  _hk_bgn=$(printf '%s' "$_hk_bj" \
+    | grep -o -E '"type":[[:space:]]*"(shell|subagent|workflow)"' 2> /dev/null \
+    | wc -l | tr -d ' ')
+  case "$_hk_bgn" in
+  '' | *[!0-9]*) _hk_bgn=0 ;;
+  esac
+  [ "$_hk_bgn" -gt 0 ] || return 0
+  printf '%s|' "$_hk_bgn"
+}
+
+# whistle_bg_title <个数|描述> → 徽章上显示的标题
+#
+# 描述里可能有 |，所以按**第一个** | 切：个数恒为数字，描述拿到的
+# 是余下全部（POSIX 的 read 规矩同理）。这里用参数展开而不是 read，
+# 是为了绕开 here-doc 里反斜杠被再处理一次的老问题。
+whistle_bg_title() {
+  _hbt_n="${1%%|*}"
+  _hbt_d="${1#*|}"
+
+  case "$_hbt_n" in
+  '' | *[!0-9]*) return 0 ;;
+  esac
+
+  if [ "$_hbt_n" -gt 1 ]; then
+    printf '后台: %s 个任务' "$_hbt_n"
+  elif [ -n "$_hbt_d" ]; then
+    printf '后台: %s' "$_hbt_d"
+  else
+    printf '后台: 1 个任务'
+  fi
+}
+
 # -- 通知类型 → whistle 状态 ------------------------------------------------
 #
 # 只处理"需要用户做点什么"的类型，其余（auth_success / elicitation_complete /
@@ -162,6 +255,17 @@ whistle_hook_log() {
     _hk_val=$(_hk_log_value "$_hk_raw")
   fi
 
+  # Stop / StopFailure 额外记下后台任务数。
+  # 「在跑却显示空闲」这类问题上一次就是因为日志里什么都没有才只能靠猜 ——
+  # 有这一行，下次一眼就能看出「后台到底有没有活」。
+  _hk_bg=''
+  case "$_hk_evt" in
+  Stop | StopFailure)
+    _hk_bg=$(whistle_json_bg_tasks "$_hk_json")
+    _hk_bg=${_hk_bg%%|*}
+    ;;
+  esac
+
   _hk_lf="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
 
   # 目录不可写就放弃写日志 —— 绝不能因为写日志失败而让 hook 报错。
@@ -178,6 +282,7 @@ whistle_hook_log() {
   # 方便直接 grep 定位。
   _hk_line="$(date '+%Y-%m-%d %H:%M:%S') [$$] hook_event_name=$_hk_evt TMUX_PANE=${TMUX_PANE:-}"
   [ -n "$_hk_key" ] && _hk_line="$_hk_line $_hk_key=$_hk_val"
+  [ -n "$_hk_bg" ] && _hk_line="$_hk_line bg=$_hk_bg"
 
   { printf '%s\n' "$_hk_line" >> "$_hk_lf"; } 2> /dev/null
   return 0
@@ -260,8 +365,26 @@ Stop | StopFailure)
   _hk_body="$_hk_msg"
   _hk_msg=$(printf '%s' "$_hk_msg" | head -n 1)
 
-  _hk_cli --activity idle
-  _hk_cli --notice "$_hk_state" "$_hk_msg" --body "$_hk_body"
+  # 后台还有活没干完 → 活动态保持 running，**且不写 done 通知**。
+  #
+  # 为什么不写：有效态 = 两条通道按 rank 取高者（done 3 > running 2），
+  # 报 done 会把 running 盖掉，徽章显示成「◆ 完成」—— 正是 TODO-18 记的
+  # 「在跑却显示完成」。等后台任务结束、Claude 被叫醒再跑一轮，那一轮的
+  # Stop 里 background_tasks 已经空了，才会写 done —— 那时才是真的做完。
+  #
+  # 这一轮助手的结论文案不丢：放进**活动正文**（@whistle_body）。
+  _hk_bg=$(whistle_json_bg_tasks "$_hk_input")
+  if [ -n "$_hk_bg" ]; then
+    _hk_bg_title=$(whistle_bg_title "$_hk_bg")
+    _hk_cli --activity running --title "$_hk_bg_title" --body "$_hk_body"
+    # API 错误仍然要报：error 的 rank 高于 running，用户必须知道这一轮挂了。
+    if [ "$_hk_state" = error ]; then
+      _hk_cli --notice error "$_hk_msg" --body "$_hk_body"
+    fi
+  else
+    _hk_cli --activity idle
+    _hk_cli --notice "$_hk_state" "$_hk_msg" --body "$_hk_body"
+  fi
   ;;
 PreToolUse)
   # 任意工具调用 = agent 真的在干活。
@@ -320,9 +443,19 @@ Notification)
   ;;
 UserPromptSubmit)
   # 用户发了 prompt = agent **真的**开始干活（running 的主要点亮入口）。
-  # 上一轮的通知在这里压掉：用户就在这个 pane 里输入，显然已经看过。
+  #
+  # ⚠️ 但**后台任务完成**也是这样送达的：Claude Code 把 `<task-notification>`
+  # 包在 `<system-reminder>` 里当 user 角色消息喂回会话，于是这里也会收到一次
+  # UserPromptSubmit。那不是真人输入 —— **不能拿它当「已读」**：否则 pane 上
+  # 一条用户还没看的通知会被悄悄抹掉，而用户从没看到过它。
+  #
+  # 活动态照旧点亮（agent 确实在处理这条通知）；只跳过清通知那一步。
+  _hk_prompt=$(whistle_json_get "$_hk_input" prompt)
   _hk_cli --activity running
-  _hk_cli --read-pane "$TMUX_PANE"
+  case "$_hk_prompt" in
+  *'<task-notification>'*) ;;
+  *) _hk_cli --read-pane "$TMUX_PANE" ;;
+  esac
   ;;
 SessionStart)
   # 「会话开始了」不等于「agent 在干活」：--continue / --resume 恢复出来的

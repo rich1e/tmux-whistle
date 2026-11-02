@@ -436,12 +436,26 @@ pane_of() {
   assert_eq "$(opt '@whistle_count_running')" '1'
 }
 
-@test "activity_set idle: 子 agent 标记有效时实际写 running" {
+@test "activity_set idle: 真源存 idle，running 由推导层按标记合成" {
   local p
   p=$(pane_of)
   wt set -p -t "$p" @whistle_sub 9999999999
   whistle_activity_set idle "$p" manual '闲着'
-  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'running'
+
+  # 真源只存 agent 自己报的值 —— 绝不把「标记有效」翻译成 running 写进去
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'idle'
+
+  # 但「这个 pane 还在干活」必须看得见：推导层按标记把它撑成 running
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '1'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'running'
+
+  # 标记一清就回落 —— 这正是 2026-11-02 那盏亮了 33 分钟的 ▶ 的回归点：
+  # 早先把 running 烤进 @whistle，标记清掉后没有任何事件会再改写它。
+  wt set -p -t "$p" @whistle_sub ''
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '0'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'idle'
 }
 
 # -- 清除 ------------------------------------------------------------------

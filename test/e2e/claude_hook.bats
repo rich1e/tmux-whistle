@@ -166,6 +166,110 @@ EOF
   assert_eq "$(opt '@whistle_pending')" '1'
 }
 
+# -- 后台任务在飞（Stop 输入里的 background_tasks） --------------------------
+#
+# Claude Code 从 v2.1.145 起，Stop / SubagentStop 的 hook 输入带
+# background_tasks 数组，列出「已后台化且还在飞」的工作
+# （type 是友好标签：shell / subagent / workflow / monitor / MCP task …）。
+#
+# 主回合结束时若数组里有 shell / subagent / workflow，这一轮就**不算做完**：
+# 活动态保持 running，且**不写 done 通知** —— 有效态按 rank 取高者
+# （done 3 > running 2），报 done 会把 running 盖掉，徽章显示成「◆ 完成」，
+# 正是 TODO-18 记的「在跑却显示完成」。
+#
+# 后台任务结束、Claude 被叫醒再跑一轮时，那一轮的 Stop 里数组已经空了 ——
+# 那时才写 done、回落 idle。这是整个方案的闭环，必须钉住。
+
+@test "e2e: Stop 带后台 shell → 活动 running、不写 done 通知" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"构建已在后台启动",
+ "background_tasks":[{"id":"t1","type":"shell","status":"running",
+   "description":"xcodebuild test","command":"xcodebuild test"}]}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(optp @whistle_msg "$TMUX_PANE")" '后台: xcodebuild test'
+  # 有效态 = running（没有通知可压它）
+  assert_eq "$(pane_eff)" 'running'
+  # 通知通道一个字都不写：这一轮还没做完
+  assert_eq "$(pane_notice)" ''
+  assert_eq "$(pane_notice_msg)" ''
+  # 助手这一轮的结论文案不丢 —— 落在活动正文里
+  assert_eq "$(optp @whistle_body "$TMUX_PANE")" '构建已在后台启动'
+  # 全局 running 计数跟着走
+  assert_eq "$(opt '@whistle_count_running')" '1'
+}
+
+@test "e2e: 后台结束后下一轮 Stop → 活动 idle + 通知 done" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"构建已在后台启动",
+ "background_tasks":[{"id":"t1","type":"shell","status":"running","description":"xcodebuild test"}]}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" ''
+
+  # 后台任务结束、Claude 被叫醒再跑一轮 —— 这一轮的数组已经空了
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"构建通过",
+ "background_tasks":[]}
+EOF
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '构建通过'
+  assert_eq "$(pane_eff)" 'done'
+}
+
+@test "e2e: 后台 subagent / workflow 也算在跑" {
+  local t
+  for t in subagent workflow; do
+    feed <<EOF
+{"hook_event_name":"Stop","background_tasks":[{"id":"t1","type":"$t","status":"running","description":"bg-$t"}]}
+EOF
+    assert_eq "$(pane_act)" 'running'
+    assert_eq "$(pane_notice)" ''
+  done
+}
+
+@test "e2e: monitor / MCP task 不算在跑（长驻监视器不该长期亮着 ▶）" {
+  local t
+  for t in monitor "MCP task"; do
+    feed <<EOF
+{"hook_event_name":"Stop","last_assistant_message":"做完了",
+ "background_tasks":[{"id":"t1","type":"$t","status":"running","description":"watch"}]}
+EOF
+    assert_eq "$(pane_act)" 'idle'
+    assert_eq "$(pane_notice)" 'done'
+  done
+}
+
+@test "e2e: background_tasks 缺失或不是数组 → 照旧 idle + done" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"做完了"}
+EOF
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(pane_notice)" 'done'
+
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"做完了","background_tasks":"oops"}
+EOF
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(pane_notice)" 'done'
+}
+
+@test "e2e: 多个后台任务 → 标题显示个数；没有 description 时退回 command" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","background_tasks":[
+ {"id":"t1","type":"shell","status":"running","description":"xcodebuild"},
+ {"id":"t2","type":"shell","status":"running","description":"npm run dev"}]}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(optp @whistle_msg "$TMUX_PANE")" '后台: 2 个任务'
+
+  feed <<'EOF'
+{"hook_event_name":"Stop","background_tasks":[{"id":"t1","type":"shell","status":"running","command":"npm run dev"}]}
+EOF
+  assert_eq "$(optp @whistle_msg "$TMUX_PANE")" '后台: npm run dev'
+}
+
 # 官方文档：StopFailure 在回合因 API 错误结束时**替代** Stop 触发（两者互斥）。
 # 它是 error 状态唯一的自动来源 —— 在此之前 error 只能靠手工
 # `tmux-whistle error`，agent 因限流挂掉时状态栏毫无反应。
@@ -207,6 +311,20 @@ EOF
  "last_assistant_message":"API Error: Billing issue"}
 EOF
   assert_eq "$(opt '@whistle_pending')" '1'
+}
+
+@test "e2e: StopFailure + 后台在飞 → 活动 running，通知仍是 error" {
+  feed <<'EOF'
+{"hook_event_name":"StopFailure","error":"rate_limit",
+ "last_assistant_message":"API Error: Rate limit reached",
+ "background_tasks":[{"id":"t1","type":"shell","status":"running","description":"xcodebuild"}]}
+EOF
+  # 活动态：后台还有活，没干完
+  assert_eq "$(pane_act)" 'running'
+  # 通知态：API 错误 rank 高于 running，用户必须知道这一轮挂了
+  assert_eq "$(pane_notice)" 'error'
+  assert_eq "$(pane_notice_msg)" 'API Error: Rate limit reached'
+  assert_eq "$(pane_eff)" 'error'
 }
 
 # -- PreToolUse / SubagentStop ---------------------------------------------
@@ -312,6 +430,43 @@ EOF
   assert_eq "$(pane_act)" 'idle'
 }
 
+# 现场（2026-11-02 用户实测，dayfold 那个 pane）：
+#   主回合结束时后台子 agent 还在跑 → Stop 写的 idle 被 @whistle_sub 就地转成
+#   running 存进 @whistle；子 agent 随后结束、标记被清掉，但 @whistle 里那份
+#   running **没有任何事件再改写它** → 那盏 ▶ 亮到下一次事件为止（实测 33 分钟）。
+#
+# 修法：Stop 写什么就存什么（idle），「还有子 agent 在跑」由**推导层**按标记
+# 合成 —— 这本来就是 whistle_sub_set 注释里写的设计，@whistle 存 running
+# 等于把推导结果烤进了真源，标记一清就再也回落不了。
+
+@test "e2e: 子 agent 在跑时 Stop → 标记清掉后能回落 idle，不留永久 ▶" {
+  feed <<'EOF'
+{"hook_event_name":"PreToolUse","tool_name":"Agent"}
+EOF
+  [ -n "$(pane_sub)" ] || {
+    echo "期望写入 @whistle_sub，实际为空" >&2
+    return 1
+  }
+
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"派了两个后台 agent"}
+EOF
+  # 标记还在：活动通道由推导层撑成 running。
+  # 有效态仍是 done（rank 3 > running 2）—— Stop 的通知照写，这是老规矩。
+  assert_eq "$(pane_eff)" 'done'
+  assert_eq "$(opt '@whistle_count_running')" '1'
+
+  feed <<'EOF'
+{"hook_event_name":"SubagentStop"}
+EOF
+  assert_eq "$(pane_sub)" ''
+  # 关键断言：标记清掉后不能还自称 running。
+  # 修复前 @whistle 里烤着 Stop 时那份 running（用户读掉 ◆ 之后就是一盏
+  # 永不熄灭的 ▶，实测亮了 33 分钟）。
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(opt '@whistle_count_running')" '0'
+}
+
 @test "e2e: SubagentStop 不清通知通道" {
   feed <<'EOF'
 {"hook_event_name":"Notification","notification_type":"permission_prompt","message":"要批准"}
@@ -396,6 +551,33 @@ EOF
 EOF
   assert_eq "$(pane_act)" 'running'
   assert_eq "$(pane_notice_body)" ''
+}
+
+# 后台任务完成时，Claude Code 把 `<task-notification>` 包在 `<system-reminder>`
+# 里当 user 角色消息喂回会话 —— 于是 hook 也会收到一次 UserPromptSubmit。
+# 那不是真人输入：活动态照旧点亮，但**不能**拿它当「已读」，
+# 否则用户还没看过的那条通知会被悄悄抹掉。
+
+@test "e2e: 后台任务完成叫醒的那一轮（task-notification）不算已读" {
+  feed <<'EOF'
+{"hook_event_name":"Notification","notification_type":"agent_completed","message":"后台任务完成"}
+EOF
+  assert_eq "$(pane_notice)" 'done'
+
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit",
+ "prompt":"<system-reminder>\n<task-notification>\n<task-id>t1</task-id>\n</task-notification>\n</system-reminder>"}
+EOF
+  # agent 确实在处理这条通知 —— 活动态点亮
+  assert_eq "$(pane_act)" 'running'
+  # 但那条没人看过的通知留着
+  assert_eq "$(pane_notice)" 'done'
+
+  # 真人敲一句，才算看过
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","prompt":"继续"}
+EOF
+  assert_eq "$(pane_notice)" ''
 }
 
 @test "e2e: UserPromptSubmit 把 idle 顶成 running" {

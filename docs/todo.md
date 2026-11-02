@@ -14,7 +14,6 @@
 
 ### 缺失能力
 
-- [ ] **TODO-18** 后台 Bash（`run_in_background`）在跑时状态栏看不见
 - [ ] **TODO-19** `notification_type` 的 `plan_approval` / `idle_prompt` 未处理
 
 ### 文档缺陷
@@ -23,6 +22,8 @@
 
 ## 已修复
 
+- [x] **TODO-26** 子 agent 在跑时 Stop 把 running 烤进 `@whistle`，标记清掉后那盏 ▶ 永不熄灭
+- [x] **TODO-18** 后台 Bash（`run_in_background`）在跑时状态栏看不见
 - [x] **TODO-17** 后台/子 agent 在跑时，徽章显示「空闲」（活动与通知挤在一个状态槽里）
 - [x] **TODO-20** 测试残留的隔离 tmux server 会静默关掉 tmux-continuum 的自动恢复/自动保存
 - [x] **TODO-3** 菜单第 10 项起没有快捷键
@@ -1186,7 +1187,7 @@ ln -sfn <那一份>.txt ~/.local/share/tmux/resurrect/last
 
 ## TODO-18 · 后台 Bash（`run_in_background`）在跑时状态栏看不见
 
-⬜ 待处理
+✅ 已修复（Stop hook 输入里的 `background_tasks`）
 
 **现象**：`Bash(run_in_background: true)` 起的命令（这个项目里典型是几分钟的
 `xcodebuild test`）还在跑，状态栏却显示 `◆` 或 `◉` —— 看起来就像「在跑却显示空闲」。
@@ -1207,14 +1208,28 @@ ln -sfn <那一份>.txt ~/.local/share/tmux/resurrect/last
 `Agent`/`Task` 调用**，所有后台调用都是 `Bash(xcodebuild test)` —— 也就是说，
 用户看到的那个「还在跑的东西」很可能属于本条目，而不是 TODO-17。
 
-**调查线索**：Claude Code v2.1.304 的 hook schema 里还有这些**未订阅**的事件 ——
-`SubagentStart`、`TaskCreated` / `TaskCompleted`（后台任务生命周期）、`TeammateIdle`。
-`run_in_background` 是 `tool_input` 里的**嵌套字段**，而 `whistle_json_get` 只取
-顶层扁平字符串，取嵌套值需要额外实现（jq / python3 分支已有，扩展取值路径即可）。
+**修复**（2026-11-02）：Claude Code 从 **v2.1.145** 起，在 **Stop / SubagentStop 的 hook
+输入**里带 `background_tasks` 数组（本机 v2.1.304 已在二进制里核对过 payload 构造）。
+数组只收「**已后台化且 `status ∈ {running, pending}`**」的任务，条目形如
+`{ id, type, status, description, command?, agent_type? }`，`type` 是友好标签：
+`shell`（后台 Bash）/ `subagent` / `workflow` / `monitor` / `MCP task` / `teammate` …
 
-**修复方向**：先开 `@whistle_debug on`，跑一次后台 `xcodebuild`，从
-`${TMPDIR:-/tmp}/tmux-whistle-hooks.log` 里确认**那一刻到底来了哪些事件**，
-再按事实接线 —— **不要凭事件名猜语义**。
+于是「主回合结束时数组里有 `shell` / `subagent` / `workflow`」就等于「**还有活没干完**」：
+`hooks/claude-code.sh` 的 Stop 分支把活动通道写成 `running`（标题「后台: <描述>」），
+并且**不写 `done` 通知** —— 有效态按 rank 取高者（`done 3 > running 2`），报 done 会
+把 running 盖掉、徽章显示成 `◆`，正是本条目的现象。后台任务结束、Claude 被叫醒再跑一轮
+时，那一轮的 Stop 里数组已经空了 —— 那时才写 done、回落 idle。
+
+**更正一条错误线索**：`TaskCreated` / `TaskCompleted` **不是**后台任务生命周期事件 ——
+它们是 todo 任务清单（`TaskCreate` 工具）的事件，与后台 Bash 无关。
+
+**顺带修的配套问题**：后台任务结束时 Claude Code 把 `<task-notification>` 包成 user 角色
+消息喂回会话，hook 会因此收到一次 `UserPromptSubmit`。那**不是真人输入** —— 活动态照旧
+点亮，但不再拿它清通知（否则用户还没看过的 `◆` 会被悄悄抹掉）。
+
+**残留限制（已知，用户决定不加 TTL 兜底）**：后台进程被用户手工 kill、Claude 又没被
+叫醒时，那盏 `▶` 会一直亮到下一次事件。Claude Code 自己被杀时 pane 随之消失，pane
+option 一起消失，不留残值（除非开了 `remain-on-exit`）。
 
 ---
 
@@ -1429,3 +1444,29 @@ idle_prompt         quota_auto_resume_fired   plugin_notification
 （`UserPromptSubmit.source` 是另一套：`user | sdk | system | loop_wakeup |
 schedule_wakeup | poll_event`，两者不同源，不要混用。）
 
+
+---
+
+## TODO-26 · 子 agent 在跑时 Stop 把 running 烤进 `@whistle`，标记清掉后那盏 ▶ 永不熄灭
+
+✅ 已修复（真源只存上报值，推导结果不进 `@whistle`）
+
+**现象**：一个 pane 的 Claude Code 早就停在提示符前（菜单里那一项只有一个光秃秃的
+`▶ 运行中`、没有任何消息），状态栏却一直把它算在 running —— 2026-11-02 实测亮满
+33 分钟，直到用户去动那个会话才被下一次事件改掉。
+
+**触发**：主回合结束时**后台子 agent 还在跑**（`PreToolUse(Agent)` 写下的
+`@whistle_sub` 还没过期），随后子 agent 结束、`SubagentStop` 清掉标记 ——
+从此再没有事件碰过那个 pane。
+
+**原因**：`whistle_activity_set` 写 idle 时若 `@whistle_sub` 仍有效，会把状态
+**改写成 running 存进 `@whistle`**。标记只是「推导层的输入」，写进真源就等于把推导
+结果烤死：标记后来被清掉（或 TTL 到期）时，推导层本该回落 idle，可它读到的
+`@whistle` 已经是 running —— 而推导层只升级、不降级（插件不猜），于是那盏 ▶
+再没人灭。`80ca3a1` 把 `SubagentStop` 的 `--activity idle` 去掉之后，这条改写
+失去了唯一的纠正者。
+
+**修法**：`whistle_activity_set` 写什么存什么；「还有子 agent 在跑」只由推导层
+（`whistle_resolve_idle_panes` 读 `@whistle_sub` 的时间戳）合成。标记一清 / TTL
+一到，推导层立刻回落 —— 自愈，TTL 这道安全阀从此才真的生效。
+回归用例：`test/e2e/claude_hook.bats` 的「子 agent 在跑时 Stop → 标记清掉后能回落 idle」。

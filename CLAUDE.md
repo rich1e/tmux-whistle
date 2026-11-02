@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 489 项测试（88 单测 + 340 集成 + 61 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 498 项测试（88 单测 + 339 集成 + 71 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -176,6 +176,12 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
 resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。
 现在映射成 `idle`（`source=compact` 除外 —— 那是轮中压缩，agent 还在干活，原样不动）。
 
+**带 `<task-notification>` 的 `UserPromptSubmit` 不算「已读」**：后台任务结束时
+Claude Code 把通知包成 user 角色消息喂回会话，于是 hook 也会收到一次
+`UserPromptSubmit`。活动态照旧点亮（agent 确实在处理它），但**跳过 `--read-pane`** ——
+那不是真人输入，拿它当已读会把用户还没看过的 `◆` 悄悄抹掉（`hooks/claude-code.sh`
+的 `UserPromptSubmit` 分支按 prompt 里有没有 `<task-notification>` 判断）。
+
 **活动与通知是两条正交通道，永远不会互相顶掉**：`@whistle`（活动）与
 `@whistle_notice`（通知）是两个独立状态槽，写入点也分开
 （`whistle_activity_set` / `whistle_notice_set`）。这条不是可有可无的洁癖 ——
@@ -216,11 +222,30 @@ agent 显示成「空闲」，**全程零报错**。新增任何一种「要告�
 `lib/spin.sh` 每 `@whistle_recompute_every` 帧触发的一次全局重算 ——
 挂在推进器上不是偶然，它**只在 `count_running > 0` 时活着**，恰好就是需要自愈的场景。
 
+**`@whistle` 只存 agent 自己报的值，绝不把「标记有效」翻译成 running 写进去**：
+「还有子 agent 在跑」由**推导层**按 `@whistle_sub` 合成，写进真源就等于把推导结果
+烤死 —— Stop 时子 agent 还在跑就存下 running，子 agent 结束、标记被清掉之后，
+那份 running **没有任何事件会再改写它**，于是用户读掉 `◆` 之后就是一盏永不熄灭的
+`▶`（2026-11-02 实测：dayfold 的一个 pane 亮了 33 分钟）。存 idle 的话，标记一清或
+TTL 一到，推导层立刻回落 —— 自愈。判据链是「真源只放上报值 / 派生值放推导结果」。
+
 **`SubagentStop` 只清标记，绝不写活动态。** 子 agent 结束时，主 agent 那一轮
 通常**还在跑**（它派了子 agent、正等结果）—— 早先这里写 idle，把正在干活的
 主 agent 标成「空闲」，状态栏与菜单都显示错且全程零报错（2026-11-02 实测）。
 活动态的收尾只有两个出口：主回合结束的 `Stop` 事件写 idle；`SessionEnd` 写 gone。
 「主回合已结束、子 agent 还在跑」由标记兜底（推导层把活动态钉成 running）。
+
+**后台命令在飞时这一轮不算「做完」**：Claude Code v2.1.145 起，`Stop` / `SubagentStop`
+的 hook 输入带 `background_tasks` 数组，只收「**已后台化且 `status ∈ {running, pending}`**」
+的任务（`type` 是友好标签：`shell` / `subagent` / `workflow` / `monitor` / `MCP task` …）。
+`hooks/claude-code.sh` 的 Stop 分支看到 `shell` / `subagent` / `workflow` 就把活动态写成
+`running`（标题「后台: <描述>」）并**不写 `done` 通知** —— 有效态按 rank 取高者
+（`done 3 > running 2`），报 done 会把 running 盖掉、徽章显示成 `◆`，正是 TODO-18
+记的现场。后台任务结束、Claude 被叫醒再跑一轮时，那一轮的数组已经空了，才写 done。
+`monitor` / `MCP task` 刻意不算（长驻监视器会让 `▶` 长期亮着）。
+**没有「后台任务结束」这个 hook 事件**，靠的就是那一轮叫醒后的 `Stop`；
+已知限制：后台进程被手工 kill 且 Claude 没被叫醒时，`▶` 会留到下一次事件。
+`TaskCreated` / `TaskCompleted` **不是**后台任务事件（那是 todo 清单），别接错。
 
 **带 `|` 的行要按固定列数读**：POSIX 的 `read` 在字段数多于变量数时，会把余下的
 （含分隔符）全塞进**最后一个**变量。所以「消息」必须在**末位**（它拿到的是余下的

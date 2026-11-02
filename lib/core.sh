@@ -641,8 +641,17 @@ whistle_desktop_jump() {
 # **绝不碰通知通道**：活动与通知是两条正交的通道，
 # 写 idle（SessionStart 恢复会话）不能替用户把没读的 ◆ / ◔ / ⚠ 抹掉。
 #
-# **写 idle 时若子 agent 标记仍有效，实际写 running** —— 子 agent 还在跑，
-# 这个 pane 就还在干活，显示空闲是失真。
+# **写 idle 时就存 idle —— 不要因为子 agent 标记有效就改写成 running。**
+#
+# 「还有子 agent 在跑」由**推导层**合成（whistle_resolve_idle_panes 读
+# @whistle_sub 的过期时间戳）。把它写进 @whistle 等于把推导结果烤进真源：
+#   Stop 时子 agent 还在跑 → 存下 running → 子 agent 结束、标记被清掉
+#   → 那份 running 没有任何事件再改写 → 一盏永不熄灭的 ▶。
+# 2026-11-02 实测（dayfold）：用户读掉 ◆ 之后，那盏 ▶ 亮了 33 分钟。
+# 存 idle 的话，标记一清、或 TTL 一到，推导层立刻回落 idle —— 自愈。
+#
+# 这与 whistle_sub_set 注释里的设计一致：@whistle 只放「agent 自己报的」，
+# 标记合成出来的 running 只活在派生值里。
 #
 # stdout = 目标 pane id。诊断信息一律走 stderr，方便调用方做命令替换。
 # 重算与投递由调用方编排（CLI），本函数只负责写。
@@ -660,24 +669,6 @@ whistle_activity_set() {
   if [ "$_as_state" != running ] && [ "$_as_state" != idle ] && [ "$_as_state" != gone ]; then
     printf 'tmux-whistle: 未知活动态 [%s]（可选：running idle gone）\n' "$_as_state" >&2
     return 1
-  fi
-
-  # 子 agent 还在跑 → idle 实际写成 running
-  #
-  # @whistle_sub 存的是**过期时间戳**，所以判据是「现在还没过那个点」。
-  # 0 = 永不过期（TTL 配成 0）。
-  if [ "$_as_state" = idle ]; then
-    _as_sub=$(whistle_tmux show -pqv -t "$_as_pane" @whistle_sub 2> /dev/null) || _as_sub=''
-    case "$_as_sub" in
-    '' | *[!0-9]*) ;;
-    0) _as_state=running ;;
-    *)
-      _as_now=$(whistle_now)
-      if [ "$_as_now" -lt "$_as_sub" ]; then
-        _as_state=running
-      fi
-      ;;
-    esac
   fi
 
   whistle_tmux set -p -t "$_as_pane" @whistle "$_as_state" \

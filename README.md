@@ -318,7 +318,7 @@ session 里的细节"。
 
 | 状态 | 徽章 | 计入 ⚑ | 什么时候出现 |
 |---|---|---|---|
-| `running` | `▶` | 否 | 主 agent 正在干活（发了一条 prompt 之后），**或这个 pane 里有后台/子 agent 在跑** |
+| `running` | `▶` | 否 | 主 agent 正在干活（发了一条 prompt 之后），**或这个 pane 里有后台命令（`run_in_background`）/ 子 agent / workflow 在跑** —— 后一种情况这一轮**不报完成**，等后台结束、agent 被叫醒跑完那一轮才报 `◆` |
 | `idle` | `◉` | 否 | 进程在、但没在干活：刚敲 `claude` 或 `--continue` 恢复，停在提示符前等你输入 |
 
 **通知通道 —— 有没有事等你**
@@ -355,13 +355,14 @@ session 里的细节"。
 已读。读完一条 `done` 之后，那一格会被清空；但只要 agent 还活着（前台进程还在），
 按进程发现会把它算回 `◉` —— 所以「活着但在等」这件事不会因为你读过就消失。
 
-> **已知限制：后台 Bash 看不见。** 插件只认 Claude Code 的 hook 事件，而
-> `Bash(run_in_background: true)` 起的后台命令（比如几分钟的 `xcodebuild test`）
-> **不产生任何本插件订阅的事件**。所以「主 agent 一轮结束了、后台命令还在跑」时，
-> 徽章会落 `◆` / `◉`，而那个命令其实还在转 —— 看起来就像「在跑却显示空闲」。
-> 后台/子 **agent** 能看见（`PreToolUse` 的 `Agent`/`Task` 调用会点亮 `▶`），
-> 后台 **Bash** 目前看不见。要对上这个场景，先打开 `@whistle_debug on` 看
-> `${TMPDIR:-/tmp}/tmux-whistle-hooks.log` 里那一刻到底来了哪些事件。
+> **后台命令也算「在跑」。** Claude Code 从 v2.1.145 起在 `Stop` 的 hook 输入里带
+> `background_tasks`，只收「已后台化且还在飞」的任务。所以
+> `Bash(run_in_background: true)` 起的命令（比如几分钟的 `xcodebuild test`）还在跑时，
+> 主回合结束**不报** `◆` —— 徽章停在 `▶ 后台: <描述>`，等后台任务结束、agent 被叫醒
+> 跑完那一轮才写 `◆`。后台 **subagent / workflow** 同样算在跑；
+> `monitor` / MCP task 刻意不算（长驻监视器会让 `▶` 一直亮着）。
+>
+> **残留限制**：后台进程被手工 kill、Claude 又没被叫醒时，那盏 `▶` 会留到下一次事件。
 
 ### 怎么响应
 
@@ -384,13 +385,16 @@ hooks 装好后自动工作：
 | 发一条 prompt | `UserPromptSubmit` hook | `▶`，不计入 ⚑ |
 | agent 在调工具（含 plan 批准后继续跑） | `PreToolUse` hook | `▶`（保持亮着） |
 | agent 派了后台 / 子 agent | `PreToolUse`（`Agent`/`Task`） | `▶` 一直亮到那个 agent 结束 —— 哪怕主 agent 已经交付 |
-| agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示（活动转 `◉`，但 `◆` 优先显示） |
+| agent 跑完一轮 | `Stop` hook | `◆` + ⚑ + 提示（活动转 `◉`，但 `◆` 优先显示）；**后台还有活在飞时例外**：`▶` 继续亮着、这一轮不报 `◆` |
 | agent 要你批准工具调用 | `Notification/permission_prompt` | `◔` + ⚑ + 提示 |
 | 回合因 API 错误中断 | `StopFailure` hook | `⚠` + ⚑ + 提示（消息就是错误文本） |
 | 退出 Claude Code | `SessionEnd` hook | `▶` / `◉` 熄灭（`◆`/`◔`/`⚠` 保留，等你处理） |
 
-⚠️ **后台 `Bash` 不在上表里** —— 用 `run_in_background: true` 起的后台命令不产生
-本插件订阅的任何事件，那个 pane 会显示 `◆` / `◉` 而命令还在跑。见下方「已知限制」。
+✅ **后台 `Bash` 也算在跑** —— `run_in_background: true` 起的命令还在跑时，主回合结束
+**不会**报 `◆`：徽章停在 `▶ 后台: <描述>`，等后台任务结束、agent 被叫醒跑完那一轮才报。
+依据是 `Stop` hook 输入里的 `background_tasks`（Claude Code v2.1.145+，只收已后台化且
+还在跑的任务）。残留限制：后台进程被手工 kill、agent 又没被叫醒时，那盏 `▶` 会留到
+下一次事件才被改掉。
 
 ### 场景二：任何 agent / 脚本
 
