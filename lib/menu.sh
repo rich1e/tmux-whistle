@@ -430,10 +430,24 @@ whistle_menu_item_text() {
   whistle_menu_clip "$_mit_text" "${7:-80}"
 }
 
+# whistle_menu_palette_pick <状态> <调色板文本> → "<图标> <SGR 前景>"（纯 shell，不 fork）
+whistle_menu_palette_pick() {
+  _mpp_state=${1:-}
+  while IFS='|' read -r _mpp_s _mpp_ic _mpp_fg; do
+    [ "$_mpp_s" = "$_mpp_state" ] || continue
+    printf '%s %s' "$_mpp_ic" "$_mpp_fg"
+    return 0
+  done << EOF
+${2:-}
+EOF
+  printf ' \033[39m'
+}
+
 # whistle_menu_render_item <模型行> <选中: 1/0> <列数> → 一行的 ANSI 文本（不含换行）
 #
 # 只画一行，不碰屏幕其余部分。方向键移动高亮时用这个：整屏重绘要清屏并把每一行
 # 重新 clip 一遍（26 项就是 26 个 awk 子进程），在慢终端上是肉眼可见的卡顿。
+# UI 里已经取好调色板（_mu_pal）时直接查表，连 tmux 都不用调。
 whistle_menu_render_item() {
   _mri_line=${1:-}
   _mri_sel=${2:-0}
@@ -442,7 +456,11 @@ whistle_menu_render_item() {
 $_mri_line
 EOF
   [ "$_mri_kind" = item ] || return 0
-  _mri_style=$(whistle_menu_item_style "$_mri_eff")
+  if [ -n "${_mu_pal:-}" ]; then
+    _mri_style=$(whistle_menu_palette_pick "$_mri_eff" "$_mu_pal")
+  else
+    _mri_style=$(whistle_menu_item_style "$_mri_eff")
+  fi
   _mri_icon=${_mri_style%% *}
   _mri_fg=${_mri_style#* }
   _mri_plain=$(whistle_menu_item_text "$_mri_key" "$_mri_icon" "$_mri_eff" \
@@ -452,6 +470,49 @@ EOF
   else
     printf '%s%s\033[0m' "$_mri_fg" "$_mri_plain"
   fi
+}
+
+# whistle_menu_palette → 每行 "<状态>|<图标>|<SGR 前景>"，覆盖五个状态
+#
+# 一次 tmux 调用取齐十项配置（见 core.sh 的 whistle_conf_bulk）：菜单打开时的
+# 首帧延迟几乎全在这些配置查询上，逐项查就是十次进程。
+whistle_menu_palette() {
+  _mpal_raw=$(whistle_conf_bulk \
+    @whistle_icon_running @whistle_color_running \
+    @whistle_icon_idle @whistle_color_idle \
+    @whistle_icon_done @whistle_color_done \
+    @whistle_icon_wait @whistle_color_wait \
+    @whistle_icon_error @whistle_color_error)
+  _mpal_icon_running='' _mpal_icon_idle='' _mpal_icon_done=''
+  _mpal_icon_wait='' _mpal_icon_error=''
+  _mpal_color_running='' _mpal_color_idle='' _mpal_color_done=''
+  _mpal_color_wait='' _mpal_color_error=''
+  while IFS='|' read -r _mpal_opt _mpal_val; do
+    case "$_mpal_opt" in
+    @whistle_icon_running) _mpal_icon_running=$_mpal_val ;;
+    @whistle_icon_idle) _mpal_icon_idle=$_mpal_val ;;
+    @whistle_icon_done) _mpal_icon_done=$_mpal_val ;;
+    @whistle_icon_wait) _mpal_icon_wait=$_mpal_val ;;
+    @whistle_icon_error) _mpal_icon_error=$_mpal_val ;;
+    @whistle_color_running) _mpal_color_running=$_mpal_val ;;
+    @whistle_color_idle) _mpal_color_idle=$_mpal_val ;;
+    @whistle_color_done) _mpal_color_done=$_mpal_val ;;
+    @whistle_color_wait) _mpal_color_wait=$_mpal_val ;;
+    @whistle_color_error) _mpal_color_error=$_mpal_val ;;
+    esac
+  done << EOF
+$_mpal_raw
+EOF
+  printf '%s|%s|%s\n' running "$_mpal_icon_running" \
+    "$(whistle_menu_ansi_fg "$_mpal_color_running")"
+  printf '%s|%s|%s\n' idle "$_mpal_icon_idle" \
+    "$(whistle_menu_ansi_fg "$_mpal_color_idle")"
+  printf '%s|%s|%s\n' 'done' "$_mpal_icon_done" \
+    "$(whistle_menu_ansi_fg "$_mpal_color_done")"
+  printf '%s|%s|%s\n' wait "$_mpal_icon_wait" \
+    "$(whistle_menu_ansi_fg "$_mpal_color_wait")"
+  printf '%s|%s|%s\n' error "$_mpal_icon_error" \
+    "$(whistle_menu_ansi_fg "$_mpal_color_error")"
 }
 
 # whistle_menu_render <selected window id> <columns> ← 菜单模型
@@ -470,19 +531,35 @@ whistle_menu_render() {
   _mu_model=$(cat)
   [ -n "$_mu_model" ] || return 0
 
-  # 五态的图标与颜色在一帧里是固定的，先各取一次。
-  # 否则 26 项就是 52 次 tmux 配置查询 —— 菜单每约 0.5 秒可能重绘一次，
-  # 这部分开销纯粹是重复的（评审 finding #11）。
-  _mu_ic_running=$(whistle_menu_state_icon running)
-  _mu_ic_idle=$(whistle_menu_state_icon idle)
-  _mu_ic_done=$(whistle_menu_state_icon 'done')
-  _mu_ic_wait=$(whistle_menu_state_icon wait)
-  _mu_ic_error=$(whistle_menu_state_icon error)
-  _mu_fg_running=$(whistle_menu_ansi_fg "$(whistle_menu_state_color running)")
-  _mu_fg_idle=$(whistle_menu_ansi_fg "$(whistle_menu_state_color idle)")
-  _mu_fg_done=$(whistle_menu_ansi_fg "$(whistle_menu_state_color 'done')")
-  _mu_fg_wait=$(whistle_menu_ansi_fg "$(whistle_menu_state_color wait)")
-  _mu_fg_error=$(whistle_menu_ansi_fg "$(whistle_menu_state_color error)")
+  # 五态的图标与颜色在一帧里是固定的，用一次 tmux 调用取齐（whistle_menu_palette）。
+  # UI 已经把调色板导出到 _mu_pal 时直接复用，整帧重绘不再多一次 tmux。
+  [ -n "${_mu_pal:-}" ] || _mu_pal=$(whistle_menu_palette)
+  while IFS='|' read -r _mu_st _mu_ic _mu_fg; do
+    case "$_mu_st" in
+    running)
+      _mu_ic_running=$_mu_ic
+      _mu_fg_running=$_mu_fg
+      ;;
+    idle)
+      _mu_ic_idle=$_mu_ic
+      _mu_fg_idle=$_mu_fg
+      ;;
+    done)
+      _mu_ic_done=$_mu_ic
+      _mu_fg_done=$_mu_fg
+      ;;
+    wait)
+      _mu_ic_wait=$_mu_ic
+      _mu_fg_wait=$_mu_fg
+      ;;
+    error)
+      _mu_ic_error=$_mu_ic
+      _mu_fg_error=$_mu_fg
+      ;;
+    esac
+  done << EOF
+$_mu_pal
+EOF
 
   while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
     case "$_mu_kind" in
@@ -620,6 +697,31 @@ whistle_menu_paint_row() {
   whistle_menu_render_item "$_mpr_line" "${2:-0}" "${_mu_columns:-80}"
 }
 
+# whistle_menu_move <up|down>
+#
+# 移动高亮：更新选中身份，然后**只重画旧行与新行**（不清屏、不重排整屏）。
+# 到边界时什么都不做 —— 不回绕，方向键与 j/k 共用这一处。
+whistle_menu_move() {
+  case "${1:-}" in
+  up)
+    [ "$_mu_index" -gt 1 ] || return 0
+    _mm_new=$((_mu_index - 1))
+    ;;
+  down)
+    [ "$_mu_index" -lt "${_mu_count:-0}" ] || return 0
+    _mm_new=$((_mu_index + 1))
+    ;;
+  *) return 0 ;;
+  esac
+  _mm_old=$_mu_index
+  _mu_index=$_mm_new
+  _mu_selection=$(printf '%s\n' "$_mu_model" \
+    | whistle_menu_reconcile_selection '' "$_mu_index")
+  _mu_selected=${_mu_selection%%|*}
+  whistle_menu_paint_row "$_mm_old" 0
+  whistle_menu_paint_row "$_mu_index" 1
+}
+
 # whistle_menu_ui：display-popup -E 内的完整交互进程。
 #
 # 状态会自己变：agent 跑完、子 agent 结束、通知到达，菜单都得跟着改。
@@ -640,6 +742,11 @@ whistle_menu_ui() {
   '' | *[!0-9]*) _mu_index=1 ;;
   esac
   _mu_count=$(printf '%s\n' "$_mu_model" | grep -c '^item|')
+
+  # 调色板只跟配置有关，整个菜单生命周期取一次就够：单行重绘靠它免掉 tmux 调用，
+  # 整帧绘制也直接复用（导出后子 shell 里的 render 能读到）。
+  _mu_pal=$(whistle_menu_palette)
+  export _mu_pal
 
   _mu_terminal_state=$(stty -g 2> /dev/null) || return 1
   [ -n "$_mu_terminal_state" ] || return 1
@@ -708,26 +815,11 @@ whistle_menu_ui() {
       return 0
       ;;
     up)
-      if [ "$_mu_index" -gt 1 ]; then
-        _mu_prev_index=$_mu_index
-        _mu_index=$((_mu_index - 1))
-        _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' "$_mu_index")
-        _mu_selected=${_mu_selection%%|*}
-        # 只重画旧行与新行：内容没变，不必清屏重排整屏。
-        whistle_menu_paint_row "$_mu_prev_index" 0
-        whistle_menu_paint_row "$_mu_index" 1
-      fi
+      whistle_menu_move up
       continue
       ;;
     down)
-      if [ "$_mu_index" -lt "$_mu_count" ]; then
-        _mu_prev_index=$_mu_index
-        _mu_index=$((_mu_index + 1))
-        _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' "$_mu_index")
-        _mu_selected=${_mu_selection%%|*}
-        whistle_menu_paint_row "$_mu_prev_index" 0
-        whistle_menu_paint_row "$_mu_index" 1
-      fi
+      whistle_menu_move down
       continue
       ;;
     enter)
@@ -742,7 +834,16 @@ whistle_menu_ui() {
     esac
 
     _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_select_key "$_mu_shortcut")
-    [ -n "$_mu_selection" ] || continue
+    if [ -z "$_mu_selection" ]; then
+      # j / k：没被分配成快捷键时按 vim 习惯上下移动。
+      # 菜单项够多（≥19 项时 j、≥20 项时 k）时这两个字母已经是快捷键，
+      # 那就照旧跳转 —— 同一个键在同一份列表里只做一件事。
+      case "$_mu_shortcut" in
+      j) whistle_menu_move down ;;
+      k) whistle_menu_move up ;;
+      esac
+      continue
+    fi
     _mu_wid=${_mu_selection%%|*}
     _mu_rest=${_mu_selection#*|}
     _mu_pid=${_mu_rest%%|*}

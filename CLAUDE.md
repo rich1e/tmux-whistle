@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 485 项测试（87 单测 + 338 集成 + 60 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 486 项测试（87 单测 + 338 集成 + 61 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -275,6 +275,14 @@ option 里的 PID 会残留，OS 复用 PID 之后 `kill -0` 对一个**无关�
 **菜单只有「模型变了」才整帧重绘；方向键移动只重画旧行与新行**
 （`whistle_menu_paint_row`）。整帧重绘会清屏并把每一行重新 clip，26 项就是 26 个
 awk 子进程 —— 每按一次方向键都重来一遍，慢终端上肉眼可见地卡。
+
+**`j` / `k` 在没被分配成快捷键时上下移动**（≤18 项时 `j`、≤19 项时 `k`）；
+一旦这两项确实分到了 `j` / `k` 快捷键就照旧跳转 —— 同一个键在同一份列表里只做一件事。
+`q` 不参与退出，理由见上。
+
+**菜单首帧只调一次 tmux 取配置**（`whistle_menu_palette` → `whistle_conf_bulk`，
+一次 `show -g` 拿齐五态图标与颜色）。逐项 `whistle_conf` 是 10 次进程，popup 打开
+时的延迟几乎全在这里；调色板整个菜单生命周期取一次，行内重绘直接查表、不调 tmux。
 
 ## 测试约定
 

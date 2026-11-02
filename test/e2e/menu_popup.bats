@@ -76,6 +76,16 @@ run_popup() {
   assert_contains "$(cat "$EXPECT_LOG")" 'POPUP_SHORTCUT_OK'
 }
 
+@test "menu popup e2e: 快捷键未占用时 j/k 上下移动" {
+  # 两项时 j/k 都还没被分配成快捷键 → 按 vim 习惯移动；j 到第 2 项回车跳过去。
+  seed_two_idle
+
+  run_popup jk-down-enter JK_OK
+
+  assert_eq "$(wt display -p -t main '#{window_id}')" "$W2"
+  assert_contains "$(cat "$EXPECT_LOG")" 'POPUP_JK_OK'
+}
+
 @test "menu popup e2e: 不足 26 项时 q 不退出，之后仍能 Down+Enter" {
   seed_two_idle
 

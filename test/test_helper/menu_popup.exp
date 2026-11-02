@@ -64,6 +64,16 @@ switch -- $env(WHISTLE_MENU_SCENARIO) {
     shortcut-second {
         send -- "2"
     }
+    jk-down-enter {
+        # vim 习惯：项数不足时 j/k 没被分配成快捷键，应当上下移动。
+        send -- "j"
+        wait_selected 2
+        send -- "k"
+        wait_selected 1
+        send -- "j"
+        wait_selected 2
+        send -- "\r"
+    }
     q-down-enter {
         send -- "q"
         send -- "${esc}\[B"

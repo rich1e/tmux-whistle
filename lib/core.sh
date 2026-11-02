@@ -202,6 +202,43 @@ whistle_conf() {
   whistle_conf_default "$1"
 }
 
+# whistle_conf_bulk <option...> → 每行 "<option>|<值>"，只 fork 一次 tmux。
+#
+# 菜单渲染一次要取十来项配置（五态图标 + 五态颜色），逐项 whistle_conf 就是
+# 十来次 tmux 进程 —— popup 打开时肉眼可见地慢。这里用一次 `show -g` 取全量：
+# 输出里没有的 option 说明用户没配 → 回落 WHISTLE_DEFAULTS（纯 shell 查表，不 fork）；
+# 显式设成空串的会输出成 '' 或 ""，剥掉引号后保持为空（用户就是不要这个图标）。
+whistle_conf_bulk() {
+  _cb_all=$(whistle_tmux show -g 2> /dev/null) || _cb_all=''
+  for _cb_name; do
+    _cb_val=''
+    while IFS= read -r _cb_line; do
+      case "$_cb_line" in
+      "$_cb_name "*) _cb_val=${_cb_line#"$_cb_name "} ;;
+      *) continue ;;
+      esac
+      break
+    done << EOF
+$_cb_all
+EOF
+    if [ -z "$_cb_val" ]; then
+      while IFS= read -r _cb_line; do
+        case "$_cb_line" in
+        "$_cb_name "*) _cb_val=${_cb_line#"$_cb_name "} ;;
+        *) continue ;;
+        esac
+        break
+      done << EOF
+$WHISTLE_DEFAULTS
+EOF
+    fi
+    case "$_cb_val" in
+    "''" | '""') _cb_val='' ;;
+    esac
+    printf '%s|%s\n' "$_cb_name" "$_cb_val"
+  done
+}
+
 # -- 纯函数（§4.0：不碰 tmux） ---------------------------------------------
 
 # whistle_sanitize <任意字符串> [最大长度]

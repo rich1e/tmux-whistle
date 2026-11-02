@@ -39,6 +39,17 @@ setup() {
         esac
     }
     # shellcheck disable=SC2329 # 由渲染器间接调用
+    # 真实实现用一次 tmux 调用取齐十项配置；L1 里由上面两个假实现拼出来，
+    # 保持测试完全不碰 tmux。
+    whistle_menu_palette() {
+        local _s
+        for _s in running idle 'done' wait error; do
+            printf '%s|%s|%s\n' "$_s" \
+                "$(whistle_menu_state_icon "$_s")" \
+                "$(whistle_menu_ansi_fg "$(whistle_menu_state_color "$_s")")"
+        done
+    }
+    # shellcheck disable=SC2329 # 由渲染器间接调用
     whistle_state_label() {
         case "$1" in
         running) printf '运行中' ;;
