@@ -41,7 +41,7 @@ WHISTLE_BIN_DIR=$(CDPATH='' cd -- "$(dirname -- "$_whistle_self")" && pwd)
 WHISTLE_LIB_DIR=$(CDPATH='' cd -- "$WHISTLE_BIN_DIR/../lib" && pwd)
 unset _whistle_self _whistle_link
 
-for _m in core status-line deliver; do
+for _m in core status-line deliver menu; do
   if [ ! -f "$WHISTLE_LIB_DIR/$_m.sh" ]; then
     printf 'tmux-whistle: 缺少 lib/%s.sh（安装不完整？）\n' "$_m" >&2
     exit 1
@@ -444,90 +444,6 @@ EOF
 
 # -- 菜单 / 跳转 -----------------------------------------------------------
 
-# display-menu 的键位是单字符：1-9 之后接字母，最多 26 项（9 + 17 = a..q）
-#
-# 两个坑叠在一起，症状相同（第 10 项起 key 为空）：
-#   1. 位置算成了 $1 - 10，第 10 项得到 0 —— cut 不接受 0
-#   2. 算术展开后面多写了一个 ')'，cut 实际收到的是 "1)" 而不是 "1"
-# 两者都让 cut 报错；stderr 被 2>/dev/null 吞掉，key 变成空串。
-# 空 key 在 display-menu 里**合法**（表示"无快捷键"），所以菜单照常弹出、
-# 只是第 10 项往后全都不能用键选中 —— 不报错、不崩溃，只能靠断言抓。
-#
-# 位置单独算进变量：嵌套三层 $() 加引号里再塞算术，少一个括号看不出来。
-whistle_menu_key() {
-  case "$1" in
-  [1-9]) printf '%s' "$1" ;;
-  *)
-    _mk_pos=$(($1 - 9))
-    printf '%s' "$(printf '%s' abcdefghijklmnopqrstuvwxyz | cut -c "$_mk_pos" 2> /dev/null)"
-    ;;
-  esac
-}
-
-# whistle_menu_overflow <被藏起来的项数> → 菜单里那条灰字提示的名字
-#
-# display-menu 每项一个单字符快捷键：9 个数字 + a~q 17 个字母 = 26 项是硬上限。
-# 截断本身合理，问题是**静默** —— 状态栏写着 ⚑28、菜单里只有 26 项，
-# 用户会以为自己记错了，而不是「哦有条目被折叠了」。
-#
-# 提示项以 '-' 开头：tmux 绘制时会剥掉那个 '-' 并置暗（disabled 语义），
-# 选中与鼠标路径都会跳过它；快捷键传空串，命令是空转。
-# **快捷键必须为空** —— 非空的话用户按那个键会选中一条不可跳转的项，
-# 行为上就退化成了「点了没反应」，比原来的静默截断更难查。
-whistle_menu_overflow() {
-  printf -- '- 还有 %s 项未显示，用 %s list 查看' "${1:-0}" "$WHISTLE_PROG"
-}
-
-# whistle_menu_state_icon <状态> → 菜单里该状态的前缀图标
-#
-# 与状态栏用同一套图标与颜色，两个界面看起来才是一回事：
-#   done ◆ / wait ◔ / error ⚠ / running ▶ / idle ◉
-#
-# running 用静态 ▶ 而不是状态栏那串 Braille 帧：菜单是一次性绘制的静态快照，
-# 帧画上去就冻住了，看起来像渲染错乱而不是动画。
-#
-# 早先 running 借用的是 ◉，于是同一个字符在状态栏表示「空闲」、菜单表示「在跑」
-# —— 含义正好相反，看两个界面对同一件事会得出相反结论。现在 ▶=在跑、◉=空闲，
-# 两处一致。
-whistle_menu_state_icon() {
-  case "${1:-}" in
-  running) whistle_icon '@whistle_icon_running' ;;
-  idle) whistle_icon '@whistle_icon_idle' ;;
-  done) whistle_icon '@whistle_icon_done' ;;
-  wait) whistle_icon '@whistle_icon_wait' ;;
-  error) whistle_icon '@whistle_icon_error' ;;
-  *) printf '%s' '' ;;
-  esac
-}
-
-whistle_menu_state_color() {
-  case "${1:-}" in
-  running) whistle_conf '@whistle_color_running' ;;
-  idle) whistle_conf '@whistle_color_idle' ;;
-  done) whistle_conf '@whistle_color_done' ;;
-  wait) whistle_conf '@whistle_color_wait' ;;
-  error) whistle_conf '@whistle_color_error' ;;
-  *) printf '%s' '' ;;
-  esac
-}
-
-# whistle_menu_item_label <状态> <session> <窗口> <消息>
-#
-# 抽成函数是因为 cmd_menu 与 cmd_menu_args 必须逐字相同 —— 改一边不改另一边，
-# 测试就会变假绿（这个坑踩过一次）。
-#
-# session 名用 [] 裹起来：它和窗口名、agent 的话挤在同一行里，
-# 不裹起来就分不清哪一段是「哪个 session」、哪一段是「agent 说了什么」。
-# 例：完成 [main]: w1 做完了
-#
-# 窗口名不裹 —— 它是「session 里的哪一格」，紧贴 session 更好读；
-# 真正需要与内容区分开的只有 session 这一层。
-whistle_menu_item_label() {
-  printf '#[fg=%s]%s#[default] %s [%s]: %s %s' \
-    "$(whistle_menu_state_color "$1")" "$(whistle_menu_state_icon "$1")" \
-    "$(whistle_state_label "$1")" "$2" "$3" "${4:-}"
-}
-
 cmd_menu() {
   _items=$(whistle_agent_windows)
   if [ -z "$_items" ]; then
@@ -538,75 +454,12 @@ cmd_menu() {
     return 0
   fi
 
-  # 用 set -- 累积 argv：菜单 label 里有空格，靠单词切分传参会散架。
-  #
-  # 两遍扫描同一份数据（待处理先、running 后），但**共用同一个键位计数器**：
-  # 两类都能点、都能跳。区别只在标记与语义 ——
-  #
-  #   待处理项   前缀空格，选中后顺带清除（你到现场了 = 已读）
-  #   running   前缀是当前 Braille 帧（whistle_menu_item_label）；
-  #             clear 对 running 本身是空操作
-  #             （whistle_clear_window 只清 whistle_is_notified 的状态）
-  #
-  # 键位总预算 26（9 个数字 + a~q 17 个字母），两类共享同一串序号。
-  # 待处理排前面，所以待处理多的时候 running 会先被挤掉 —— 这是对的优先级。
-  #
-  # 超出上限时**不静默截断**：一直计数，只在 ≤26 时累积，放不下就在末尾
-  # 追加一条灰字提示。状态栏写着 ⚑28 而菜单只有 26 项，用户会以为自己记错了。
-  set --
-  _i=0
-  _total=0
-  # whistle_agent_windows 每行 9 列：
-  #   session|window_id|window_name|window_index|pane_id|有效态|通知态|活动态|消息
-  # 消息必须在**末位**：POSIX 的 read 在字段数多于变量数时把余下的全塞进
-  # 最后一个变量，消息里带 '|' 也不会被截断；中间多留一列就会把消息列
-  # 变成「消息|进程名」而原样显示出去。cmd_menu 与 cmd_menu_args 的这几处
-  # read 必须逐字一致 —— 改一边不改另一边 = 假绿。
-  #
-  # 图标 / 颜色 / 「是不是待处理」一律按**有效态**（第 6 列）：通知的 rank
-  # 高于 running，所以「有效态通知态」⟺「这个 pane 有事等你」。
-  while IFS='|' read -r s wid wn _wi _pid eff _notice _activity msg; do
-    whistle_is_notified "$eff" || continue
-    _i=$((_i + 1))
-    _total=$((_total + 1))
-    [ "$_i" -gt 26 ] && continue
-    _label="$(whistle_menu_item_label "$eff" "$s" "$wn" "$msg")"
-    set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
-      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
-  done << EOF
-$_items
-EOF
-
-  while IFS='|' read -r s wid wn _wi _pid eff _notice _activity msg; do
-    whistle_is_notified "$eff" && continue
-    _i=$((_i + 1))
-    _total=$((_total + 1))
-    [ "$_i" -gt 26 ] && continue
-    _label="$(whistle_menu_item_label "$eff" "$s" "$wn" "$msg")"
-    set -- "$@" "$_label" "$(whistle_menu_key "$_i")" \
-      "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
-  done << EOF
-$_items
-EOF
-
-  if [ "$_total" -gt 26 ]; then
-    set -- "$@" "$(whistle_menu_overflow $((_total - 26)))" '' "display-message ''"
-  fi
-
-  # display-menu 需要一个 attached client；在脚本里调用（无头 server）时
-  # 它会报 "no current client"。这时降级成纯文本列表，而不是静默失败。
-  #
-  # `--` 不能省：disabled 条目的名称以 '-' 开头，而 tmux 的参数解析会在
-  # 遇到第一个非选项参数后才停止把 '-' 当 flag（tmux 3.2 用 getopt，
-  # 3.8 用 arguments.c，两者都认 '--'）。少了它会报 "invalid flag -"。
-  if ! whistle_tmux display-menu -T 'tmux-whistle' -- "$@" 2> /dev/null; then
+  # popup 标题由 UI 首行绘制；不用 tmux 3.3 才加入的 display-popup -T。
+  # 命令串里显式引用 CLI 路径，安装路径带空格时仍只是一个程序名。
+  if ! whistle_tmux display-popup -E "\"$WHISTLE_SELF\" --menu-ui" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
-    # 纯文本降级，没有菜单可选中，所以不带样式转义（那会原样显示出来）。
-    # 格式与菜单 label 保持一致（session 用 [] 裹住），只是少了样式前缀。
-    #
-    # 待处理与 running 原本是两个分支，但两条 printf 逐字相同 —— 合并成一条，
-    # 省得以后改格式只改一半。
-    while IFS='|' read -r s wid wn _wi _pid eff _notice _activity msg; do
+    # 纯文本降级，没有菜单可选中，所以不带样式转义。
+    while IFS='|' read -r s _wid wn _wi _pid eff _notice _activity msg; do
       printf '%s %s  [%s]: %s  %s\n' "$(whistle_menu_state_icon "$eff")" \
         "$(whistle_state_label "$eff")" "$s" "$wn" "$msg"
     done << EOF
@@ -618,41 +471,26 @@ EOF
 # 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
 # 用于在不依赖 attached client 的情况下验证参数构造。
 cmd_menu_args() {
-  _items=$(whistle_agent_windows)
+  _items=$(whistle_agent_windows | whistle_menu_model)
   [ -n "$_items" ] || return 0
 
-  # 与 cmd_menu 的两遍扫描逐行对应 —— 改一边不改另一边，测试就会变假绿。
-  _i=0
-  _total=0
-  while IFS='|' read -r s wid wn _wi _pid eff _notice _activity msg; do
-    whistle_is_notified "$eff" || continue
-    _i=$((_i + 1))
-    _total=$((_total + 1))
-    [ "$_i" -gt 26 ] && continue
-    printf '%s\n' "$(whistle_menu_item_label "$eff" "$s" "$wn" "$msg")"
-    printf '%s\n' "$(whistle_menu_key "$_i")"
-    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
+  # 模型行的消息仍在末位；溢出行只有类型与隐藏数两列。
+  while IFS='|' read -r _kind _key _wid _pid _s _wn _eff _msg; do
+    case "$_kind" in
+    item)
+      printf '%s\n' "$(whistle_menu_item_label "$_eff" "$_s" "$_wn" "$_msg")"
+      printf '%s\n' "$_key"
+      printf '%s\n' "switch-client -t $_s ; select-window -t $_wid ; run-shell -b '$WHISTLE_SELF clear -t $_wid --select $_pid'"
+      ;;
+    overflow)
+      printf '%s\n' "$(whistle_menu_overflow "$_key")"
+      printf '%s\n' ''
+      printf '%s\n' "display-message ''"
+      ;;
+    esac
   done << EOF
 $_items
 EOF
-
-  while IFS='|' read -r s wid wn _wi _pid eff _notice _activity msg; do
-    whistle_is_notified "$eff" && continue
-    _i=$((_i + 1))
-    _total=$((_total + 1))
-    [ "$_i" -gt 26 ] && continue
-    printf '%s\n' "$(whistle_menu_item_label "$eff" "$s" "$wn" "$msg")"
-    printf '%s\n' "$(whistle_menu_key "$_i")"
-    printf '%s\n' "switch-client -t $s ; select-window -t $wid ; run-shell -b '$WHISTLE_SELF clear -t $wid --select $_pid'"
-  done << EOF
-$_items
-EOF
-
-  if [ "$_total" -gt 26 ]; then
-    printf '%s\n' "$(whistle_menu_overflow $((_total - 26)))"
-    printf '%s\n' ''
-    printf '%s\n' "display-message ''"
-  fi
 }
 
 cmd_jump() {
@@ -1091,6 +929,10 @@ install-hooks)
 --print-status-line)
   shift
   cmd_print_status_line
+  ;;
+--menu-ui)
+  shift
+  whistle_menu_ui "$@"
   ;;
 --menu-args)
   shift
