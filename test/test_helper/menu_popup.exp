@@ -82,12 +82,15 @@ switch -- $env(WHISTLE_MENU_SCENARIO) {
     }
     live-refresh {
         # 外部改状态：菜单不重开也必须自己更新。
-        # 状态消息带 -state 后缀：退出探针里也有 marker，不加后缀会被探针顶掉。
-        # 等待条件锚在弹窗行格式 "(1) …" 上：状态栏的瞬时提示也会带这条消息，
-        # 只认 marker 会把提示当刷新（假阳性）。
+        #
+        # 等待条件锚在行首的「(1) ▶ 运行中」上，**不要锚在消息文本**上：
+        # popup 内宽只有几十列，whistle_menu_clip 会把长消息截断，
+        # 等完整 marker 就永远等不到（2026-11-02 这个用例就这么假红过一次）。
+        # 行首图标也不会被状态栏的瞬时提示冒充 —— 提示里没有 "(1) " 前缀。
+        # 初始两窗口都是 idle，所以这串只在刷新之后出现。
         exec $env(WHISTLE_MENU_CLI) running "$env(WHISTLE_MENU_MARKER)-state" \
             -t $env(WHISTLE_MENU_PANE)
-        set pat [format {\(1\) [^\r\n]*%s-state} $env(WHISTLE_MENU_MARKER)]
+        set pat {\(1\) ▶ 运行中}
         expect {
             -re $pat {}
             timeout { fail "等待菜单自动刷新超时" }
@@ -99,9 +102,10 @@ switch -- $env(WHISTLE_MENU_SCENARIO) {
         send -- "${esc}\[B"
         wait_selected 2
         # 让第二项变成待处理 → 它会排到第一位；高亮必须跟着窗口走。
+        # 同样只锚行首状态：两项原本都是 running，"(1) ◆ 完成" 只在重排后出现。
         exec $env(WHISTLE_MENU_CLI) done $env(WHISTLE_MENU_MARKER) \
             -t $env(WHISTLE_MENU_PANE2)
-        set pat [format {\(1\) [^\r\n]*%s} $env(WHISTLE_MENU_MARKER)]
+        set pat {\(1\) ◆ 完成}
         expect {
             -re $pat {}
             timeout { fail "等待菜单重排超时" }

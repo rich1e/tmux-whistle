@@ -216,7 +216,10 @@ spin_wait_pid() {
     tmux -L "$sock2" kill-server 2> /dev/null || true
     return 1
   fi
-  WHISTLE_TMUX_SOCKET="$path2" whistle_spin_stop
+  local saved_sock="$WHISTLE_TMUX_SOCKET"
+  WHISTLE_TMUX_SOCKET="$path2"
+  whistle_spin_stop
+  WHISTLE_TMUX_SOCKET="$saved_sock"
   tmux -L "$sock2" kill-server 2> /dev/null || true
 
   # 本 server 的推进器必须毫发无损。

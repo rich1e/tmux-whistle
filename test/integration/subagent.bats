@@ -36,7 +36,6 @@ setup() {
 
 teardown() {
   wt_stop
-  unset XDG_RUNTIME_DIR
 }
 
 pane_of() {

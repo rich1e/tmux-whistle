@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 401 项测试（65 单测 + 285 集成 + 51 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 479 项测试（85 单测 + 334 集成 + 60 e2e）。
 
 ## 架构：分层与唯一写入点
 

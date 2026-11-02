@@ -1235,6 +1235,36 @@ ln -sfn <那一份>.txt ~/.local/share/tmux/resurrect/last
 
 ---
 
+## TODO-21 · 测试偶发「server 还活着却连不上」，并留下清不掉的隔离 server
+
+⬜ 待处理（2026-11-02 记录，**只复现过一次，原因尚未证实**）
+
+**现象**：全量 `make check` 时 `test/integration/cli.bats` 第 102 项在**造数据阶段**失败：
+`seed_running_windows` 里的 `wt display` 报
+`no server running on /private/tmp/tmux-502/whistle-test-73779`。
+同一份代码上一轮这个用例是通过的，单独复跑 `cli.bats` 也是 96/96 全过。
+随后 `make check-no-stray-servers` 报出一个残留进程
+`55417 tmux -L whistle-test-73779` —— socket 名与失败用例相同。
+
+**已确认的事实**（只有这些，别往外推）：
+
+- 失败发生在 cli.bats 自己的隔离 server 上，不在断言里，在 `new-window` 之后的查询里。
+- 失败之后有一个同 socket 名的 server 进程存活，`kill-server` 清不掉它，只能 `kill <pid>`。
+- 清理该进程后再跑全量：479 项全绿、无残留 server。
+
+**推断（未证实）**：socket 文件在 server 存活期间被删过。两个可疑入口都在
+`test/test_helper/whistle.bash`：`wt_stop` 在 `kill-server` 之后**立刻** `rm -f` socket，
+不等 server 真退出，而同一文件内所有测试共用同一个 socket 名（`whistle-test-$$`），
+旧 server 退出时若再 unlink 一次同路径，会把新 server 的 socket 一起带走；
+`wt_reap_stale_sockets` 在 `tmux ls` 失败时也直接删 socket，server 只是暂时没响应就会误删。
+
+**修复方向**：每个测试用独立 socket 名（在 `wt_start` 里叠加 `$BATS_TEST_NUMBER` 之类后缀），
+并且只在确认 server 已退出后才删 socket 文件。改之前先复现，别凭推断动手。
+
+**为什么要重视**：残留 server 会触发 TODO-20 —— tmux-continuum 因此静默关闭自动保存与恢复。
+
+---
+
 ## 诊断记录：Claude Code hook 在「后台 agent」场景下的实际行为
 
 > 2026-10-28 · 为「hook 事件追踪日志」（`hooks/claude-code.sh` 的 `whistle_hook_log`）做的查证。

@@ -110,12 +110,13 @@ run_popup() {
 
   run_popup live-refresh FRESH_RUNNING_MARKER
 
-  # 标记出现在弹窗那一行里 = 菜单自己重绘过；没重开过（整个场景只开一次菜单）。
-  # 断言锚在行首的 "(1) " 上：状态栏的瞬时提示也会带这条消息，只认 marker
-  # 会把提示当成刷新（假阳性）。带 -state 后缀：退出探针里也有 marker。
+  # 第一项从 ◉ 空闲变成 ▶ 运行中 = 菜单自己重绘过（整个场景只开一次菜单）。
+  # 锚在行首状态而非消息文本：popup 内宽有限，长消息会被 clip 截断，
+  # 拿完整 marker 当判据会假红（2026-11-02 踩过）。初始两项都是 idle，
+  # 所以 "(1) ▶ 运行中" 只在刷新之后出现。
   assert_contains \
-    "$(grep -a '(1) .*FRESH_RUNNING_MARKER-state' "$EXPECT_LOG")" \
-    'FRESH_RUNNING_MARKER-state'
+    "$(grep -a '(1) ▶ 运行中' "$EXPECT_LOG")" \
+    '运行中'
   assert_contains "$(cat "$EXPECT_LOG")" 'POPUP_FRESH_RUNNING_MARKER'
 }
 

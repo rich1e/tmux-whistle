@@ -471,6 +471,7 @@ whistle_menu_read_key() {
       # printf 的 "'x" 形式对非 ASCII 字节可能给不出数（还可能报错）——
       # 这时退回 od 读一遍，绝不把诊断信息打到终端。
       _mu_raw=$(printf '%s' "$_mu_char" | od -An -tu1 -v 2> /dev/null)
+      # shellcheck disable=SC2086 # od 的输出是空格分隔的十进制数，这里要的就是词分割
       set -- $_mu_raw
       _mu_num=${1:-}
       ;;
