@@ -33,9 +33,10 @@ help: ## 显示所有可用命令
 
 ## -- 依赖 ------------------------------------------------------------------
 
-deps: ## 安装开发工具（bats-core / shellcheck / shfmt）
+deps: ## 安装开发工具（bats-core / shellcheck / shfmt / expect）
 	@command -v $(BATS) >/dev/null 2>&1 || brew install bats-core
 	@command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
+	@command -v expect >/dev/null 2>&1 || brew install expect
 	@$(MAKE) --no-print-directory deps-shfmt
 
 deps-shfmt: ## 只安装 shfmt（brew tap 不可用时回退到官方二进制直装）

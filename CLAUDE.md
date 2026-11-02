@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 401 项测试（65 单测 + 285 集成 + 51 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 479 项测试（85 单测 + 334 集成 + 60 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -259,8 +259,13 @@ CPU 跟着抖（2026-11-02 实测）。凡是「按 server 隔离」的状态，
 看起来像卡死。所以 `whistle_summary_build` 里 running 那格是
 `#{?#{@whistle_count_running},<帧选择器>,<静态图标>}`，归零退回 `▶`。
 
-**菜单是静态快照**（`display-menu` 画完就定住，没有更新已打开菜单的接口），
-所以菜单里的 running 项用固定的 `▶` 而非 Braille 帧 —— 冻住的帧看起来像渲染错乱。
+**菜单是自绘 popup，会自己刷新**（`lib/menu.sh` 的 `whistle_menu_ui` 每约 0.5 秒
+重读一次模型，变了才重绘；列表重排后高亮按 window id 跟随原来那个窗口）。
+因此菜单里的 running 项仍用固定的 `▶` 而非 Braille 帧 —— 一直在变的帧在列表里
+读不出来，看着像渲染错乱。
+
+**菜单只用 Esc 退出**（`q` 是第 26 项的普通快捷键，未分配时不执行操作）：
+方向键的 `Esc [ A/B` 序列不能被当成单独 Esc 拆开。
 
 ## 测试约定
 

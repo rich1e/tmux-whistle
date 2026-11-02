@@ -90,7 +90,7 @@ while :; do
   # 收到 SIGTERM 后走上面的 trap（清掉自己那份 PID 记录 + exit 0），与「循环顶部
   # 读到计数为 0 而 break」等价 —— 自愈之后推进器本就该退出。
   # 不会死循环（kill 之后的本轮循环立刻结束，不存在再重算的下一轮），
-  # 也不会留残骸（whistle_spin_stop 先 rm 一次、trap 再 rm 一次，幂等）。
+  # 也不会留残骸（whistle_spin_stop 清一次、trap 再清一次，幂等）。
   # 状态不会写坏半截：计数与 @whistle_eff 都在 spin_sync **之前**写完
   # （core.sh 里的顺序），被信号打断时落盘的已经是完整的新值。
   _rce_i=$((_rce_i + 1))

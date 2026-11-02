@@ -1,0 +1,162 @@
+#!/usr/bin/expect -f
+# 只在开发测试中使用：用伪终端附着隔离 tmux server，驱动 popup 键盘交互。
+
+set timeout 5
+log_user 1
+log_file -noappend $env(WHISTLE_MENU_LOG)
+set esc \033
+
+proc fail {message} {
+    puts stderr $message
+    exit 20
+}
+
+proc wait_menu_process_exit {} {
+    global env
+    # pgrep 只属于测试驱动；运行时仍保持 POSIX 工具与零第三方依赖。
+    for {set attempt 0} {$attempt < 50} {incr attempt} {
+        if {[catch {exec pgrep -f "$env(WHISTLE_MENU_CLI).*--menu-ui"}]} {
+            return
+        }
+        after 100
+    }
+    fail "等待 --menu-ui 进程退出超时"
+}
+
+proc wait_menu_open {} {
+    global esc
+    set pattern [format {%s\[7m[^\r\n]*\(1\)} $esc]
+    expect {
+        -re $pattern {}
+        timeout { fail "等待 popup ANSI 首帧超时" }
+        eof { fail "attached client 在 popup 首帧前退出" }
+    }
+}
+
+proc wait_selected {index} {
+    global esc
+    set pattern [format {%s\[7m[^\r\n]*\(%s\)} $esc $index]
+    expect {
+        -re $pattern {}
+        timeout { fail "等待第 $index 项高亮超时" }
+        eof { fail "attached client 在移动高亮时退出" }
+    }
+}
+
+spawn tmux -L $env(WHISTLE_TEST_SOCK) attach-session -t main
+stty rows 32 columns 110
+# 不依赖用户 PS1：用拼接输出与命令回显区分开的探针确认 pane 能执行输入。
+send -- "printf 'SHELL_%s\\n' 'READY'\r"
+expect {
+    -ex "SHELL_READY" {}
+    timeout { fail "pane shell 输入探针超时" }
+    eof { fail "pane shell 提前退出" }
+}
+send -- "\"$env(WHISTLE_MENU_CLI)\" menu\r"
+wait_menu_open
+
+switch -- $env(WHISTLE_MENU_SCENARIO) {
+    down-enter {
+        send -- "${esc}\[B"
+        wait_selected 2
+        send -- "\r"
+    }
+    shortcut-second {
+        send -- "2"
+    }
+    q-down-enter {
+        send -- "q"
+        send -- "${esc}\[B"
+        wait_selected 2
+        send -- "\r"
+    }
+    escape {
+        send -- "${esc}\[B"
+        wait_selected 2
+        send -- "${esc}\[A"
+        wait_selected 1
+        send -- "${esc}"
+    }
+    interrupt {
+        send -- "\003"
+    }
+    live-refresh {
+        # 外部改状态：菜单不重开也必须自己更新。
+        #
+        # 等待条件锚在行首的「(1) ▶ 运行中」上，**不要锚在消息文本**上：
+        # popup 内宽只有几十列，whistle_menu_clip 会把长消息截断，
+        # 等完整 marker 就永远等不到（2026-11-02 这个用例就这么假红过一次）。
+        # 行首图标也不会被状态栏的瞬时提示冒充 —— 提示里没有 "(1) " 前缀。
+        # 初始两窗口都是 idle，所以这串只在刷新之后出现。
+        exec $env(WHISTLE_MENU_CLI) running "$env(WHISTLE_MENU_MARKER)-state" \
+            -t $env(WHISTLE_MENU_PANE)
+        set pat {\(1\) ▶ 运行中}
+        expect {
+            -re $pat {}
+            timeout { fail "等待菜单自动刷新超时" }
+            eof { fail "attached client 在自动刷新前退出" }
+        }
+        send -- "${esc}"
+    }
+    reorder-follow {
+        send -- "${esc}\[B"
+        wait_selected 2
+        # 让第二项变成待处理 → 它会排到第一位；高亮必须跟着窗口走。
+        # 同样只锚行首状态：两项原本都是 running，"(1) ◆ 完成" 只在重排后出现。
+        exec $env(WHISTLE_MENU_CLI) done $env(WHISTLE_MENU_MARKER) \
+            -t $env(WHISTLE_MENU_PANE2)
+        set pat {\(1\) ◆ 完成}
+        expect {
+            -re $pat {}
+            timeout { fail "等待菜单重排超时" }
+            eof { fail "attached client 在重排前退出" }
+        }
+        send -- "\r"
+    }
+    no-redraw {
+        # 状态没变就不该重绘。数标题出现次数：帧数不变 = 没重绘。
+        # 允许 2 帧以内的浮动 —— tmux 自己也可能因状态栏刷新重画一次屏幕。
+        after 1500
+        set c1 [exec grep -c -F -- tmux-whistle $env(WHISTLE_MENU_LOG)]
+        after 3000
+        set c2 [exec grep -c -F -- tmux-whistle $env(WHISTLE_MENU_LOG)]
+        puts "REDRAW $c1 $c2"
+        if {$c2 - $c1 > 2} {
+            fail "状态没变却重绘了太多次：$c1 -> $c2"
+        }
+        send -- "${esc}"
+    }
+    default {
+        fail "未知 popup 场景：$env(WHISTLE_MENU_SCENARIO)"
+    }
+}
+
+# 等 UI 进程退出，再让 tmux 处理一次 popup 关闭事件；过早输入会被关闭队列清掉。
+wait_menu_process_exit
+after 100
+# 输出把两段拼起来，避免命令回显本身造成假阳性。
+send -- "printf 'POPUP_%s\\n' '$env(WHISTLE_MENU_MARKER)'\r"
+expect {
+    -ex "POPUP_$env(WHISTLE_MENU_MARKER)" {}
+    timeout { fail "popup 退出后的输入探针超时" }
+    eof { fail "popup 退出后 pane 提前退出" }
+}
+
+if {$env(WHISTLE_MENU_SCENARIO) eq "interrupt"} {
+    # 先隐藏再显示，确保 tmux 必须向外转发一次光标恢复；在文本探针之后匹配，
+    # 不会把 UI 自己退出时的 show-cursor 误当这次输出。
+    send -- "printf '\\033\[?25l\\033\[?25h'\r"
+    expect {
+        -ex "${esc}\[?25h" {}
+        timeout { fail "Ctrl-C 后光标输出探针超时" }
+        eof { fail "Ctrl-C 光标探针时 pane 提前退出" }
+    }
+}
+
+# 默认 prefix 是 C-b；只 detach，不关闭目标窗口，供 bats 检查最终状态。
+send -- "\002d"
+expect {
+    eof {}
+    timeout { fail "detach attached client 超时" }
+}
+exit 0

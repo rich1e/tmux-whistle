@@ -31,6 +31,7 @@ make_deliver_spy_cli() {
   cp "$CLI" "$root/bin/tmux-whistle"
   ln -s "$WHISTLE_ROOT/lib/core.sh" "$root/lib/core.sh"
   ln -s "$WHISTLE_ROOT/lib/status-line.sh" "$root/lib/status-line.sh"
+  ln -s "$WHISTLE_ROOT/lib/menu.sh" "$root/lib/menu.sh"
   cat > "$root/lib/deliver.sh" <<'EOF'
 whistle_deliver() {
   printf '%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "${4:-}" >> "$DELIVER_LOG"
@@ -91,7 +92,64 @@ run_desktop_jump() {
     "$CLI" --desktop-jump "$1"
 }
 
+# popup 启动测试用 tmux spy 记录 argv；其它命令仍委派给隔离 server。
+make_menu_popup_spy() {
+  MENU_POPUP_REAL_TMUX=$(command -v tmux)
+  MENU_POPUP_TMUX_BIN="$BATS_TEST_TMPDIR/menu-popup-tmux-bin"
+  MENU_POPUP_TMUX_LOG="$BATS_TEST_TMPDIR/menu-popup-tmux.log"
+  mkdir -p "$MENU_POPUP_TMUX_BIN"
+  cat > "$MENU_POPUP_TMUX_BIN/tmux" <<'EOF'
+#!/bin/sh
+_socket="$FAKE_TMUX_SOCKET"
+if [ "${1:-}" = '-S' ]; then
+  _socket="$2"
+  shift 2
+fi
+if [ "${1:-}" = display-popup ]; then
+  printf '%s\n' "$@" > "$FAKE_TMUX_LOG"
+  exit "${FAKE_TMUX_POPUP_RC:-0}"
+fi
+exec "$REAL_TMUX" -S "$_socket" "$@"
+EOF
+  chmod +x "$MENU_POPUP_TMUX_BIN/tmux"
+}
+
+run_menu_popup_spy() {
+  run env PATH="$MENU_POPUP_TMUX_BIN:$PATH" \
+    REAL_TMUX="$MENU_POPUP_REAL_TMUX" \
+    FAKE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    FAKE_TMUX_LOG="$MENU_POPUP_TMUX_LOG" \
+    FAKE_TMUX_POPUP_RC="${FAKE_TMUX_POPUP_RC:-0}" \
+    "$CLI" menu
+}
+
 # -- 菜单 ------------------------------------------------------------------
+
+@test "menu popup: 用 display-popup -E 启动内部 UI，不使用 -T" {
+  "$CLI" idle
+  make_menu_popup_spy
+
+  run_menu_popup_spy
+
+  assert_eq "$status" 0
+  assert_eq "$(sed -n 1p "$MENU_POPUP_TMUX_LOG")" 'display-popup'
+  assert_contains "$(cat "$MENU_POPUP_TMUX_LOG")" '-E'
+  assert_contains "$(cat "$MENU_POPUP_TMUX_LOG")" '--menu-ui'
+  assert_not_contains "$(cat "$MENU_POPUP_TMUX_LOG")" '-T'
+}
+
+@test "menu popup: popup 启动失败时保留原纯文本降级" {
+  "$CLI" "done" '做完了'
+  make_menu_popup_spy
+  FAKE_TMUX_POPUP_RC=1
+
+  run_menu_popup_spy
+
+  assert_eq "$status" 0
+  assert_eq "$(sed -n 1p "$MENU_POPUP_TMUX_LOG")" 'display-popup'
+  assert_contains "$output" '做完了'
+  assert_contains "$output" '[main]: w1'
+}
 
 @test "menu-args: 每项是 label / key / command 三元组" {
   "$CLI" "done" '做完了'
