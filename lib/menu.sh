@@ -410,6 +410,50 @@ whistle_menu_clip() {
   '
 }
 
+# whistle_menu_item_style <状态> → "<图标> <SGR 前景>"
+#
+# 单行重绘用：一次取齐图标与颜色。整帧绘制走缓存版本（见 whistle_menu_render），
+# 不要在这里逐行调用。
+whistle_menu_item_style() {
+  _mis_icon=$(whistle_menu_state_icon "${1:-}")
+  _mis_fg=$(whistle_menu_ansi_fg "$(whistle_menu_state_color "${1:-}")")
+  printf '%s %s' "$_mis_icon" "$_mis_fg"
+}
+
+# whistle_menu_item_text <键位> <图标> <状态> <session> <窗口> <消息> <列数> → 纯文本一行
+#
+# 整帧绘制与单行重绘共用这一处拼装，两边格式不会分叉。
+whistle_menu_item_text() {
+  _mit_text=$(printf '(%s) %s %s [%s]: %s' \
+    "$1" "$2" "$(whistle_state_label "$3")" "$4" "$5")
+  [ -z "${6:-}" ] || _mit_text="$_mit_text $6"
+  whistle_menu_clip "$_mit_text" "${7:-80}"
+}
+
+# whistle_menu_render_item <模型行> <选中: 1/0> <列数> → 一行的 ANSI 文本（不含换行）
+#
+# 只画一行，不碰屏幕其余部分。方向键移动高亮时用这个：整屏重绘要清屏并把每一行
+# 重新 clip 一遍（26 项就是 26 个 awk 子进程），在慢终端上是肉眼可见的卡顿。
+whistle_menu_render_item() {
+  _mri_line=${1:-}
+  _mri_sel=${2:-0}
+  _mri_cols=${3:-80}
+  IFS='|' read -r _mri_kind _mri_key _mri_wid _mri_pid _mri_s _mri_wn _mri_eff _mri_msg << EOF
+$_mri_line
+EOF
+  [ "$_mri_kind" = item ] || return 0
+  _mri_style=$(whistle_menu_item_style "$_mri_eff")
+  _mri_icon=${_mri_style%% *}
+  _mri_fg=${_mri_style#* }
+  _mri_plain=$(whistle_menu_item_text "$_mri_key" "$_mri_icon" "$_mri_eff" \
+    "$_mri_s" "$_mri_wn" "$_mri_msg" "$_mri_cols")
+  if [ "$_mri_sel" = 1 ]; then
+    printf '\033[7m%s%s\033[0m' "$_mri_fg" "$_mri_plain"
+  else
+    printf '%s%s\033[0m' "$_mri_fg" "$_mri_plain"
+  fi
+}
+
 # whistle_menu_render <selected window id> <columns> ← 菜单模型
 #
 # 输出一帧完整 ANSI 内容。标题由内容首行绘制，兼容没有 display-popup -T 的
@@ -469,11 +513,8 @@ whistle_menu_render() {
         _mu_fg=$(whistle_menu_ansi_fg '')
         ;;
       esac
-      _mu_plain=$(printf '(%s) %s %s [%s]: %s' \
-        "$_mu_key" "$_mu_icon" \
-        "$(whistle_state_label "$_mu_eff")" "$_mu_s" "$_mu_wn")
-      [ -z "$_mu_msg" ] || _mu_plain="$_mu_plain $_mu_msg"
-      _mu_plain=$(whistle_menu_clip "$_mu_plain" "$_mu_columns")
+      _mu_plain=$(whistle_menu_item_text "$_mu_key" "$_mu_icon" "$_mu_eff" \
+        "$_mu_s" "$_mu_wn" "$_mu_msg" "$_mu_columns")
       if [ "$_mu_wid" = "$_mu_selected" ]; then
         printf '\033[7m%s%s\033[0m\n' "$_mu_fg" "$_mu_plain"
       else
@@ -566,6 +607,19 @@ whistle_menu_activate() {
   cmd_clear -t "$1" --select "$2"
 }
 
+# whistle_menu_paint_row <索引> <是否选中 1/0>
+#
+# 只重画一项，**不整屏重绘**。方向键移动时整屏重绘要清屏并把 26 行逐行 clip
+# （26 个 awk 子进程），在慢终端上肉眼可见地卡；实际变了的只有两行。
+# 行号 = 索引 + 1 —— 标题占第 1 行，条目从第 2 行起，与整帧绘制的顺序一致。
+whistle_menu_paint_row() {
+  [ "${_mu_count:-0}" -gt 0 ] || return 0
+  _mpr_line=$(printf '%s\n' "$_mu_model" | grep '^item|' | sed -n "${1:-1}p")
+  [ -n "$_mpr_line" ] || return 0
+  printf '\033[%s;1H\033[2K' "$((${1:-1} + 1))"
+  whistle_menu_render_item "$_mpr_line" "${2:-0}" "${_mu_columns:-80}"
+}
+
 # whistle_menu_ui：display-popup -E 内的完整交互进程。
 #
 # 状态会自己变：agent 跑完、子 agent 结束、通知到达，菜单都得跟着改。
@@ -655,19 +709,24 @@ whistle_menu_ui() {
       ;;
     up)
       if [ "$_mu_index" -gt 1 ]; then
+        _mu_prev_index=$_mu_index
         _mu_index=$((_mu_index - 1))
         _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' "$_mu_index")
         _mu_selected=${_mu_selection%%|*}
-        _mu_dirty=1
+        # 只重画旧行与新行：内容没变，不必清屏重排整屏。
+        whistle_menu_paint_row "$_mu_prev_index" 0
+        whistle_menu_paint_row "$_mu_index" 1
       fi
       continue
       ;;
     down)
       if [ "$_mu_index" -lt "$_mu_count" ]; then
+        _mu_prev_index=$_mu_index
         _mu_index=$((_mu_index + 1))
         _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' "$_mu_index")
         _mu_selected=${_mu_selection%%|*}
-        _mu_dirty=1
+        whistle_menu_paint_row "$_mu_prev_index" 0
+        whistle_menu_paint_row "$_mu_index" 1
       fi
       continue
       ;;

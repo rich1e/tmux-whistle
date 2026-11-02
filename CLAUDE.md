@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 484 项测试（86 单测 + 338 集成 + 60 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 485 项测试（87 单测 + 338 集成 + 60 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -271,6 +271,10 @@ option 里的 PID 会残留，OS 复用 PID 之后 `kill -0` 对一个**无关�
 
 **菜单只用 Esc 退出**（`q` 是第 26 项的普通快捷键，未分配时不执行操作）：
 方向键的 `Esc [ A/B` 序列不能被当成单独 Esc 拆开。
+
+**菜单只有「模型变了」才整帧重绘；方向键移动只重画旧行与新行**
+（`whistle_menu_paint_row`）。整帧重绘会清屏并把每一行重新 clip，26 项就是 26 个
+awk 子进程 —— 每按一次方向键都重来一遍，慢终端上肉眼可见地卡。
 
 ## 测试约定
 

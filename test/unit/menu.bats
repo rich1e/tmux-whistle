@@ -278,6 +278,22 @@ EOF
     assert_eq "$status" 0
 }
 
+@test "menu render: render_item 只画一行，选中与否只差反显" {
+    local esc line
+    esc=$(printf '\033')
+    line='item|2|@2|%2|dayfold|编辑器|done|做完了'
+
+    run whistle_menu_render_item "$line" 1 120
+    assert_eq "$status" 0
+    assert_contains "$output" "${esc}[7m"
+    assert_contains "$output" '(2) ◆ 完成 [dayfold]: 编辑器 做完了'
+
+    run whistle_menu_render_item "$line" 0 120
+    assert_eq "$status" 0
+    assert_not_contains "$output" "${esc}[7m"
+    assert_contains "$output" '(2) ◆ 完成'
+}
+
 @test "menu render: 🚀 等 U+1F680 之后的 emoji 也按两列计算" {
     # 独立评审 finding #5：宽字符表早先止于 U+1F67F，🚀(U+1F680) 被当成 1 列，
     # clip 出来的行会比 popup 还宽。max=4 应恰好放下 ab + 🚀；max=3 则停在 ab。
