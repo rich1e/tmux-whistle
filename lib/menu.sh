@@ -4,7 +4,21 @@
 # 模型只消费 whistle_agent_windows 的 9 列输出，不直接读取 tmux。
 # 交互菜单与 display-menu 共用同一份排序、键位与溢出结果。
 
-# display-menu 的键位是单字符：1-9 之后接字母，最多 26 项（9 + 17 = a..q）
+# whistle_menu_timing <标记>
+#
+# 可选计时日志，只在 server 环境里设了 WHISTLE_MENU_TIMING 时才写
+# （`tmux set-environment WHISTLE_MENU_TIMING 1`，需要时再设
+# `WHISTLE_MENU_TIMING_LOG` 指定文件）。用来定位「菜单打开很慢」这类只在真实
+# 环境复现、隔离环境复现不出来的问题 —— 平时零开销，只有几个变量判断。
+whistle_menu_timing() {
+  [ -n "${WHISTLE_MENU_TIMING:-}" ] || return 0
+  _mt_now=$(perl -MTime::HiRes=time -e 'printf "%.3f", time' 2> /dev/null) \
+    || _mt_now=$(date +%s)
+  printf '%s %s\n' "$_mt_now" "${1:-}" \
+    >> "${WHISTLE_MENU_TIMING_LOG:-${TMPDIR:-/tmp}/tmux-whistle-menu-timing.log}"
+}
+
+# whistle_menu_key <序号> → 单字符快捷键：1-9 之后接字母，最多 26 项（9 + 17 = a..q）
 #
 # 两个坑叠在一起，症状相同（第 10 项起 key 为空）：
 #   1. 位置算成了 $1 - 10，第 10 项得到 0 —— cut 不接受 0
@@ -728,10 +742,13 @@ whistle_menu_move() {
 # 因此每次空读（约 0.5 秒）重新读一次模型：变了就重绘，没变就不动。
 # 用空读当节拍而不是每秒 fork 一次 date —— 热循环里少一个进程。
 whistle_menu_ui() {
+  # WHISTLE_MENU_TIMING 打开时记录各阶段耗时（见 whistle_menu_timing）。
+  whistle_menu_timing 'ui-start'
   # 初始模型就为空也要**留下来说一句**，而不是直接退出：cmd_menu 看到有项、
   # 但 popup 进程第一次查询之前 agent 刚好被清掉或退出时，直接 return 会让
   # 用户看到 popup 一闪而过，什么解释都没有。
   _mu_model=$(whistle_agent_windows | whistle_menu_model)
+  whistle_menu_timing "ui-model-done lines=$(printf '%s\n' "$_mu_model" | grep -c .)"
   _mu_selection=''
   if [ -n "$_mu_model" ]; then
     _mu_selection=$(printf '%s\n' "$_mu_model" | whistle_menu_reconcile_selection '' 1)
@@ -747,6 +764,7 @@ whistle_menu_ui() {
   # 整帧绘制也直接复用（导出后子 shell 里的 render 能读到）。
   _mu_pal=$(whistle_menu_palette)
   export _mu_pal
+  whistle_menu_timing 'ui-palette-done'
 
   _mu_terminal_state=$(stty -g 2> /dev/null) || return 1
   [ -n "$_mu_terminal_state" ] || return 1
@@ -766,6 +784,7 @@ whistle_menu_ui() {
   # 从每秒 10 次降到 2 次 —— 这条路径每轮要 fork 一个 dd，次数就是 CPU。
   stty -icanon -echo -icrnl min 0 time 5 || return 1
   printf '\033[?25l'
+  whistle_menu_timing 'ui-tty-ready'
 
   _mu_dirty=1
   while :; do
@@ -781,6 +800,7 @@ whistle_menu_ui() {
         printf '%s\n' "$(whistle_menu_clip '没有 agent 上报过状态' "$_mu_columns")"
       fi
       _mu_dirty=0
+      whistle_menu_timing "ui-frame-done cols=$_mu_columns"
     fi
 
     _mu_octets=$(whistle_menu_read_key)

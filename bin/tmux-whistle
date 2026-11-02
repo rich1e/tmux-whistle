@@ -445,7 +445,9 @@ EOF
 # -- 菜单 / 跳转 -----------------------------------------------------------
 
 cmd_menu() {
+  whistle_menu_timing 'cmd-menu-start'
   _items=$(whistle_agent_windows)
+  whistle_menu_timing "cmd-menu-items lines=$(printf '%s\n' "$_items" | grep -c .)"
   if [ -z "$_items" ]; then
     # 两条路都要说一声：交互时 stdout 会被 run-shell -b 丢掉，只能靠
     # display-message 落到状态行；脚本里没有 client，则只能靠 stdout。
@@ -470,6 +472,7 @@ cmd_menu() {
   esac
   [ "$_mn_rows" -gt 26 ] && _mn_rows=26
   _mn_rows=$((_mn_rows + 4))
+  whistle_menu_timing "cmd-menu-popup-invoke rows=$_mn_rows"
   if ! whistle_tmux display-popup -E -h "$_mn_rows" "'$_mn_self' --menu-ui" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
     # 纯文本降级，没有菜单可选中，所以不带样式转义。
@@ -480,6 +483,7 @@ cmd_menu() {
 $_items
 EOF
   fi
+  whistle_menu_timing 'cmd-menu-popup-returned'
 }
 
 # 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
