@@ -571,19 +571,23 @@ pane_of() {
 
 @test "agent_windows: 每行带 pane id，菜单据此 select-pane" {
   wt split-window -t w1
-  local p1 p2
+  local p1 p2 pids
   p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
   p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
   whistle_state_set "running" '在跑' "$p1"
   whistle_state_set "done" '做完了' "$p2"
 
   run whistle_agent_windows
-  # 第 5 列是胜出状态的 pane id（session|window_id|window_name|index|pane|…）
-  assert_eq "$(printf '%s\n' "$output" | cut -d'|' -f5)" "$p2"
+  # 第 5 列是 pane id（session|window_id|window_name|index|pane|…）。
+  # 两个 pane 各占一行，各自带自己的 id —— 跳转才能落到具体那一格。
+  pids=$(printf '%s\n' "$output" | cut -d'|' -f5 | sort | tr '\n' ' ')
+  assert_eq "$pids" "$(printf '%s\n%s\n' "$p1" "$p2" | sort | tr '\n' ' ')"
 }
 
-@test "agent_windows: 同窗口多 pane 只出一行，取 rank 最高的状态" {
-  # list-panes -a 是 pane 粒度；不去重的话菜单里同一个窗口会出现两次。
+@test "agent_windows: 同窗口多 pane 各出一行，两个 agent 都列出来" {
+  # 状态是 pane 级的：一个窗口里可以有两个各跑各的 agent
+  # （主 session 派生子 agent、子 agent 在同一窗口分屏开了新 session）。
+  # 早先按 window_id 去重，第二个 agent 在菜单里没有入口，也跳不过去。
   wt split-window -t w1
   local p1 p2
   p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
@@ -592,9 +596,55 @@ pane_of() {
   whistle_state_set "done" '做完了' "$p2"
 
   run whistle_agent_windows
-  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '1'
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '2'
+  assert_contains "$output" 'running'
   assert_contains "$output" 'done'
-  assert_contains "$output" '做完了'
+  assert_contains "$output" "$p1"
+  assert_contains "$output" "$p2"
+}
+
+@test "agent_windows: 同窗口两个 running pane —— 计数与条目数一致" {
+  # 这条锁的是用户报的那个 bug：状态栏按 pane 数出 ▶2，菜单却按窗口去重只剩 1 条，
+  # 两个数字对不上。两边必须都是 2。
+  wt split-window -t w1
+  local p1 p2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  whistle_state_set "running" '在跑' "$p1"
+  whistle_state_set "running" '在跑' "$p2"
+
+  whistle_recompute_global
+  assert_eq "$(opt '@whistle_count_running')" '2'
+
+  run whistle_agent_windows
+  assert_eq "$(printf '%s\n' "$output" | grep -c '|running|')" '2'
+}
+
+@test "agent_windows: 同窗口多条带格位后缀，单 pane 窗口不带" {
+  # 同一窗口的多个 agent 在菜单里 session 与窗口名都一样，靠
+  # 「·格N」（该 pane 在窗口里的位置）区分。只有一个 agent 的窗口不加后缀 ——
+  # 那是绝大多数情况，不该多出噪音。
+  wt split-window -t w1
+  local p1 p2 line1 line2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  whistle_state_set "running" '在跑' "$p1"
+  whistle_state_set "idle" '闲着' "$p2"
+
+  run whistle_agent_windows
+  line1=$(printf '%s\n' "$output" | grep -F "|$p1|" || true)
+  line2=$(printf '%s\n' "$output" | grep -F "|$p2|" || true)
+  assert_contains "$line1" '·格1'
+  assert_contains "$line2" '·格2'
+
+  # 另起一个单 pane 窗口：它的条目不带后缀
+  wt new-window -d -n w2
+  local p3
+  p3=$(wt display -p -t w2 '#{pane_id}')
+  whistle_state_set "running" '在跑' "$p3"
+
+  run whistle_agent_windows
+  assert_eq "$(printf '%s\n' "$output" | grep -c '·格')" '2'
 }
 
 @test "conf: 未设置的 option 回落到默认表" {

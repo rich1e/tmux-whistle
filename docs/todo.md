@@ -1470,3 +1470,52 @@ schedule_wakeup | poll_event`，两者不同源，不要混用。）
 （`whistle_resolve_idle_panes` 读 `@whistle_sub` 的时间戳）合成。标记一清 / TTL
 一到，推导层立刻回落 —— 自愈，TTL 这道安全阀从此才真的生效。
 回归用例：`test/e2e/claude_hook.bats` 的「子 agent 在跑时 Stop → 标记清掉后能回落 idle」。
+
+---
+
+## TODO-27 · 状态栏 `▶N` 与 `prefix + n` 弹窗的条目数对不上（同窗口多个 agent）
+
+✅ 已修复（菜单改成 agent 粒度，与汇总同口径）
+
+**现象**：状态栏汇总显示 `▶3 ◉3`，`prefix + n` 弹窗里只有 2 条 `▶ 运行中`。
+2026-11-04 实测，现场 8 个 pane / 6 个窗口。
+
+**触发**：主 session 派生子 agent，子 agent 在**同一个窗口**里分屏起了新 session
+（`tmux split-window`），那个窗口于是有两个各跑各的 agent。截图时刻 running pane 是
+`%2`（dayfold 主 agent）+ `%8`（新 session）+ `%6`（note）= 3，但菜单按窗口折叠后
+只剩 `@2`、`@5` 两条。
+
+**原因**：两处粒度不一致。`whistle_count_states` 逐行数 `list-panes -a` 的每个 pane，
+而菜单数据源 `whistle_agent_windows` 的 awk 按 `window_id` 去重、只留 rank 最高的一行。
+本文件里记的原始意图是「列出所有 agent」，按窗口去重只是「一窗一 agent」时代的实现
+细节。更糟的是被丢掉的那一行连 pane id 都没留下 —— 跳转命令（TODO-12 已修的
+`select-pane`）根本没机会用上，**第二个 agent 跳不过去**。
+
+**修法**：`whistle_agent_windows` 去掉窗口去重，一个 pane 一行；同一窗口出现多条时
+在消息列末尾追加 `·格N`（N 按 `list-panes` 顺序数**所有** pane 得到，与
+`pane-base-index` 无关），只在需要消歧时才加。高亮跟随从 window id 改成 pane id
+（`whistle_menu_reconcile_selection` / `whistle_menu_render`），否则同窗口两条里
+第二条永远选不中。汇总段不动 —— 它本来就是 agent 粒度。
+回归用例：`test/integration/state.bats` 的「同窗口两个 running pane —— 计数与条目数一致」、
+「同窗口多条带格位后缀，单 pane 窗口不带」；`test/integration/cli.bats` 的
+「同一窗口的两个 agent 各占一组，靠格位区分」；`test/unit/menu.bats` 的
+「同一窗口的两个 agent 各自跟随，不只落第一条」。
+
+---
+
+## TODO-28 · 双通道重叠时，菜单里数 `▶` 行数仍可能小于 `▶N`
+
+**现象**：状态栏写着 `▶1 ◉0 ◆1`，菜单里却找不到 `▶` 行 —— 那个 agent 显示成 `◆ 完成`。
+
+**触发**：一个 pane 同时 `@whistle=running` 且挂着**未读**通知（`done` / `wait` / `error`）。
+典型：agent 一边跑、一边刚给过一条要看的东西；或后台任务完成的通知还没被读掉，
+agent 又被叫醒继续跑。
+
+**原因**：汇总按**活动通道**数 `running`，菜单一行只显示**有效态**（活动态与通知态
+按 rank 取高者，`done 3 > running 2`）。这是 README「两组计数互不排斥」的既定语义，
+不是计数错 —— 但用户若习惯「数菜单里的 ▶ 行」，就会觉得少了一条。
+TODO-27 修完之后**条目数**恒等于 agent 数，剩下的只有「哪几条在跑」这层。
+
+**为什么不顺手修**：要让两处严格对上，菜单一行得同时显示两个符号（`▶ ◆`），
+改的是每一行的观感。数据不用加 —— `_mu_notice` / `_mu_activity` 两列已经在
+`whistle_menu_model` 里读进来了，一直没被用过。

@@ -1093,16 +1093,25 @@ whistle_list_lines() {
 #               通知态, 活动态, 消息)
 #
 # 与 whistle_pending_windows 的区别：**不过滤** whistle_is_notified，
-# 所以 running / idle 也在内 —— 菜单要能列出「哪些窗口有 agent」，
+# 所以 running / idle 也在内 —— 菜单要能列出「哪些 agent」，
 # 而不只是「哪些在等我」。
 #
-# 按 window_id 去重，保留 rank 最高的那一行：list-panes -a 是 pane 粒度，
-# 一个窗口开了多个 pane 时同一窗口会出现多次，菜单里就是重复条目。
-# 第 5 列是那一行所属的 pane id，菜单据此 select-pane —— 窗口切成多格时
-# 才不会落在隔壁格子。
+# **一个 pane 一行，不按窗口去重。** 状态是 pane 级的：一个窗口里可以有多个
+# 各跑各的 agent（主 session 派生子 agent、子 agent 在同一窗口分屏开了新
+# session）。早先按 window_id 去重、只留 rank 最高的一行，于是状态栏按 pane
+# 数出 ▶2、菜单只列 1 条，两个数字对不上；被丢掉的那一行连 pane id 都没留下，
+# 第二个 agent **跳都跳不过去**。
 #
-# ⚠️ 这里的 rank 必须与 whistle_rank 一致（awk 里没法调 shell 函数）。
-# 两处对不上时症状很隐蔽：窗口徽章显示 ▶、菜单却排成 idle 那一条。
+# 第 5 列是 pane id，菜单据此 select-pane —— 窗口切成多格时不会落在隔壁格子。
+#
+# 同一窗口出现多条时，行尾（消息列内）追加「·格N」区分：N 是该 pane 在窗口里
+# 的位置。位置按 list-panes 顺序**数所有 pane**（含不入菜单的）得到 —— 它天然
+# 等于 pane_index - pane_base_index + 1，与用户是否设了 pane-base-index 无关。
+# 只有一个 agent 的窗口不加后缀：那是常态，不该多出噪音。
+#
+# ⚠️ 后缀拼在**行尾**而不是新增一列：消息列必须在末位（POSIX read 在字段数
+# 多于变量数时会把余下的全塞进最后一个变量），且下游（whistle_menu_model、
+# whistle_menu_render、cmd_menu 的降级路径、cmd_menu_args）都按 9 列读。
 #
 # 第 10 列是子 agent 标记（可选列）、第 11 列是前台进程名：
 # 没上报过、但跑着 agent 的 pane 也要列进菜单（活动态算 idle）——
@@ -1115,16 +1124,26 @@ whistle_agent_windows() {
     2> /dev/null \
     | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 6 5 \
     | awk -F'|' -v gone="$WHISTLE_GONE_STATE" '
-    $6 == "" || $6 == gone { next }
     {
-      r = ($6 == "error") ? 5 : ($6 == "wait") ? 4 : ($6 == "done") ? 3 : ($6 == "running") ? 2 : 1
-      if (!($2 in best)) order[++n] = $2
-      if (!($2 in best) || r > best[$2]) {
-        best[$2] = r
-        line[$2] = $0
+      # 窗口内位置：**每一行都数**（包括下一行就被过滤掉的 pane），
+      # 于是「格N」是它在该窗口里的真实位置，而不是「第几个 agent」。
+      pos[$2]++
+      if ($6 == "" || $6 == gone) next
+      n++
+      row[n] = $0
+      win[n] = $2
+      at[n] = pos[$2]
+      # 消息为空时行尾就是那个 | 分隔符 —— 靠它判，消息里带 | 也不会误判。
+      empty[n] = (substr($0, length($0), 1) == "|")
+      cnt[$2]++
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        # 只有同一窗口出现多条时才需要消歧
+        if (cnt[win[i]] > 1) row[i] = row[i] (empty[i] ? "·格" : " ·格") at[i]
+        print row[i]
       }
     }
-    END { for (i = 1; i <= n; i++) print line[order[i]] }
   '
 }
 

@@ -94,13 +94,25 @@ EOF
     assert_eq "$output" ''
 }
 
-@test "menu selection: 重排后按 window id 跟随选中项" {
-    run whistle_menu_reconcile_selection '@2' 2 << 'EOF'
+@test "menu selection: 重排后按 pane id 跟随选中项" {
+    run whistle_menu_reconcile_selection '%2' 2 << 'EOF'
 item|1|@2|%2|dayfold|w2|done|完成
 item|2|@1|%1|dayfold|w1|idle|等待
 EOF
     assert_eq "$status" 0
-    assert_eq "$output" '@2|1'
+    assert_eq "$output" '%2|1'
+}
+
+@test "menu selection: 同一窗口的两个 agent 各自跟随，不只落第一条" {
+    # 一个窗口里两个 agent 时 window id 相同 —— 按 window id 跟随会永远命中
+    # 第一条，第二条永远选不中。选中身份必须是 pane id。
+    run whistle_menu_reconcile_selection '%8' 1 << 'EOF'
+item|1|@2|%2|dayfold|claude.exe|running|
+item|2|@2|%8|dayfold|claude.exe|idle|
+item|3|@3|%4|ideal|claude.exe|idle|
+EOF
+    assert_eq "$status" 0
+    assert_eq "$output" '%8|2'
 }
 
 @test "menu selection: 选中项被藏到第 27 项时退回第 26 个可见项" {
@@ -110,23 +122,23 @@ EOF
     done
     model=$(whistle_menu_model <<< "$input")
 
-    run whistle_menu_reconcile_selection '@27' 26 <<< "$model"
+    run whistle_menu_reconcile_selection '%27' 26 <<< "$model"
     assert_eq "$status" 0
-    assert_eq "$output" '@26|26'
+    assert_eq "$output" '%26|26'
 }
 
-@test "menu selection: 选中窗口消失且原索引越界时夹到最后一项" {
-    run whistle_menu_reconcile_selection '@2' 9 << 'EOF'
+@test "menu selection: 选中 pane 消失且原索引越界时夹到最后一项" {
+    run whistle_menu_reconcile_selection '%2' 9 << 'EOF'
 item|1|@1|%1|dayfold|w1|idle|一
 item|2|@3|%3|dayfold|w3|idle|三
 item|3|@4|%4|dayfold|w4|idle|四
 EOF
     assert_eq "$status" 0
-    assert_eq "$output" '@4|3'
+    assert_eq "$output" '%4|3'
 }
 
 @test "menu selection: 模型没有 item 时输出为空" {
-    run whistle_menu_reconcile_selection '@1' 1 < /dev/null
+    run whistle_menu_reconcile_selection '%1' 1 < /dev/null
     assert_eq "$status" 0
     assert_eq "$output" ''
 }
@@ -225,7 +237,7 @@ EOF
 }
 
 @test "menu render: 帧包含标题、状态、窗口、消息与快捷键" {
-    run whistle_menu_render '@1' 120 << 'EOF'
+    run whistle_menu_render '%1' 120 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|做完了
 item|2|@2|%2|main|shell|running|继续执行
 EOF
@@ -238,10 +250,10 @@ EOF
     assert_not_contains "$output" '#['
 }
 
-@test "menu render: 反显只施加在 selected window 对应行" {
+@test "menu render: 反显只施加在 selected pane 对应行" {
     local esc first second
     esc=$(printf '\033')
-    run whistle_menu_render '@2' 120 << 'EOF'
+    run whistle_menu_render '%2' 120 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|一
 item|2|@2|%2|dayfold|shell|idle|二
 EOF
@@ -256,7 +268,7 @@ EOF
 @test "menu render: 长 ASCII 按 columns 截断且终止 SGR 完整" {
     local esc line plain
     esc=$(printf '\033')
-    run whistle_menu_render '@1' 32 << 'EOF'
+    run whistle_menu_render '%1' 32 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 EOF
     assert_eq "$status" 0
@@ -273,13 +285,13 @@ EOF
 }
 
 @test "menu render: 中文与 emoji 保持完整，窄列不输出半个 UTF-8 字符" {
-    run whistle_menu_render '@1' 120 << 'EOF'
+    run whistle_menu_render '%1' 120 << 'EOF'
 item|1|@1|%1|dayfold|编辑器|done|中文🙂🚀完成
 EOF
     assert_eq "$status" 0
     assert_contains "$output" '[dayfold]: 编辑器 中文🙂🚀完成'
 
-    run whistle_menu_render '@1' 31 << 'EOF'
+    run whistle_menu_render '%1' 31 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|🙂中文
 EOF
     assert_eq "$status" 0
@@ -332,7 +344,7 @@ EOF
 }
 
 @test "menu render: overflow 只有不可选提示且没有快捷键" {
-    run whistle_menu_render '@1' 120 << 'EOF'
+    run whistle_menu_render '%1' 120 << 'EOF'
 item|1|@1|%1|dayfold|editor|done|一
 overflow|3
 EOF

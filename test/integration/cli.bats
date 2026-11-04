@@ -261,6 +261,33 @@ run_menu_popup_spy() {
 3"
 }
 
+@test "menu-args: 同一窗口的两个 agent 各占一组，靠格位区分" {
+  # 主 session 派生子 agent、子 agent 在同一窗口分屏开了新 session 时，
+  # 菜单里必须两条都在（否则状态栏的 ▶2 在菜单里只数得到 1 条），
+  # 且各自跳到自己那一格。
+  wt set -g @whistle_spin off
+  wt split-window -t w1
+  local p1 p2 l1 l2 c1 c2
+  p1=$(wt list-panes -t w1 -F '#{pane_id}' | head -1)
+  p2=$(wt list-panes -t w1 -F '#{pane_id}' | tail -1)
+  "$CLI" running '在跑' -t "$p1"
+  "$CLI" running '在跑' -t "$p2"
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  assert_eq "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" '6'
+
+  l1=$(printf '%s\n' "$output" | sed -n 1p)
+  l2=$(printf '%s\n' "$output" | sed -n 4p)
+  c1=$(printf '%s\n' "$output" | sed -n 3p)
+  c2=$(printf '%s\n' "$output" | sed -n 6p)
+
+  assert_contains "$l1" '·格1'
+  assert_contains "$l2" '·格2'
+  assert_contains "$c1" "--select $p1"
+  assert_contains "$c2" "--select $p2"
+}
+
 @test "menu-args: 一条 agent 都没有时输出为空" {
   run "$CLI" --menu-args
   assert_eq "$output" ''

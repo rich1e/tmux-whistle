@@ -28,7 +28,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 498 项测试（88 单测 + 339 集成 + 71 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 502 项测试（89 单测 + 342 集成 + 71 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -93,7 +93,9 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
 `--notice <done|wait|error>`、`--sub-agent-start`、`--sub-agent-stop`。
 菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
 和窗口名、agent 的话分开（`whistle_menu_item_label` 是唯一定义处，
-`cmd_menu` 与 `cmd_menu_args` 共用它）。
+`cmd_menu` 与 `cmd_menu_args` 共用它）。**菜单按 agent 列出，一个 pane 一条**；
+同一窗口里有多个 agent 时，消息列末尾带 `·格N`（N 是该 pane 在窗口里的位置）
+以便区分 —— 见「汇总数 pane，菜单也列 pane」那条不变量。
 
 **图标与颜色**（都可配，见 `WHISTLE_DEFAULTS`）：`◆` 完成（紫 `#af5fff`）、`◔` 等待、
 `⚠` 错误、`▶` 运行中（绿 `#00af00`）、`◉` 空闲（灰 `#8a8a8a`）、`⚑` 待处理总数（青 `#5fd7d7`）。
@@ -209,6 +211,14 @@ agent 显示成「空闲」，**全程零报错**。新增任何一种「要告�
 `count_done` 里。整段是否隐藏的判据仍写 `running || idle || pending` ——
 `@whistle_pending` 就是通知总数，所以那个 format 段逐字成立，**别为双通道去加深嵌套**。
 
+**汇总数 pane，菜单也列 pane —— 两处必须是同一个粒度。** `@whistle_count_*` 按
+`list-panes -a` 的**每个 pane** 计数，`whistle_agent_windows` 也必须**一个 pane 一行**。
+早先菜单按 `window_id` 去重、只留 rank 最高的一行，于是「一个窗口里两个 agent 都在跑」
+时状态栏写 `▶2`、弹窗只列 1 条，用户以为少了一个（2026-11-04 实测：`▶3` 对 2 条）；
+更糟的是被去重丢掉的那一行连 pane id 都没留下，**第二个 agent 在菜单里没有入口、
+跳不过去**。同一窗口的多个 agent 用消息列末尾的 `·格N` 区分（N 是它在窗口里的位置）。
+窗口徽章是唯一允许不同粒度的地方 —— 它天然一个窗口一格，按 rank 取窗口内最高的那个态。
+
 **「空闲」有两个来源**：hook 在 `SessionStart` 报 idle，以及**按进程发现** ——
 `whistle_resolve_idle_panes`（纯函数）把「没上报状态、但前台跑着
 `@whistle_agent_cmds` 里那些进程」的 pane 推导成 idle。推导发生在纯函数之前，
@@ -296,7 +306,8 @@ option 里的 PID 会残留，OS 复用 PID 之后 `kill -0` 对一个**无关�
 `#{?#{@whistle_count_running},<帧选择器>,<静态图标>}`，归零退回 `▶`。
 
 **菜单是自绘 popup，会自己刷新**（`lib/menu.sh` 的 `whistle_menu_ui` 每约 0.5 秒
-重读一次模型，变了才重绘；列表重排后高亮按 window id 跟随原来那个窗口）。
+重读一次模型，变了才重绘；列表重排后高亮按 **pane id** 跟随原来那个 agent ——
+一个窗口里可以有多个 agent，按 window id 跟随会永远落回第一条）。
 因此菜单里的 running 项仍用固定的 `▶` 而非 Braille 帧 —— 一直在变的帧在列表里
 读不出来，看着像渲染错乱。
 
@@ -345,9 +356,11 @@ helper（`test/test_helper/whistle.bash`）的约定：
   `tmux-whistle doctor` 也会报「本机还有别的 tmux server」。
 - `display -pF` 不解析 `#[...]` 样式，断言前要剥掉（helper 的 `wt_render_windows` 已处理）。
 - hook 走 `run-shell -b` 是异步的，断言前用 `wt_wait_until` 轮询，别 sleep 一下就假定好了。
-- **`optw` 读的是 global option**（实现是 `show -gwv`）。要读 window 级 option 得用
-  `wt show -wv -t "$w" <name>`；`optp` 要两个参数（option 名 + pane id）。
-  读错作用域会让断言静默读空、测试假绿。
+- **`opt` 读全局 option**（`show -gqv`，`set -g` 写的那种）；**`optw` 读的是
+  全局 window option**（`show -gwv`，给 `window-status-format` 这类用）——
+  拿它读 `@whistle_count_*` 会报 `invalid option`，断言静默读空、测试假绿。
+  要读某个窗口自己的 option 用 `wt show -wv -t "$w" <name>`；`optp` 要两个参数
+  （option 名 + pane id）。
 - `bin/tmux-whistle` 的 `cmd_menu` 与 `cmd_menu_args` 是两份几乎相同的循环，
   后者只为让测试能在无 attached client 时断言 argv。**改一边不改另一边 = 假绿**。
 

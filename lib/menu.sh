@@ -143,10 +143,14 @@ EOF
   fi
 }
 
-# whistle_menu_reconcile_selection <选中 window id> <原索引> ← 菜单模型
+# whistle_menu_reconcile_selection <选中 pane id> <原索引> ← 菜单模型
 #
-# 模型里只有可见 item，隐藏项不会进入这里的任何一遍扫描。先按 window id 跟随
+# 模型里只有可见 item，隐藏项不会进入这里的任何一遍扫描。先按 pane id 跟随
 # 重排；找不到（消失或被挤到 26 项以后）时，再把原索引夹到当前可见范围内。
+#
+# ⚠️ 跟随身份是 **pane id**，不是 window id：一个窗口里可以有多个 agent
+# （子 agent 分屏开了新 session），它们的 window id 相同 —— 按 window id 匹配
+# 会永远命中第一条，第二条永远选不中。
 whistle_menu_reconcile_selection() {
   _mu_model=$(cat)
   _mu_selected=${1:-}
@@ -156,8 +160,8 @@ whistle_menu_reconcile_selection() {
   while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
     [ "$_mu_kind" = item ] || continue
     _mu_count=$((_mu_count + 1))
-    if [ "$_mu_wid" = "$_mu_selected" ]; then
-      printf '%s|%s\n' "$_mu_wid" "$_mu_count"
+    if [ "$_mu_pid" = "$_mu_selected" ]; then
+      printf '%s|%s\n' "$_mu_pid" "$_mu_count"
       return 0
     fi
   done << EOF
@@ -176,7 +180,7 @@ EOF
     [ "$_mu_kind" = item ] || continue
     _mu_index=$((_mu_index + 1))
     if [ "$_mu_index" -eq "$_mu_previous" ]; then
-      printf '%s|%s\n' "$_mu_wid" "$_mu_index"
+      printf '%s|%s\n' "$_mu_pid" "$_mu_index"
       return 0
     fi
   done << EOF
@@ -586,7 +590,7 @@ EOF
     "$(whistle_menu_ansi_fg "$_mpal_color_error")"
 }
 
-# whistle_menu_render <selected window id> <columns> ← 菜单模型
+# whistle_menu_render <selected pane id> <columns> ← 菜单模型
 #
 # 输出一帧完整 ANSI 内容。标题由内容首行绘制，兼容没有 display-popup -T 的
 # tmux 3.2；overflow 只是暗色提示，没有键位，也不可能被选中。
@@ -663,7 +667,7 @@ EOF
       esac
       _mu_plain=$(whistle_menu_item_text "$_mu_key" "$_mu_icon" "$_mu_eff" \
         "$_mu_s" "$_mu_wn" "$_mu_msg" "$_mu_columns")
-      if [ "$_mu_wid" = "$_mu_selected" ]; then
+      if [ "$_mu_pid" = "$_mu_selected" ]; then
         printf '\033[7m%s%s\033[0m\n' "$_mu_fg" "$_mu_plain"
       else
         printf '%s%s\033[0m\n' "$_mu_fg" "$_mu_plain"
