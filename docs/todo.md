@@ -22,6 +22,7 @@
 
 ## 已修复
 
+- [x] **TODO-29** 换终端后点击桌面通知跳回旧终端（tmux server 环境是启动快照）
 - [x] **TODO-26** 子 agent 在跑时 Stop 把 running 烤进 `@whistle`，标记清掉后那盏 ▶ 永不熄灭
 - [x] **TODO-18** 后台 Bash（`run_in_background`）在跑时状态栏看不见
 - [x] **TODO-17** 后台/子 agent 在跑时，徽章显示「空闲」（活动与通知挤在一个状态槽里）
@@ -1519,3 +1520,50 @@ TODO-27 修完之后**条目数**恒等于 agent 数，剩下的只有「哪几�
 **为什么不顺手修**：要让两处严格对上，菜单一行得同时显示两个符号（`▶ ◆`），
 改的是每一行的观感。数据不用加 —— `_mu_notice` / `_mu_activity` 两列已经在
 `whistle_menu_model` 里读进来了，一直没被用过。
+
+---
+
+## TODO-29 · 换终端后点击桌面通知跳回旧终端
+
+✅ 已修复（`lib/deliver.sh` 的 `whistle_os_app` / `whistle_termtype_app`；
+`bin/tmux-whistle` 的 `cmd_doctor`）
+
+**现象**：从 iTerm2 换到 Ghostty（或任何新终端）之后，点击 macOS 通知中心里的
+tmux-whistle 通知，跳到的是**旧终端** —— 若旧终端已经退出，还会被重新拉起来。
+
+**触发**：tmux server 是在旧终端里启动的，之后在新终端里 attach。
+
+**原因**：`whistle_os_app` 推断「点击通知要激活哪个应用」，顺序是
+`@whistle_os_app` → `$__CFBundleIdentifier` → `$TERM_PROGRAM`。后两者来自进程环境，
+而 **tmux server 的环境变量是它启动那一刻的快照**：server 当年从 iTerm2 起，
+换终端 attach 不会刷新它，`TERM_PROGRAM` 仍是 `iTerm.app`、
+`__CFBundleIdentifier` 仍是 `com.googlecode.iterm2`，于是 `terminal-notifier -activate`
+带着旧终端的 bundle ID 发出去。实测（2026-11-10）：本机只剩 Ghostty 进程，
+但 server 环境里仍是 `TERM_PROGRAM=iTerm.app`。
+
+**修法**：
+
+1. `whistle_os_app` 的 `$TERM_PROGRAM` 映射补上 `ghostty → com.mitchellh.ghostty`。
+   这只对「server 从 Ghostty 启动」有效，救不了已经陈旧的 server。
+2. `tmux-whistle doctor` 新增「通知跳转」段：拿 `#{client_termtype}` 的首词
+   （tmux 3.8 返回 `ghostty 1.4.0`）查 `whistle_termtype_app`，与
+   `whistle_os_app` 的环境推断比对，不一致时打印修复命令。已显式配置
+   `@whistle_os_app` 时跳过（配了就按配的来）。映射表只收能唯一对应的终端：
+   iTerm2 与 Terminal.app 的 termtype 都是 `xterm-256color`，分辨不出就不猜。
+
+**用户侧修法**（陈旧 server 只能显式配置）：
+
+```sh
+tmux set -g @whistle_os_app 'com.mitchellh.ghostty'
+```
+
+再写进 `tmux.conf.local` 持久化。**已经躺在通知中心的旧通知改不回来** ——
+`-activate` 是发送那一刻写进通知载荷的，得等新通知，或先 `terminal-notifier -remove ALL`。
+
+**回归用例**：`test/integration/deliver.bats` 的「TERM_PROGRAM=ghostty 映射到 Ghostty 的
+bundle id」「client 的 termtype 首词映射到已知终端 bundle id」；
+`test/integration/cli.bats` 的 doctor「通知跳转」三例。
+
+**验收**（2026-11-10，Ghostty 1.4.0）：点击新发出的通知已聚焦 Ghostty；此前已送达的
+旧通知仍指向 iTerm2 —— 符合预期，`-activate` 在发送那一刻就写死了，只能等新通知或
+`terminal-notifier -remove ALL`。

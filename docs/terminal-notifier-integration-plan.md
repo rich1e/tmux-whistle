@@ -207,17 +207,37 @@ POSIX sh 没有数组；构造 terminal-notifier 参数时可用函数内的 `se
 set -g @whistle_os_app 'com.googlecode.iterm2'
 # 或
 set -g @whistle_os_app 'com.apple.Terminal'
+# 或
+set -g @whistle_os_app 'com.mitchellh.ghostty'
 ```
 
 选择顺序：
 
 1. 非空 `@whistle_os_app`；
 2. 可靠的进程环境 bundle 信息；
-3. 对明确识别的 `$TERM_PROGRAM` 做小型映射；
+3. 对明确识别的 `$TERM_PROGRAM` 做小型映射：
+
+   | `$TERM_PROGRAM` | bundle ID |
+   |---|---|
+   | `iTerm.app` | `com.googlecode.iterm2` |
+   | `Apple_Terminal` | `com.apple.Terminal` |
+   | `ghostty` | `com.mitchellh.ghostty` |
+
 4. 无法识别则省略 `-activate`。
 
 不要把未知值猜成 iTerm2。省略 activate 只意味着「不主动唤起应用」，不影响严格跳转的已读判据。
 上游源码保证同时提供时先 activate、后 execute。
+
+**tmux server 的环境变量是它启动那一刻的快照。** server 当年从 iTerm2 起、之后用户
+换成 Ghostty 并 attach，`__CFBundleIdentifier` / `TERM_PROGRAM` 仍然是 iTerm2 的，
+于是通知会点回 iTerm2 —— 若 iTerm2 已退出，还会被重新拉起来。这是环境推断的固有盲区：
+换过终端的用户必须显式配置 `@whistle_os_app`。
+
+`tmux-whistle doctor` 的「通知跳转」段用于暴露这个盲区：用 `#{client_termtype}` 的
+首词（tmux 3.8 返回形如 `ghostty 1.4.0`）查 `whistle_termtype_app`，与
+`whistle_os_app` 的环境推断结果比对，不一致时打印修复命令。映射表只收录能唯一对应的
+终端 —— iTerm2 与 Terminal.app 的 termtype 都是 `xterm-256color`，分辨不出，宁可
+返回空也不猜。已显式配置 `@whistle_os_app` 时跳过这项核对（配了就按配的来）。
 
 限制：activate 只能保证应用到前台；macOS 终端有多个窗口/标签时，精确聚焦某个 OS 标签取决于终端应用本身。
 本方案承诺的是 tmux client/window/pane 正确，不额外承诺所有终端的 OS 标签聚焦。

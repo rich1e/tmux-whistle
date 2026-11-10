@@ -261,9 +261,20 @@ whistle_os_app() {
     case "${TERM_PROGRAM:-}" in
     iTerm.app) _oa_app='com.googlecode.iterm2' ;;
     Apple_Terminal) _oa_app='com.apple.Terminal' ;;
+    ghostty) _oa_app='com.mitchellh.ghostty' ;;
     esac
   fi
   printf '%s' "$_oa_app"
+}
+
+# 终端类型 → macOS bundle id。tmux 3.8 的 #{client_termtype} 形如 "ghostty 1.4.0"，
+# 调用方传首词即可。iTerm2 与 Terminal.app 的 termtype 都是 xterm-256color ——
+# 分辨不出来，宁可返回空也不猜（猜错就是把通知点进无关的应用）。
+whistle_termtype_app() {
+  case "${1:-}" in
+  ghostty | xterm-ghostty) printf 'com.mitchellh.ghostty' ;;
+  *) printf '' ;;
+  esac
 }
 
 whistle_os_notify() {

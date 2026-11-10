@@ -1516,6 +1516,27 @@ select-pane -t $p"
   # 未安装状态下的"未注入"只是提醒，不该让 doctor 整体失败
   [[ "$output" == *'未注入'* ]] || [[ "$output" == *'已注入'* ]]
 }
+
+@test "doctor: @whistle_os off 时不报告通知跳转归属" {
+  wt set -g @whistle_os off
+  run "$CLI" doctor
+  assert_not_contains "$output" '通知跳转'
+}
+
+@test "doctor: 显式配置 @whistle_os_app 时报告激活目标" {
+  wt set -g @whistle_os on
+  wt set -g @whistle_os_app 'com.mitchellh.ghostty'
+  run "$CLI" doctor
+  assert_contains "$output" '通知跳转'
+  assert_contains "$output" 'com.mitchellh.ghostty'
+}
+
+@test "doctor: 未配置 @whistle_os_app 且 server 无 client 时说明跳过环境核对" {
+  wt set -g @whistle_os on
+  run "$CLI" doctor
+  assert_contains "$output" '通知跳转'
+  assert_contains "$output" '无 attached client'
+}
 @test "menu-args: 生成的命令是合法的 tmux 命令（不会 Unknown command）" {
   "$CLI" "done" '做完了'
   run "$CLI" --menu-args

@@ -95,7 +95,7 @@ Claude Code 集成：
   @whistle_border on|off             面板边框变色（默认 on）
   @whistle_display on|off            状态栏瞬时提示（默认 on）
   @whistle_os on|off                 桌面系统通知（默认 off）
-  @whistle_os_app <bundle ID>        点击通知时激活的 macOS 应用（默认空）
+  @whistle_os_app <bundle ID>        点击通知时激活的 macOS 应用（默认空；换过终端请显式指定，见 doctor）
   @whistle_self on|off               是否也提示自己所在的 session（默认 off）
   @whistle_clear_on_focus on|off     切进窗口自动清除（默认 on）
   @whistle_color_done|wait|error|running|idle   徽章与菜单颜色
@@ -820,6 +820,33 @@ cmd_doctor() {
   done
 
   if [ "$(whistle_conf '@whistle_os')" = on ]; then
+    # 点击通知时激活哪个终端。tmux server 的环境是**启动那一刻**的快照 ——
+    # 换过终端之后它仍指向旧终端，通知会点回那个、甚至把已退出的它重新拉起。
+    # 这条只在 @whistle_os_app 没显式配置时才有意义（配了就按配的来）。
+    printf '\n通知跳转\n'
+    _dg_os_app=$(whistle_conf '@whistle_os_app')
+    if [ -n "$_dg_os_app" ]; then
+      _ok_line "点击通知激活 $_dg_os_app"
+    else
+      _dg_guessed=$(whistle_os_app)
+      _dg_termtype=$(whistle_tmux list-clients -F '#{client_termtype}' 2> /dev/null | head -1)
+      _dg_term=${_dg_termtype%% *}
+      _dg_want=$(whistle_termtype_app "$_dg_term")
+      if [ -z "$_dg_termtype" ]; then
+        printf '  - 无 attached client，跳过环境核对'
+        [ -n "$_dg_guessed" ] && printf '（当前推断 %s）' "$_dg_guessed"
+        printf '\n'
+      elif [ -n "$_dg_want" ] && [ "$_dg_guessed" != "$_dg_want" ]; then
+        _warn_line "当前 client 是 ${_dg_term}，但环境推断出 '${_dg_guessed:-空}'"
+        printf '    → tmux server 的环境是启动时的快照；换过终端后，点击通知会跳回旧终端。\n'
+        printf '    → 修：set -g @whistle_os_app %s\n' "$_dg_want"
+      elif [ -n "$_dg_guessed" ]; then
+        _ok_line "点击通知激活 $_dg_guessed（按环境推断，可显式配置 @whistle_os_app 覆盖）"
+      else
+        printf '  - 无法识别终端，点击通知不激活任何 app\n'
+      fi
+    fi
+
     if command -v terminal-notifier > /dev/null 2>&1; then
       _dg_tn_ver=$(terminal-notifier -version 2> /dev/null)
       _dg_tn_major=$(printf '%s\n' "$_dg_tn_ver" | sed -n 's/^terminal-notifier \([0-9][0-9]*\)\..*$/\1/p')

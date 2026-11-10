@@ -148,7 +148,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_border_status` | `off` | pane 边框状态行：`top` / `bottom`，分屏时按 pane 显示符号 |
 | `@whistle_display` | `on` | 状态栏瞬时提示 |
 | `@whistle_os` | `off` | 桌面系统通知 |
-| `@whistle_os_app` | 空 | 点击通知时要激活的 macOS 应用 bundle ID，如 `com.googlecode.iterm2` / `com.apple.Terminal`；无法识别终端时省略激活 |
+| `@whistle_os_app` | 空 | 点击通知时要激活的 macOS 应用 bundle ID，如 `com.googlecode.iterm2` / `com.apple.Terminal` / `com.mitchellh.ghostty`；无法识别终端时省略激活。**换过终端的用户必须显式指定**（见「桌面通知」） |
 | **行为** | | |
 | `@whistle_self` | `off` | 是否也提示自己所在的 session |
 | `@whistle_clear_on_focus` | `on` | 切进窗口自动把通知标为已读（不清 `running` / `idle`） |
@@ -487,13 +487,21 @@ Claude Code 的回复全文也会自动作为 `--body` 存下来。
 
 ```tmux
 set -g @whistle_os on
-set -g @whistle_os_app 'com.googlecode.iterm2'  # iTerm2
-# set -g @whistle_os_app 'com.apple.Terminal'   # macOS 终端
+set -g @whistle_os_app 'com.googlecode.iterm2'   # iTerm2
+# set -g @whistle_os_app 'com.apple.Terminal'    # macOS 终端
+# set -g @whistle_os_app 'com.mitchellh.ghostty' # Ghostty
 ```
 
-`@whistle_os_app` 默认空：插件会尝试识别终端，无法识别时省略应用激活，
-不会猜成某个终端。activate 只负责把应用带到前台；终端有多个 macOS 窗口或标签时，
+`@whistle_os_app` 默认空：插件会尝试识别终端（`TERM_PROGRAM` 为 `iTerm.app` /
+`Apple_Terminal` / `ghostty`），无法识别时省略应用激活，不会猜成某个终端。
+activate 只负责把应用带到前台；终端有多个 macOS 窗口或标签时，
 **不保证所有终端都能精确聚焦对应的 OS 标签**。tmux 内的 client / window / pane 跳转另行处理。
+
+**换过终端的用户请显式配置。** tmux server 的环境变量是它**启动那一刻**的快照：
+server 当年从 iTerm2 起，之后换成 Ghostty 并 attach，环境里的 `__CFBundleIdentifier`
+仍然是 iTerm2 的 —— 点击通知会跳回 iTerm2，甚至把已经退出的它重新拉起来。
+`tmux-whistle doctor` 的「通知跳转」段会核对当前 client 的终端类型，不一致时打印
+修复命令（`set -g @whistle_os_app com.mitchellh.ghostty` 之类）。
 
 使用 terminal-notifier 时：
 

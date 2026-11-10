@@ -479,6 +479,7 @@ self=$fake_cli"
   fake_os_backend terminal-notifier
   wt set -g @whistle_os on
   wt set -g @whistle_os_app 'com.example.Terminal'
+  # shellcheck disable=SC2030,SC2031  # TERM_PROGRAM 只供本 @test 内的通知构造读取
   export TERM_PROGRAM='unknown-terminal'
 
   whistle_os_notify "$(win_of)" "done" 'x' "$(pane_of)"
@@ -495,6 +496,25 @@ self=$fake_cli"
   whistle_os_notify "$(win_of)" "done" 'x' "$(pane_of)"
   run cat "$FAKE_OS_LOG"
   assert_not_contains "$output" '-activate'
+}
+
+@test "os: TERM_PROGRAM=ghostty 映射到 Ghostty 的 bundle id" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+  unset __CFBundleIdentifier
+  # shellcheck disable=SC2030,SC2031  # TERM_PROGRAM 只供本 @test 内的通知构造读取
+  export TERM_PROGRAM='ghostty'
+
+  whistle_os_notify "$(win_of)" "done" 'x' "$(pane_of)"
+  assert_eq "$(fake_os_arg -activate)" 'com.mitchellh.ghostty'
+}
+
+@test "os: client 的 termtype 首词映射到已知终端 bundle id" {
+  assert_eq "$(whistle_termtype_app 'ghostty')" 'com.mitchellh.ghostty'
+  assert_eq "$(whistle_termtype_app 'xterm-ghostty')" 'com.mitchellh.ghostty'
+  # iTerm2 与 Terminal.app 的 termtype 都是 xterm-256color —— 分辨不出，不许猜。
+  assert_eq "$(whistle_termtype_app 'xterm-256color')" ''
+  assert_eq "$(whistle_termtype_app '')" ''
 }
 
 @test "os: NSUserDefaults 特殊首字符按上游规则加前导反斜杠" {
