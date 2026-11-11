@@ -438,6 +438,8 @@ helper（`test/test_helper/whistle.bash`）的约定：
 - **开发文档**：`docs/development.md` —— 仓库内的开发指南（命令、目录结构、红线、测试约定）。
   README 只面向使用者，不写开发内容。
 - **功能待办**：`docs/todo.md` —— 已知问题与限制，含现象 / 触发方式 / 原因。
+- **idle_prompt 验证记录**：`docs/idle-prompt-verification.md` —— 「agent 在正文里提问
+  却不提醒」的现象、三层根因、探针实验与真机回归时间线，以及怎么再验一次。
 - **设计方案评审**：`docs/notify-design-review.md` —— 「事件收件箱」形态（事件溯源 +
   SQLite + Python TUI）的取舍分析，说明为什么只吸收模型、不换技术栈。
 - 需求来源：`docs/requirements-analysis.md`

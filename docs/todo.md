@@ -1271,6 +1271,9 @@ plan mode 下 `PreToolUse` 已经能把 `running` 点回来。
 
 **相关代码**：`hooks/claude-code.sh` 的 `whistle_notify_state` 与 Notification 分支。
 
+**完整记录**（现象、探针原始日志、真机回归时间线、怎么再验一次）：
+[`docs/idle-prompt-verification.md`](./idle-prompt-verification.md)
+
 ---
 
 ## TODO-21 · 测试偶发「server 还活着却连不上」，并留下清不掉的隔离 server
