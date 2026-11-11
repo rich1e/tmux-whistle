@@ -282,6 +282,21 @@ TTL 一到，推导层立刻回落 —— 自愈。判据链是「真源只放�
 帧表以 Claude Code 自己的实现为底（v2.1.304 的 `p` 数组：圆点逐级长成星），中间的
 `✶` 换成了 `✷ ✸` 两级八芒星。
 
+**风格可配：`@whistle_spin_style`。** 帧表集中在 `whistle_spin_frames()` 的 case 里
+（纯函数，加一套只需加一行）。内置 `claude`（默认）、`symbols_3`、`circles_5`、
+`lines_3`、`squares_9`、`togglers_4`；除 `claude` 外取自
+[cli-loaders](https://github.com/cbmongithub/cli-loaders)（MIT）的
+`src/cli-loaders.ts`。未知值回落到默认风格 —— option 被手改错时那格不能渲染成空白。
+
+`lib/spin.sh` **每帧重读** `@whistle_spin_style`，所以换风格不用重启推进器；新表里没有
+当前字符时 `whistle_spin_next_char` 会回落到该风格的第一帧。这跟「改了帧表代码要重启
+推进器」（`scripts/setup.sh` 里的 `whistle_spin_stop`）是两件事：那是代码，这是配置。
+
+两处刻意不照搬 cli-loaders：① `symbols_3` 原版有一帧重复（`✹` 出现两次做「弹回去」），
+按下面那条无状态查表的约束去掉了；② 各 loader 自带的 `speed`（50–130ms）没搬 ——
+那是进程内 TUI 的节奏，状态栏每帧要 fork 一次 tmux，间隔统一由 `@whistle_spin_interval`
+控制。
+
 **为什么是星形而不是 Braille 点阵。** 早先用的是经典 6 点图案
 （`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`）：常见等宽字体（MapleMono 等）把整个 Braille 单元画在
 cap 高到基线之间，只占上三行的 6 点图案墨迹比旁边的数字与 `◆` / `◉` 高出约

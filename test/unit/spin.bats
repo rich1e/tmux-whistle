@@ -48,27 +48,56 @@ setup() {
     assert_eq "$(whistle_spin_next_char '⠋')" '·'
 }
 
-@test "spin: 帧表里没有重复字形（重复会让动画卡死）" {
+@test "spin: 每个风格的帧表与 cli-loaders 一致" {
+    # 帧集照搬 https://github.com/cbmongithub/cli-loaders 的 src/cli-loaders.ts。
+    # symbols_3 原版 ['✶','✸','✹','✺','✹','✷'] 里 ✹ 出现两次，按无状态查表的
+    # 约束去掉重复的一帧（见下面的用例）。
+    assert_eq "$(whistle_spin_frames claude)" '· ✢ ✳ ✷ ✸ ✻ ✽'
+    assert_eq "$(whistle_spin_frames symbols_3)" '✶ ✸ ✹ ✺ ✷'
+    assert_eq "$(whistle_spin_frames circles_5)" '◐ ◓ ◑ ◒'
+    assert_eq "$(whistle_spin_frames lines_3)" '- \ | /'
+    assert_eq "$(whistle_spin_frames squares_9)" '◢ ◣ ◤ ◥'
+    assert_eq "$(whistle_spin_frames togglers_4)" '■ □ ▪ ▫'
+}
+
+@test "spin: 未知风格回落到默认风格" {
+    # option 可能被手改错，不能因此让状态栏那格渲染成空白。
+    assert_eq "$(whistle_spin_frames 'banana')" "$(whistle_spin_frames claude)"
+    assert_eq "$(whistle_spin_first 'banana')" '·'
+    assert_eq "$(whistle_spin_next_char '✶' 'banana')" '·'
+}
+
+@test "spin: 换了风格后旧字符落在新表外 → 回落到该风格第一帧" {
+    assert_eq "$(whistle_spin_next_char '✳' 'circles_5')" '◐'
+    assert_eq "$(whistle_spin_next_char '·' 'togglers_4')" '■'
+}
+
+@test "spin: 每个风格内部都没有重复字形（重复会让动画卡死）" {
     # whistle_spin_next_char 是「查当前字 → 取下一个」的无状态查表：同一个字
     # 出现两次时，查找永远匹配到前面那一个，动画会卡在它身上打转。
-    # Claude Code 原版是 12 帧「长—缩」循环，缩的半段与长的半段同字形，所以
-    # 这里只搬长的半段；这条用例守着「别把缩的半段抄进来」。
-    local cur next seen=' ' i=0
-    cur=$(whistle_spin_first)
-    while [ "$i" -lt 7 ]; do
-        case "$seen" in
-        *" $cur "*) echo "字形重复：$cur" && return 1 ;;
-        esac
-        seen="$seen$cur "
-        next=$(whistle_spin_next_char "$cur")
-        [ "$next" != "$cur" ] || {
-            echo "第 $i 帧没有前进：$cur"
-            return 1
-        }
-        cur="$next"
-        i=$((i + 1))
+    # Claude Code 原版 12 帧「长—缩」与 cli-loaders 的 symbols_3 都踩这条，
+    # 所以各自只搬不重复的那一份；这条用例逐个风格守着。
+    local style cur next seen n i
+    for style in claude symbols_3 circles_5 lines_3 squares_9 togglers_4; do
+        seen=' '
+        i=0
+        n=$(whistle_spin_frames "$style" | wc -w | tr -d ' ')
+        cur=$(whistle_spin_first "$style")
+        while [ "$i" -lt "$n" ]; do
+            case "$seen" in
+            *" $cur "*) echo "风格 $style 字形重复：$cur" && return 1 ;;
+            esac
+            seen="$seen$cur "
+            next=$(whistle_spin_next_char "$cur" "$style")
+            [ "$next" != "$cur" ] || {
+                echo "风格 $style 第 $i 帧没有前进：$cur"
+                return 1
+            }
+            cur="$next"
+            i=$((i + 1))
+        done
+        assert_eq "$cur" "$(whistle_spin_first "$style")"
     done
-    assert_eq "$cur" '·'
 }
 
 @test "spin: 表里的每一帧都能接上，没有断链" {
@@ -86,6 +115,25 @@ setup() {
     done
     # 转满一圈应当回到起点
     assert_eq "$cur" '·'
+}
+
+@test "spin: 每个风格都能转满一圈回到起点" {
+    local style cur next n i
+    for style in symbols_3 circles_5 lines_3 squares_9 togglers_4; do
+        n=$(whistle_spin_frames "$style" | wc -w | tr -d ' ')
+        cur=$(whistle_spin_first "$style")
+        i=0
+        while [ "$i" -lt "$n" ]; do
+            next=$(whistle_spin_next_char "$cur" "$style")
+            [ -n "$next" ] || {
+                echo "风格 $style 第 $i 帧之后接不上了"
+                return 1
+            }
+            cur="$next"
+            i=$((i + 1))
+        done
+        assert_eq "$cur" "$(whistle_spin_first "$style")"
+    done
 }
 
 @test "spin: format 片段只引用 option，不嵌套条件式" {

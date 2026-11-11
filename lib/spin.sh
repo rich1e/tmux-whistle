@@ -78,7 +78,10 @@ while :; do
   [ "$_n" -gt 0 ] || break
 
   _cur=$(whistle_tmux show -gqv '@whistle_spin_char' 2> /dev/null)
-  whistle_tmux set -g @whistle_spin_char "$(whistle_spin_next_char "$_cur")" 2> /dev/null || break
+  # 风格每轮重读：换 @whistle_spin_style 之后不必重启推进器，下一帧就换成新
+  # 风格 —— 新表里没有当前字符时 whistle_spin_next_char 会回落到它自己的第一帧。
+  _style=$(whistle_conf '@whistle_spin_style')
+  whistle_tmux set -g @whistle_spin_char "$(whistle_spin_next_char "$_cur" "$_style")" 2> /dev/null || break
   whistle_refresh_all
 
   # 自愈节拍：每 N 帧重算一次全局，让过期的 @whistle_sub 真正回落。

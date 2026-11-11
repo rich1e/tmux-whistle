@@ -602,6 +602,19 @@ teardown() {
   assert_contains "$output" '·'
 }
 
+@test "status-right: fallback 帧跟随 @whistle_spin_style" {
+  # format 里的兜底字面量是**发布时**算出来的：换风格要重新发布才跟上。
+  # 推进器那侧不受影响（它每帧重读风格）。
+  wt_load core
+  wt_load status-line
+  wt set -g @whistle_spin_style circles_5
+  whistle_status_right_publish
+
+  run opt '@whistle_status_right'
+  assert_contains "$output" '#{@whistle_spin_char}'
+  assert_contains "$output" '◐'
+}
+
 @test "status-right: spin 开着但 running 归零 → 退回静态 ▶，不空转" {
   # 推进器在 running 归零时自己退出，@whistle_spin_char 却还留着最后一帧。
   # 帧外面不套「有没有 running」的判断，状态栏就会一直挂着「⠦ 0」：

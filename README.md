@@ -169,6 +169,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_agent_cmds` | `claude claude.exe` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用星形帧轮转（`off` 退回静态图标） |
+| `@whistle_spin_style` | `claude` | 帧风格：`claude` / `symbols_3` / `circles_5` / `lines_3` / `squares_9` / `togglers_4` |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
 | `@whistle_recompute_every` | `60` | 推进器每 N 帧触发一次全局重算（配 0.5 秒 ≈ 30 秒）；用来让过期的后台 agent 标记自行回落 |
 | `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
@@ -284,8 +285,7 @@ agent**：它一边跑着，一边刚给过你一条要看的东西。窗口徽�
 
 ### running 的动画
 
-`▶` 那格是动的 —— 有 agent 在跑时会转。用的是 Claude Code 同款 spinner：
-圆点逐级长成六角星，再回到圆点。
+`▶` 那格是动的 —— 有 agent 在跑时会转。默认是 Claude Code 同款 spinner：
 
 ```
 · → ✢ → ✳ → ✷ → ✸ → ✻ → ✽ → · …
@@ -293,16 +293,42 @@ agent**：它一边跑着，一边刚给过你一条要看的东西。窗口徽�
 
 七帧，默认每 0.5 秒一帧。
 
-选这组帧有两个理由：一是观感与 Claude Code 自己那一行 spinner 一致（帧表以它的
-实现为底 —— 原版是 12 帧「长—缩」循环，这里只搬了长的半段，并把中间的 ✶ 换成
-✷ ✸ 两级八芒星，见下）；
-二是**垂直对齐**：Braille 点阵在 MapleMono 等字体里被画在 cap 高到基线之间，只用
-点阵上三行的经典图案（`⠋⠙⠹…`）会让墨迹比旁边的数字与 `◆` / `◉` 高出约 1/4 格，
-状态栏里看起来「飘在行首上方」；星形与数字、图标同一套度量，天然居中。
+**风格可配**，`@whistle_spin_style` 选一套帧表：
 
-⚠️ `✢ ✳ ✷ ✸ ✻ ✽` 不在 MapleMono 的字形表里，实际显示靠终端回落到系统里带这些字形
-的字体（例如 Meslo / DejaVu Nerd Font）—— Claude Code 在同一个终端里走的也是这条路。
-若你的终端没有这些字形（会显示成方框），用 `set -g @whistle_spin off` 退回静态 `▶`。
+| 值 | 帧 |
+|---|---|
+| `claude`（默认） | `· ✢ ✳ ✷ ✸ ✻ ✽` |
+| `symbols_3` | `✶ ✸ ✹ ✺ ✷` |
+| `circles_5` | `◐ ◓ ◑ ◒` |
+| `lines_3` | `- \ \| /` |
+| `squares_9` | `◢ ◣ ◤ ◥` |
+| `togglers_4` | `■ □ ▪ ▫` |
+
+```sh
+set -g @whistle_spin_style togglers_4
+```
+
+换风格**不用重启推进器** —— 它每帧重读这个 option，下一帧就换了。名字写错也不会让那格
+空白：未知值回落到默认风格。
+
+除 `claude` 外的五套取自 [cli-loaders](https://github.com/cbmongithub/cli-loaders)
+（MIT）的 `src/cli-loaders.ts`，帧内容逐字照搬。两处刻意的偏差：
+
+- `symbols_3` 原版是 `['✶','✸','✹','✺','✹','✷']`，`✹` 出现两次做「弹回去」的效果。
+  推进器是「查当前字 → 取下一个」的**无状态**查表，同一个字写两次会永远匹配到前一个、
+  动画卡死在那一帧，所以去掉了重复的那一帧。
+- 没搬 cli-loaders 每套自带的 `speed`（50–130ms）：那是给进程内 TUI 用的，而状态栏每帧
+  要 fork 一次 tmux，20 帧/秒会把 CPU 拖起来。间隔统一由 `@whistle_spin_interval` 控制。
+
+为什么默认是星形而不是 Braille：**垂直对齐**。Braille 点阵在 MapleMono 等字体里被画在
+cap 高到基线之间，只用点阵上三行的经典图案（`⠋⠙⠹…`）会让墨迹比旁边的数字与 `◆` / `◉`
+高出约 1/4 格，状态栏里看起来「飘在行首上方」；星形与数字、图标同一套度量，天然居中。
+
+⚠️ 这些字形多数不在 MapleMono 的字形表里（`✢ ✳ ✷ ✸ ✻ ✽`、`◐ ◓ ◑ ◒`、`◢ ◣ ◤ ◥`），
+实际显示靠终端回落到系统里带这些字形的字体（例如 Menlo / Meslo / DejaVu Nerd Font）——
+Claude Code 在同一个终端里走的也是这条路。若你的终端没有这些字形（会显示成方框），
+用 `set -g @whistle_spin off` 退回静态 `▶`，或换一套 MapleMono 自带的风格（`togglers_4`
+的 `■ □ ▪ ▫` 是字体里有的）。
 
 **计数为 0 时退回静态 `▶`**（不是继续挂着最后一帧）：推进器在 running 归零时自己退出，
 但帧字符还留在 option 里 —— 不判计数的话状态栏会一直显示 `· 0`，动画早停了、字形还在，

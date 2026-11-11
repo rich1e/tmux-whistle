@@ -103,66 +103,99 @@ WHISTLE_BODY_MAX=400
 # 4 帧还勉强，10 帧就要嵌 9 层，大括号必然配错；而配错了 tmux 只会
 # **静默渲染成空字符串**，不报错。存字符而不是序号，帧数随便加。
 #
-# 三个 option 分工（别混，撞过一次名）：
+# 四个 option 分工（别混，撞过一次名）：
 #   @whistle_spin           on/off 开关，用户可配
+#   @whistle_spin_style     帧风格（claude / symbols_3 / …），用户可配
 #   @whistle_spin_char      当前帧字符，插件写
 #   @whistle_spin_interval  帧间隔，用户可配
 #
 # 帧表用 for 循环遍历字面量，不切多字节字符串 —— POSIX sh 里从多字节串切
-# 第 N 个字符不可靠（按字节还是按字符取决于 locale）。加帧只需往
-# whistle_spin_next_char 的表里加一个字符。
+# 第 N 个字符不可靠（按字节还是按字符取决于 locale）。加一个风格只需往
+# whistle_spin_frames 的 case 里加一行。
 #
-# 这一组取自 Claude Code 自带的 spinner 帧表（v2.1.304 的 p 数组）：圆点 →
-# 六角星逐级长大 → 回到圆点。用户就是照它的观感提的需求（2026-11-10）。
-# 顺带解决了垂直对齐：Braille 点阵在 MapleMono 里被画在 cap 高到基线之间，
-# 只用点阵上三行的经典 6 点图案（⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏）会整体偏高约 1/4 格，
-# 看起来「飘在行首上方」；星形与数字、◆ ◉ 同一套度量，天然居中。
-#
-# ⚠️ ✢ ✳ ✷ ✸ ✻ ✽ 不在 MapleMono 里，靠终端回落到系统里带这些字形的字体
-# （本机命中 Meslo / DejaVu Nerd Font / Menlo，`fc-list ':charset=2733'` 可查）。
-# Claude Code 在同一个终端里走的也是这条 fallback 路，所以观感一致；换到没有
-# 这些字形的终端会显成豆腐块，那时用 @whistle_spin off 退回静态 ▶。
-#
-# ⚠️ 表里**不能出现重复字形**：whistle_spin_next_char 是「查当前字 → 取下一个」
-# 的无状态查表，同一个字写两次时永远匹配到前一个，动画会卡死在同一帧。所以
-# Claude Code 那套 12 帧「长—缩」循环搬不过来（缩的半段与长的半段同字形），
-# 这里只取长的半段，转完一圈直接回到 ·。
+# 每个风格内部**不能出现重复字形**：whistle_spin_next_char 是「查当前字 →
+# 取下一个」的无状态查表，同一个字写两次时永远匹配到前一个，动画会卡死。
+# 所以 Claude Code 那套 12 帧「长—缩」循环搬不过来（缩的半段与长的半段同
+# 字形），这里只取长得那半段；cli-loaders 的 symbols_3 也有一帧重复，见下。
 
-# 第一帧。表异常时的兜底，也是复位时写入的值。
-whistle_spin_first() {
-  printf '%s' '·'
+# 默认风格。option 写错 / 为空时的兜底。
+whistle_spin_default_style() {
+  printf '%s' 'claude'
 }
 
-# whistle_spin_next_char <当前帧> → 下一帧
+# whistle_spin_frames <风格> → 该风格的帧，空格分隔
 #
-# 不在表里（未初始化 / 被手改坏）→ 回到第一帧；已是最后一帧 → 回到第一帧。
+# 纯函数（不碰 tmux）。未知风格回落到默认风格 —— option 可能被手改错，
+# 不能因此让状态栏那格渲染成空白。
+#
+# 帧集来自 https://github.com/cbmongithub/cli-loaders 的 src/cli-loaders.ts，
+# 逐字照搬，例外只有 symbols_3：原版 ['✶','✸','✹','✺','✹','✷'] 里 ✹ 出现
+# 两次（做「弹回去」的效果），按上面那条无状态查表的约束去掉重复的一帧。
+#
+# ⚠️ 多数字形不在 MapleMono 里（◐◓◑◒ / ◢◣◤◥ / ✸✹✺✷ 都是），实际显示靠终端
+# 回落到系统字体；换到没有这些字形的终端会显成豆腐块，那时用 @whistle_spin
+# off 退回静态 ▶。
+whistle_spin_frames() {
+  case "${1:-}" in
+  symbols_3) printf '%s' '✶ ✸ ✹ ✺ ✷' ;;
+  circles_5) printf '%s' '◐ ◓ ◑ ◒' ;;
+  lines_3) printf '%s' '- \ | /' ;;
+  squares_9) printf '%s' '◢ ◣ ◤ ◥' ;;
+  togglers_4) printf '%s' '■ □ ▪ ▫' ;;
+  *) printf '%s' '· ✢ ✳ ✷ ✸ ✻ ✽' ;;
+  esac
+}
+
+# 当前生效的风格（读 option，非纯函数）
+whistle_spin_style() {
+  _sst=$(whistle_conf '@whistle_spin_style')
+  [ -n "$_sst" ] || _sst=$(whistle_spin_default_style)
+  printf '%s' "$_sst"
+}
+
+# whistle_spin_first <风格> → 第一帧
+#
+# 风格省略时用默认风格（L1 单测与兜底路径都走这条）。
+whistle_spin_first() {
+  for _sf_ch in $(whistle_spin_frames "${1:-$(whistle_spin_default_style)}"); do
+    printf '%s' "$_sf_ch"
+    return 0
+  done
+}
+
+# whistle_spin_next_char <当前帧> [风格] → 下一帧
+#
+# 不在该风格的帧表里（未初始化 / 刚换了风格 / 被手改坏）→ 回到第一帧；
+# 已是最后一帧 → 回到第一帧。
 #
 # 纯函数（不碰 tmux）—— L1 单测能直接跑。
 whistle_spin_next_char() {
+  _snc_style=${2:-$(whistle_spin_default_style)}
   _snc_seen=0
-  for _snc_ch in · ✢ ✳ ✷ ✸ ✻ ✽; do
+  for _snc_ch in $(whistle_spin_frames "$_snc_style"); do
     if [ "$_snc_seen" = 1 ]; then
       printf '%s' "$_snc_ch"
       return 0
     fi
     [ "$_snc_ch" = "${1:-}" ] && _snc_seen=1
   done
-  whistle_spin_first
+  whistle_spin_first "$_snc_style"
 }
 
 # 当前帧字符（读 option，非纯函数）
 whistle_spin_char() {
   _sc=$(whistle_tmux show -gqv '@whistle_spin_char' 2> /dev/null) || _sc=''
-  [ -n "$_sc" ] || _sc=$(whistle_spin_first)
+  [ -n "$_sc" ] || _sc=$(whistle_spin_first "$(whistle_spin_style)")
   printf '%s' "$_sc"
 }
 
 # whistle_spin_build → 供 tmux format 用的片段
 #
-# 只有一个条件式：option 为空时回落到第一帧，免得整格渲染成空白。
+# 只有一个条件式：option 为空时回落到当前风格的第一帧，免得整格渲染成空白。
 # ⚠️ 不要过 whistle_sanitize —— 它会剔掉 # { } |，把 format 毁成空串。
 whistle_spin_build() {
-  printf '#{?#{@whistle_spin_char},#{@whistle_spin_char},%s}' "$(whistle_spin_first)"
+  printf '#{?#{@whistle_spin_char},#{@whistle_spin_char},%s}' \
+    "$(whistle_spin_first "$(whistle_spin_style)")"
 }
 
 # -- 默认配置 --------------------------------------------------------------
@@ -193,6 +226,7 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_icon_running ▶
 @whistle_icon_idle ◉
 @whistle_spin on
+@whistle_spin_style claude
 @whistle_spin_interval 0.5
 @whistle_recompute_every 60
 @whistle_display_ms 0
@@ -1240,7 +1274,7 @@ whistle_spin_script() {
 whistle_spin_sync() {
   if [ "$(whistle_conf '@whistle_spin')" != on ]; then
     whistle_spin_stop
-    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first)" 2> /dev/null || true
+    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first "$(whistle_spin_style)")" 2> /dev/null || true
     return 0
   fi
 
@@ -1254,7 +1288,7 @@ whistle_spin_sync() {
   else
     whistle_spin_stop
     # 复位成 0 帧：下次开始转时从头开始，位置可预期
-    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first)" 2> /dev/null || true
+    whistle_tmux set -g @whistle_spin_char "$(whistle_spin_first "$(whistle_spin_style)")" 2> /dev/null || true
   fi
 }
 

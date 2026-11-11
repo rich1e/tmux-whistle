@@ -317,3 +317,32 @@ spin_wait_pid() {
     return 1
   }
 }
+@test "spin: 推进器按 @whistle_spin_style 取帧，换风格不用重启" {
+  # 风格每轮重读，所以改 option 之后下一帧就换 —— 不需要 prefix + r，
+  # 也不需要 whistle_spin_stop。这跟「换帧表要重启推进器」是两件事：
+  # 那是代码变了，这是配置变了。
+  # shellcheck disable=SC2030,SC2031
+  export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_interval 0.1
+  wt set -g @whistle_count_running 1
+  wt set -g @whistle_spin_style togglers_4
+
+  whistle_spin_sync
+  spin_wait_pid || {
+    echo "推进器没起来"
+    return 1
+  }
+
+  wt set -g @whistle_spin_style circles_5
+  _w=0
+  while [ "$_w" -lt 25 ]; do
+    case "$(wt show -gqv @whistle_spin_char)" in
+    ◐ | ◓ | ◑ | ◒) return 0 ;;
+    esac
+    _w=$((_w + 1))
+    sleep 0.2
+  done
+  echo "换风格后 5 秒内没出现 circles_5 的帧，当前是：$(wt show -gqv @whistle_spin_char)"
+  return 1
+}
