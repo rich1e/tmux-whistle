@@ -504,6 +504,75 @@ EOF
   assert_eq "$(pane_notice)" 'done'
 }
 
+# -- idle_prompt：唯一能覆盖「用正文提问」的信号 -----------------------------
+#
+# 现场（2026-11-11 实测）：agent 在正文最后一句问「启动方式要不要固化？」，
+# 同一轮起了后台 shell（sleep 180）。Stop 看到 background_tasks 就把活动态
+# 写成 running、**通知通道一个字不写**（TODO-18 的设计）—— 于是「它在等我回答」
+# 这件事完全没有信号。
+#
+# Claude Code 在回合结束后约 60 秒发 Notification{idle_prompt}
+# （"Claude is waiting for your input"）。实测它在**后台 shell 仍 running 时照样发**，
+# 所以它是这个场景唯一的提醒来源。
+#
+# 但它每个回合结束都会发，包括正常做完的那一轮 —— 因此要守卫：
+#   通知通道为空 **且** 活动态是 running，才写 wait。
+# 少任何一条都会误报：正常回合已经有 ◆；读掉 ◆ 之后活动态是 idle，
+# 那是个假空档。
+
+@test "e2e: idle_prompt 在后台任务在飞时补一条 wait" {
+  # 回合结束、后台 shell 还在跑 → 活动 running，通知通道留空
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"启动方式要不要固化？A 还是 B？",
+ "background_tasks":[{"id":"t1","type":"shell","status":"running","command":"sleep 180"}]}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" ''
+
+  # 约 60 秒后
+  feed <<'EOF'
+{"hook_event_name":"Notification","notification_type":"idle_prompt",
+ "message":"Claude is waiting for your input"}
+EOF
+  assert_eq "$(pane_notice)" 'wait'
+  assert_eq "$(pane_notice_msg)" '等你回复'
+  assert_eq "$(pane_notice_body)" 'Claude is waiting for your input'
+  # 活动通道一动不动 —— 后台确实还在跑
+  assert_eq "$(pane_act)" 'running'
+  # 有效态按 rank 取高者：wait 4 > running 2
+  assert_eq "$(pane_eff)" 'wait'
+}
+
+@test "e2e: idle_prompt 不覆盖已有的通知（◆ 仍然是 ◆）" {
+  feed <<'EOF'
+{"hook_event_name":"Stop","last_assistant_message":"做完了"}
+EOF
+  assert_eq "$(pane_notice)" 'done'
+
+  feed <<'EOF'
+{"hook_event_name":"Notification","notification_type":"idle_prompt",
+ "message":"Claude is waiting for your input"}
+EOF
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '做完了'
+}
+
+@test "e2e: idle_prompt 在活动态不是 running 时不写（读掉 ◆ 之后的空档是假的）" {
+  # 会话刚开始：活动 idle、通知空 —— 不是「后台在跑」那个空档
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"startup"}
+EOF
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(pane_notice)" ''
+
+  feed <<'EOF'
+{"hook_event_name":"Notification","notification_type":"idle_prompt",
+ "message":"Claude is waiting for your input"}
+EOF
+  assert_eq "$(pane_notice)" ''
+  assert_eq "$(pane_notice_msg)" ''
+}
+
 @test "e2e: 无关的通知类型被忽略，不污染两条通道" {
   for t in auth_success elicitation_complete quota_auto_resume_fired plugin_notification; do
     feed <<EOF

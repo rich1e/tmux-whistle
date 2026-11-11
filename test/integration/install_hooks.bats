@@ -129,7 +129,7 @@ data = json.load(open(sys.argv[1]))
 entry = [e for e in data["hooks"]["Notification"]
          if any("tmux-whistle" in h["command"] for h in e["hooks"])][0]
 m = entry["matcher"]
-for want in ("permission_prompt", "agent_needs_input", "agent_completed"):
+for want in ("permission_prompt", "agent_needs_input", "agent_completed", "idle_prompt"):
     assert want in m, f"matcher 缺 {want}"
 for unwanted in ("auth_success", "quota_auto_resume_fired", "plugin_notification"):
     assert unwanted not in m, f"matcher 不该含 {unwanted}"

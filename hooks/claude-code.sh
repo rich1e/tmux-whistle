@@ -174,10 +174,15 @@ whistle_bg_title() {
 #
 # 只处理"需要用户做点什么"的类型，其余（auth_success / elicitation_complete /
 # quota_* / plugin_notification）一律忽略，否则状态栏会被无关事件刷满。
+#
+# idle_prompt（"Claude is waiting for your input"）是唯一能表达
+# 「agent 在正文里问了一句、停在那里等你」的信号 —— 那种提问不产生任何工具
+# 事件。它每个回合结束 60 秒后都会发，所以映射成 wait 之后还要过守卫，
+# 见下面 Notification 分支。
 
 whistle_notify_state() {
   case "${1:-}" in
-  permission_prompt | elicitation_dialog | elicitation_url_dialog | agent_needs_input)
+  permission_prompt | elicitation_dialog | elicitation_url_dialog | agent_needs_input | idle_prompt)
     printf 'wait'
     ;;
   agent_completed)
@@ -314,6 +319,12 @@ _hk_activity() {
   _hk_tmux show -pqv -t "$TMUX_PANE" @whistle 2> /dev/null || true
 }
 
+# 读通知通道的原始值。idle_prompt 靠它判断「这一轮是不是已经说过了」。
+_hk_notice() {
+  [ -n "${TMUX_PANE:-}" ] || return 0
+  _hk_tmux show -pqv -t "$TMUX_PANE" @whistle_notice 2> /dev/null || true
+}
+
 # -- 主流程 -----------------------------------------------------------------
 
 _hk_input=$(cat)
@@ -439,6 +450,23 @@ Notification)
   # **只写通知通道，绝不碰活动通道**。
   # 后台 agent 完成时主 agent 很可能正在跑 —— 早先这里无条件写 done 把
   # running 顶掉，用户一读又降级成「空闲」，整条 bug 链就是这么来的。
+  #
+  # idle_prompt 是「回合结束 60 秒、你还没打字」。它**每个**回合都会发，
+  # 包括正常做完的那一轮，所以必须过守卫，只在 Stop 因后台任务而刻意
+  # 什么都没说留下的空档里补一条 wait：
+  #   · 通知通道必须为空      —— 已有 ◆/◔/⚠ 就说明说过了，覆盖它会把
+  #                            「做完了」改写成「在等你」（rank wait 4 > done 3）
+  #   · 活动态必须是 running  —— 读掉 ◆ 之后活动是 idle，那是假空档
+  # 实测（2026-11-11）：后台 shell 仍 running 时它照样发，所以这是
+  # 「agent 在正文里问了一句」唯一的提醒来源。
+  if [ "$_hk_ntype" = idle_prompt ]; then
+    [ -z "$(_hk_notice)" ] || exit 0
+    [ "$(_hk_activity)" = running ] || exit 0
+    # 徽章只放一行宽度，用中文短标题；英文原文留在正文里可查。
+    _hk_cli --notice wait '等你回复' --body "$_hk_msg"
+    exit 0
+  fi
+
   _hk_cli --notice "$_hk_state" "$_hk_msg"
   ;;
 UserPromptSubmit)

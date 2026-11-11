@@ -93,7 +93,8 @@ action = os.environ["WHISTLE_ACTION"]
 #                    点回来的事件）。tool_name 为 Agent / Task 时兼记子 agent 标记，
 #                    所以**不设 matcher** —— 由脚本按 tool_name 判
 #   SubagentStop     子 agent 结束（清标记，活动 → idle）
-#   Notification     等授权 / 后台 agent 要输入 / 后台 agent 完成
+#   Notification     等授权 / 后台 agent 要输入 / 后台 agent 完成 /
+#                    回合结束后你一直没打字（idle_prompt，见 NOTIFY_MATCHER）
 #   SessionStart     会话开始 / 恢复（→ idle；compact 时两条通道都不动）
 #   UserPromptSubmit 用户发了 prompt（→ running，并压掉上一轮通知）
 #   SessionEnd       会话结束（→ gone，否则窗口会一直亮 ▶）
@@ -111,9 +112,14 @@ EVENTS = [
 # Notification 只订阅"需要用户做点什么"的类型。
 # auth_success / elicitation_complete / quota_* / plugin_notification 与本插件无关，
 # 订阅它们只会让状态栏被无关事件刷满。
+#
+# idle_prompt 是特例，订阅它有明确理由：「回合结束 60 秒、你还没打字」是
+# **唯一**能覆盖「agent 在正文里问了一句」的信号 —— 那种提问没有任何工具事件，
+# 而 Stop 又因为 background_tasks 在飞而刻意不写通知（见 hooks/claude-code.sh）。
+# 它每轮都会发，所以映射不是无条件的，守卫写在 hook 里。
 NOTIFY_MATCHER = (
     "permission_prompt|elicitation_dialog|elicitation_url_dialog"
-    "|agent_needs_input|agent_completed"
+    "|agent_needs_input|agent_completed|idle_prompt"
 )
 
 

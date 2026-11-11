@@ -14,7 +14,7 @@
 
 ### 缺失能力
 
-- [ ] **TODO-19** `notification_type` 的 `plan_approval` / `idle_prompt` 未处理
+- [ ] **TODO-19** `notification_type` 的 `plan_approval` 未处理（`idle_prompt` 已接入，2026-11-11）
 
 ### 文档缺陷
 
@@ -1236,22 +1236,40 @@ option 一起消失，不留残值（除非开了 `remain-on-exit`）。
 
 ## TODO-19 · `notification_type` 的 `plan_approval` / `idle_prompt` 未处理
 
-⬜ 待处理
+🟡 部分完成（2026-11-11）：`idle_prompt` 已接入；`plan_approval` 仍待确认。
 
-**现象**：`plan_approval`（等你批准计划）目前被忽略，plan mode 下 agent 确实在等人，
-但状态栏不会有任何「等待」提示。`idle_prompt` 也被忽略。
+**已完成 · `idle_prompt` → `wait`**（`hooks/claude-code.sh` 的
+`whistle_notify_state` 与 Notification 分支、`lib/install-hooks.sh` 的
+`NOTIFY_MATCHER`）
 
-**原因**：`hooks/claude-code.sh` 的 `whistle_notify_state` 只覆盖
-`permission_prompt` / `elicitation_dialog` / `elicitation_url_dialog` /
-`agent_needs_input` / `agent_completed`。而 v2.1.304 的二进制里还存在
-`plan_approval` 与 `idle_prompt` 两个字面量 —— 注意 `notification_type` 在 schema 里
-是**裸字符串（不是枚举）**，所以这个集合天然开放，漏掉的类型会静默落到 `''`。
+它解决的是「agent 在**正文里**问了一句」—— 那种提问没有任何工具事件，而 `Stop`
+又因为 `background_tasks` 在飞而刻意不写通知（TODO-18），于是整条链路一个提醒
+都没有。2026-11-11 现场就是：work 格2 在最后一句问「启动方式要不要固化？」，
+同时有 2 个后台 shell 在跑，状态栏只有 `▶ 后台: 2 个任务`。
 
-**修复方向**：`plan_approval` 很可能应映射成 `wait`（agent 真的卡在等人），
-但要先确认它在运行时确实会发。`idle_prompt` **语义未确认，不要凭名字猜** ——
-先看日志里它出现的时机。
+实测（v2.1.304，探针记录见提交说明）：
 
-**相关代码**：`hooks/claude-code.sh` 的 `whistle_notify_state`。
+- 回合以正文提问结束、后台 `sleep 180` 仍在跑 → `Stop{background_tasks:[shell]}`；
+- **整整 60 秒后**收到 `Notification{notification_type:"idle_prompt",
+  message:"Claude is waiting for your input"}`。
+
+也就是说文档里那句 "no background agent" 指的是 background **subagent**，
+**不含后台 shell**。后台 subagent 在飞时它确实不发 —— 「主回合结束 + 子 agent
+还在跑 + 正文提问」仍是盲区（已知，暂不处理，用户 2026-11-11 明确排除）。
+
+**守卫**（少任何一条都会误报，`test/e2e/claude_hook.bats` 三条用例钉住）：
+
+- **通知通道为空** —— 已有 `◆` 就说明这一轮说过了；覆盖它会把「做完了」改写成
+  「在等你」（rank `wait 4 > done 3`）；
+- **活动态是 `running`** —— 用户读掉 `◆` 之后活动是 `idle`，那是假空档。
+
+徽章显示中文短标题「等你回复」，英文原文进 `@whistle_notice_body`。
+
+**残留 · `plan_approval`**：仍然只是二进制里的字面量，未在运行时观察到，
+不要凭名字猜 —— 先看 `@whistle_debug on` 的日志里它出现的时机。
+plan mode 下 `PreToolUse` 已经能把 `running` 点回来。
+
+**相关代码**：`hooks/claude-code.sh` 的 `whistle_notify_state` 与 Notification 分支。
 
 ---
 
@@ -1431,13 +1449,17 @@ idle_prompt         quota_auto_resume_fired   plugin_notification
 ```
 
 插件现状：`permission_prompt` / `elicitation_dialog` / `elicitation_url_dialog` /
-`agent_needs_input` → `wait`；`agent_completed` → `done`；其余忽略。
+`agent_needs_input` / `idle_prompt` → `wait`（`idle_prompt` 带守卫，见 TODO-19）；
+`agent_completed` → `done`；其余忽略。
 
-两个值得后续确认的遗漏：
+还值得后续确认的遗漏：
 
 - **`plan_approval`**（等用户批准计划）目前被忽略 —— plan mode 下 agent 确实在等人，
-  很可能应映射成 `wait`。
-- **`idle_prompt`** 目前被忽略 —— 语义未确认，不要凭名字猜。
+  很可能应映射成 `wait`。至今未在运行时观察到它真的发出。
+
+**已确认（2026-11-11，v2.1.304）**：`idle_prompt` 在「回合以正文提问结束 + 后台
+shell 仍 running」时**确实会发**，延迟整 60 秒；后台 **subagent** 在飞时不发。
+细节见 TODO-19。
 
 **已确认（顺带）**：`SessionStart.source` 的取值是
 `startup | resume | clear | compact | fork` —— 插件对 `compact` 的特判有效，
