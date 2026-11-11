@@ -144,7 +144,7 @@ teardown() {
     wt_load core
     wt_load status-line
     wt set -g @whistle_badge off
-    # 关掉动画才能断言到静态 ▶ —— 开着时那一格是 Braille 帧
+    # 关掉动画才能断言到静态 ▶ —— 开着时那一格是动画帧
     wt set -g @whistle_spin off
     whistle_status_right_publish
     wt set -g status-right ''
@@ -557,7 +557,7 @@ teardown() {
 @test "status-right: 五态汇总按各自图标渲染，计数为 0 的也保留" {
   wt_load core
   wt_load status-line
-  # 关掉动画才能断言到静态图标 ▶ —— 开着时那一格渲染出来是 Braille 帧
+  # 关掉动画才能断言到静态图标 ▶ —— 开着时那一格渲染出来是动画帧
   wt set -g @whistle_spin off
   whistle_status_right_publish
   wt set -g status-right ''
@@ -592,14 +592,14 @@ teardown() {
   assert_contains "$output" '#[fg=#00af00]▶'
 }
 
-@test "status-right: @whistle_spin on 时 running 那格是 Braille 帧选择器" {
+@test "status-right: @whistle_spin on 时 running 那格是 spinner 帧选择器" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish
 
   run opt '@whistle_status_right'
   assert_contains "$output" '#{@whistle_spin_char}'
-  assert_contains "$output" '⠋'
+  assert_contains "$output" '·'
 }
 
 @test "status-right: spin 开着但 running 归零 → 退回静态 ▶，不空转" {
@@ -628,7 +628,7 @@ teardown() {
   assert_contains "$output" '◉ 3'
 }
 
-@test "status-right: spin 开着且有 running → 仍然用 Braille 帧，不退回 ▶" {
+@test "status-right: spin 开着且有 running → 仍然用 spinner 帧，不退回 ▶" {
   wt_load core
   wt_load status-line
   whistle_status_right_publish

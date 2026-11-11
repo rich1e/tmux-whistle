@@ -1,5 +1,5 @@
 #!/bin/sh
-# running 状态的 Braille 帧推进器。
+# running 状态的动画帧推进器。
 #
 # 由 whistle_spin_ensure 用 `tmux run-shell -b` 拉起，**只在真有 running 时活着**：
 # 计数归零、或 @whistle_spin 被关掉，下一轮循环就退出并清掉自己那份 PID 记录。

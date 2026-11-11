@@ -90,7 +90,7 @@ WHISTLE_MSG_MAX=80
 # 所以可以比标题长得多 —— 但仍是有限额，pane option 不是垃圾桶。
 WHISTLE_BODY_MAX=400
 
-# -- running 的 Braille 动画帧 ------------------------------------------------
+# -- running 的动画帧 ----------------------------------------------------------
 #
 # 为什么需要动画：徽章与 status-right 里的串是**预先算好存在 global option 里**
 # 的纯 format（原理 2：零 fork）。format 本身是静态的，tmux 没有「每 N 帧换一个
@@ -111,10 +111,26 @@ WHISTLE_BODY_MAX=400
 # 帧表用 for 循环遍历字面量，不切多字节字符串 —— POSIX sh 里从多字节串切
 # 第 N 个字符不可靠（按字节还是按字符取决于 locale）。加帧只需往
 # whistle_spin_next_char 的表里加一个字符。
+#
+# 这一组取自 Claude Code 自带的 spinner 帧表（v2.1.304 的 p 数组）：圆点 →
+# 六角星逐级长大 → 回到圆点。用户就是照它的观感提的需求（2026-11-10）。
+# 顺带解决了垂直对齐：Braille 点阵在 MapleMono 里被画在 cap 高到基线之间，
+# 只用点阵上三行的经典 6 点图案（⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏）会整体偏高约 1/4 格，
+# 看起来「飘在行首上方」；星形与数字、◆ ◉ 同一套度量，天然居中。
+#
+# ⚠️ ✢ ✳ ✷ ✸ ✻ ✽ 不在 MapleMono 里，靠终端回落到系统里带这些字形的字体
+# （本机命中 Meslo / DejaVu Nerd Font / Menlo，`fc-list ':charset=2733'` 可查）。
+# Claude Code 在同一个终端里走的也是这条 fallback 路，所以观感一致；换到没有
+# 这些字形的终端会显成豆腐块，那时用 @whistle_spin off 退回静态 ▶。
+#
+# ⚠️ 表里**不能出现重复字形**：whistle_spin_next_char 是「查当前字 → 取下一个」
+# 的无状态查表，同一个字写两次时永远匹配到前一个，动画会卡死在同一帧。所以
+# Claude Code 那套 12 帧「长—缩」循环搬不过来（缩的半段与长的半段同字形），
+# 这里只取长的半段，转完一圈直接回到 ·。
 
 # 第一帧。表异常时的兜底，也是复位时写入的值。
 whistle_spin_first() {
-  printf '%s' '⠋'
+  printf '%s' '·'
 }
 
 # whistle_spin_next_char <当前帧> → 下一帧
@@ -124,7 +140,7 @@ whistle_spin_first() {
 # 纯函数（不碰 tmux）—— L1 单测能直接跑。
 whistle_spin_next_char() {
   _snc_seen=0
-  for _snc_ch in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
+  for _snc_ch in · ✢ ✳ ✷ ✸ ✻ ✽; do
     if [ "$_snc_seen" = 1 ]; then
       printf '%s' "$_snc_ch"
       return 0

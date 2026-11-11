@@ -32,7 +32,7 @@ teardown() {
 spin_wait_char_moved() {
   _w=0
   while [ "$_w" -lt 25 ]; do
-    [ "$(wt show -gqv @whistle_spin_char)" != "⠋" ] && return 0
+    [ "$(wt show -gqv @whistle_spin_char)" != "·" ] && return 0
     _w=$((_w + 1))
     sleep 0.2
   done
@@ -66,7 +66,7 @@ spin_wait_pid() {
 }
 
 @test "spin: option 未设置时回落第一帧" {
-  assert_eq "$(whistle_spin_char)" '⠋'
+  assert_eq "$(whistle_spin_char)" '·'
 }
 
 @test "spin: 开关与帧值是两个不同的 option（撞名过一次）" {
@@ -81,7 +81,7 @@ spin_wait_pid() {
 
   # 开关仍是 on，帧值被复位 —— 两者互不干扰
   assert_eq "$(wt show -gqv @whistle_spin)" 'on'
-  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '·'
 }
 
 @test "spin: @whistle_spin off 时帧值复位且不启推进器" {
@@ -91,7 +91,7 @@ spin_wait_pid() {
 
   whistle_spin_sync
 
-  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '·'
   [ -z "$(wt show -gqv @whistle_spin_pid)" ] || {
     echo "off 时不该留下推进器 PID"
     return 1
@@ -105,7 +105,7 @@ spin_wait_pid() {
 
   whistle_spin_sync
 
-  assert_eq "$(wt show -gqv @whistle_spin_char)" '⠋'
+  assert_eq "$(wt show -gqv @whistle_spin_char)" '·'
   [ -z "$(wt show -gqv @whistle_spin_pid)" ] || {
     echo "不该留下推进器 PID"
     return 1
@@ -131,12 +131,12 @@ spin_wait_pid() {
   wt set -g @whistle_spin_interval 0.1
   wt set -g @whistle_spin on
   wt set -g @whistle_count_running 1
-  wt set -g @whistle_spin_char '⠋'
+  wt set -g @whistle_spin_char '·'
 
   whistle_spin_sync
 
   spin_wait_char_moved || {
-    echo "推进器没动：帧字符一直是 ⠋"
+    echo "推进器没动：帧字符一直是 ·"
     return 1
   }
 
@@ -165,6 +165,40 @@ spin_wait_pid() {
 
   spin_wait_pid || {
     echo "--recompute 没有拉起推进器"
+    return 1
+  }
+}
+
+@test "spin: setup.sh 重载时会重启推进器（换了帧表 prefix+r 才生效）" {
+  # 回归（2026-11-11）：推进器是长驻进程，启动时就把 lib/core.sh 读进了内存。
+  # 换帧表之后光重载配置影响不到正在跑的那一份 —— whistle_spin_ensure 看到
+  # PID 还活着就直接返回，而它只在 running 归零时才退出。用户改完代码、
+  # prefix + r，状态栏照旧转老帧，界面上完全看不出哪里不对。
+  # shellcheck disable=SC2030,SC2031
+  export WHISTLE_SPIN_SCRIPT="$WHISTLE_ROOT/lib/spin.sh"
+  wt set -g @whistle_spin on
+  wt set -g @whistle_spin_interval 0.1
+  wt set -p -t "$(wt display -p -t w1 '#{pane_id}')" @whistle running
+
+  run "$WHISTLE_ROOT/scripts/setup.sh" "$(wt display -p '#{socket_path}')"
+  assert_eq "$status" 0
+  spin_wait_pid || {
+    echo "第一次 setup.sh 没拉起推进器"
+    return 1
+  }
+  local pid1
+  pid1="$(wt show -gqv @whistle_spin_pid)"
+
+  run "$WHISTLE_ROOT/scripts/setup.sh" "$(wt display -p '#{socket_path}')"
+  assert_eq "$status" 0
+  spin_wait_pid || {
+    echo "重载后推进器没有重新起来"
+    return 1
+  }
+  local pid2
+  pid2="$(wt show -gqv @whistle_spin_pid)"
+  [ "$pid1" != "$pid2" ] || {
+    echo "重载后 PID 没变（$pid1）：旧进程还在用内存里的旧帧表"
     return 1
   }
 }

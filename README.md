@@ -164,11 +164,11 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_done` | `◆` | 完成符号 |
 | `@whistle_icon_wait` | `◔` | 等待符号 |
 | `@whistle_icon_error` | `⚠` | 错误符号 |
-| `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是 Braille 帧，计数为 0 或 `spin off` 时用它） |
+| `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是动画帧，计数为 0 或 `spin off` 时用它） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
 | `@whistle_agent_cmds` | `claude claude.exe` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
-| `@whistle_spin` | `on` | running 用 Braille 帧轮转（`off` 退回静态图标） |
+| `@whistle_spin` | `on` | running 用星形帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
 | `@whistle_recompute_every` | `60` | 推进器每 N 帧触发一次全局重算（配 0.5 秒 ≈ 30 秒）；用来让过期的后台 agent 标记自行回落 |
 | `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
@@ -253,14 +253,14 @@ set -g @whistle_icon_pending ''
 
 ```
  1 claude.exe◆            ← ① 窗口徽章
-      ⠋ 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0   ⚑ 2  ← ② 五态汇总 + 全局待处理计数
+      · 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0   ⚑ 2  ← ② 五态汇总 + 全局待处理计数
  [claude.exe] 完成: 重构完成，抽出了 core.sh   ← ③ 瞬时提示（5 秒）
 ```
 
 | 信号 | 位置 | 回答的问题 |
 |---|---|---|
 | **窗口徽章** | 该窗口**所属 session** 的窗口列表 | 这个窗口的 agent 现在什么状态 |
-| **五态汇总** `⠋ 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器各状态各有多少（`⠋` 在跑 / `◉` 空闲 / `◆` 完成 / `◔` 等待 / `⚠` 失败） |
+| **五态汇总** `· 1 ◉ 2 ◆ 1 ◔ 0 ⚠ 0` | `status-right`，**每个 session 都显示** | 全机器各状态各有多少（`·`/`✳` 在跑 / `◉` 空闲 / `◆` 完成 / `◔` 等待 / `⚠` 失败） |
 | **全局计数** `⚑N` | `status-right`，紧跟在汇总后面 | 总共还有几件事等着我处理 |
 | **瞬时提示** | 状态栏消息行 | 刚刚具体发生了什么 |
 
@@ -284,16 +284,28 @@ agent**：它一边跑着，一边刚给过你一条要看的东西。窗口徽�
 
 ### running 的动画
 
-`▶` 那格是动的 —— 有 agent 在跑时会转。用的是经典 Braille 点阵 spinner：
+`▶` 那格是动的 —— 有 agent 在跑时会转。用的是 Claude Code 同款 spinner：
+圆点逐级长成六角星，再回到圆点。
 
 ```
-⠋ → ⠙ → ⠹ → ⠸ → ⠼ → ⠴ → ⠦ → ⠧ → ⠇ → ⠏ → ⠋ …
+· → ✢ → ✳ → ✷ → ✸ → ✻ → ✽ → · …
 ```
 
-十帧，默认每 0.5 秒一帧。
+七帧，默认每 0.5 秒一帧。
+
+选这组帧有两个理由：一是观感与 Claude Code 自己那一行 spinner 一致（帧表以它的
+实现为底 —— 原版是 12 帧「长—缩」循环，这里只搬了长的半段，并把中间的 ✶ 换成
+✷ ✸ 两级八芒星，见下）；
+二是**垂直对齐**：Braille 点阵在 MapleMono 等字体里被画在 cap 高到基线之间，只用
+点阵上三行的经典图案（`⠋⠙⠹…`）会让墨迹比旁边的数字与 `◆` / `◉` 高出约 1/4 格，
+状态栏里看起来「飘在行首上方」；星形与数字、图标同一套度量，天然居中。
+
+⚠️ `✢ ✳ ✷ ✸ ✻ ✽` 不在 MapleMono 的字形表里，实际显示靠终端回落到系统里带这些字形
+的字体（例如 Meslo / DejaVu Nerd Font）—— Claude Code 在同一个终端里走的也是这条路。
+若你的终端没有这些字形（会显示成方框），用 `set -g @whistle_spin off` 退回静态 `▶`。
 
 **计数为 0 时退回静态 `▶`**（不是继续挂着最后一帧）：推进器在 running 归零时自己退出，
-但帧字符还留在 option 里 —— 不判计数的话状态栏会一直显示 `⠋ 0`，动画早停了、字形还在，
+但帧字符还留在 option 里 —— 不判计数的话状态栏会一直显示 `· 0`，动画早停了、字形还在，
 看起来像卡死。
 
 **这是怎么做到的**：状态栏里的串是预先算好存在 global option 里的**纯 format**

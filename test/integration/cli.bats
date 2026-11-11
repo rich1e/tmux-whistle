@@ -360,8 +360,8 @@ run_menu_popup_spy() {
   assert_contains "$output" '#[fg=#d70000]⚠#[default] 错误'
 }
 
-@test "menu-args: running 项的前缀是绿色 ▶（不是 Braille 帧）" {
-  # 菜单是一次性绘制的静态快照，Braille 帧画上去就冻住了，看起来像渲染错乱
+@test "menu-args: running 项的前缀是绿色 ▶（不是动画帧）" {
+  # 菜单是一次性绘制的静态快照，动画帧画上去就冻住了，看起来像渲染错乱
   # 而不是动画。
   #
   # ▶ = 在跑、◉ = 空闲，与状态栏语义一致。早先菜单借 ◉ 表示「在跑」，

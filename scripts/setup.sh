@@ -45,6 +45,13 @@ whistle_status_right_patch
 # 之后一直没人动过」的 pane 不会再有 deliver，只靠 deliver 的话
 # prefix + r 之后动画永远转不起来，而界面上看不出任何异常。
 # whistle_recompute_global 内部会顺带同步帧推进器的启停。
+#
+# 先把推进器停掉，再重算 —— 它是个**长驻进程**，启动时就把 lib/core.sh
+# 读进了内存。换了帧表之后光重载配置影响不到正在跑的那一份：
+# whistle_spin_ensure 看到 PID 还活着就直接返回，而它只在 running 归零时
+# 才自己退出。于是「代码改了、测试也过了，prefix + r 却看不出变化」
+# （2026-11-11 实际踩到）。停掉之后下面这次重算会用新代码重起一份。
+whistle_spin_stop
 whistle_recompute_global
 
 # prefix r 之后主题已重刷，把上次残留的边框染色清掉（KP-6）
