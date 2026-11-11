@@ -630,8 +630,14 @@ whistle_pane_window() {
 # whistle_desktop_jump <pane>
 #
 # 桌面通知点击后的严格跳转：先验证 pane，再在点击当下选择最近活动的 client，
-# 依次 switch-client → select-window → select-pane。任何一步失败都原样保留通知，
+# 依次 select-window → switch-client → select-pane。任何一步失败都原样保留通知，
 # 由调用方决定后续清除；本函数自身绝不清状态。
+#
+# ⚠️ select-window 必须排在 switch-client **之前**（2026-11-11 GUI 验收实测）。
+# switch-client -t <session> 会让 client 先落到该 session 的**当前窗口**，
+# 而不是目标窗口；如果那个窗口恰好不是目标，after-select-window 钩子会立刻
+# 把它当成「已读」清掉 —— 用户从没看到它，通知却没了。先把 session 的当前
+# 窗口切到目标，client 落下去就是目标窗口，中间那一下根本不会发生。
 whistle_desktop_jump() {
   _dj_pane="${1:-}"
   _dj_target=''
@@ -664,12 +670,12 @@ whistle_desktop_jump() {
     return 1
   fi
 
-  if ! whistle_tmux switch-client -c "$_dj_client" -t "$_dj_session" 2> /dev/null; then
-    printf 'tmux-whistle: 桌面跳转失败：switch-client\n' >&2
-    return 1
-  fi
   if ! whistle_tmux select-window -t "$_dj_win" 2> /dev/null; then
     printf 'tmux-whistle: 桌面跳转失败：select-window\n' >&2
+    return 1
+  fi
+  if ! whistle_tmux switch-client -c "$_dj_client" -t "$_dj_session" 2> /dev/null; then
+    printf 'tmux-whistle: 桌面跳转失败：switch-client\n' >&2
     return 1
   fi
   if ! whistle_tmux select-pane -t "$_dj_pane" 2> /dev/null; then

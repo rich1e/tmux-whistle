@@ -787,8 +787,10 @@ seed_running_windows() {
   assert_eq "$output" ''
   local switches
   switches=$(grep -E '^(switch-client|select-window|select-pane)' "$DESKTOP_TMUX_LOG")
-  assert_eq "$switches" "switch-client -c newest -t main
-select-window -t $w
+  # select-window 必须在 switch-client 之前：否则 client 会先落到 session 的
+  # 当前窗口，钩子把那个窗口当「已读」清掉，用户没看过也丢了（2026-11-11 GUI 验收）。
+  assert_eq "$switches" "select-window -t $w
+switch-client -c newest -t main
 select-pane -t $p"
   assert_eq "$(optp @whistle_notice "$p")" ''
   # 已读只清通知通道，正在干活的活动态绝不能被顺带抹掉。
@@ -837,7 +839,9 @@ select-pane -t $p"
   assert_eq "$status" 1
   assert_contains "$output" 'switch-client'
   assert_eq "$(optp @whistle_notice "$p")" 'done'
-  assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'select-window'
+  # 新的顺序把 select-window 放在前面（先对齐 session 当前窗口再让 client 落下去），
+  # 所以这里只断言「没继续选 pane」。
+  assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'select-pane'
 }
 
 @test "desktop-jump: select-window 失败时保留通知且不选择 pane" {
@@ -853,6 +857,8 @@ select-pane -t $p"
   assert_eq "$status" 1
   assert_contains "$output" 'select-window'
   assert_eq "$(optp @whistle_notice "$p")" 'done'
+  # select-window 在前：它失败就立刻返回，绝不把 client 切过去。
+  assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'switch-client'
   assert_not_contains "$(cat "$DESKTOP_TMUX_LOG")" 'select-pane'
 }
 

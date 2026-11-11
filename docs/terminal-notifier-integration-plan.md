@@ -1,7 +1,8 @@
 # terminal-notifier 交互增强：技术开发方案与执行计划
 
 > 日期：2026-10-30
-> 状态：待实施；本文档本身不代表代码已完成
+> 状态：T1～T4 已实现并合入（`3c9bff0`、`9136735`）；T5 全量回归与人工 GUI 验收
+> （2026-11-11）发现并修复「点击通知误清另一窗口」的顺序问题，见 §3.3。
 > 前置调研：[terminal-notifier-research.md](terminal-notifier-research.md)
 > 目标版本：terminal-notifier 3.1+；保留旧版本与其它后端的基本降级能力
 
@@ -259,11 +260,17 @@ set -g @whistle_os_app 'com.mitchellh.ghostty'
 2. 查询目标 pane 的 window ID 与 session。
 3. 在点击时列出 attached clients，选择 client_activity 最新者。
 4. 没有 attached client：失败，保留通知。
-5. switch-client -c <client> -t <session>。
-6. select-window -t <window>。
+5. select-window -t <window>。
+6. switch-client -c <client> -t <session>。
 7. select-pane -t <pane>。
 8. 5～7 全部成功后，才执行现有 clear + border release + refresh。
 9. 任一步失败：非零退出，输出原因，不清通知。
+
+> **为什么 select-window 必须排在 switch-client 之前（2026-11-11 GUI 验收实测）**：
+> `switch-client -t <session>` 会让 client 先落到该 session 的**当前窗口**。
+> 如果那个窗口不是目标窗口，`after-select-window` 钩子会立刻把它当成「已读」清掉 ——
+> 用户从没看到那个窗口，它的待处理通知却丢了。先把 session 的当前窗口切到目标，
+> client 落下去就是目标窗口，中间那一下不会发生。
 ```
 
 client 在**点击时**选择，而不是发送通知时固化：用户可能在通知到达后切换或新附着 client。
@@ -532,15 +539,19 @@ fake 后端只验证 argv、退出码和状态副作用；bats 不应向真实 m
 
 只有全部满足才能宣布功能完成：
 
-- [ ] T1～T4 的功能与测试均已合入。
-- [ ] `make check` 全绿，ShellCheck / shfmt 通过。
-- [ ] 没有残留隔离 tmux server。
-- [ ] 两个 pane 的通知不再互相替换。
-- [ ] 人工点击已验证精确跳转与成功后已读。
-- [ ] 无 client、死 pane、切换失败均已验证不会误清。
-- [ ] tmux clear/read 与 macOS 通知中心同步。
-- [ ] 活动通道在全部已读路径中保持不变。
-- [ ] doctor、README、安装提示与实际行为一致。
+- [x] T1～T4 的功能与测试均已合入。
+- [x] `make check` 全绿，ShellCheck / shfmt 通过。
+- [x] 没有残留隔离 tmux server。
+- [x] 两个 pane 的通知不再互相替换。
+- [x] 人工点击已验证精确跳转与成功后已读。
+- [x] 无 client、死 pane、切换失败均已验证不会误清（集成用例覆盖；另修复了点击时误清另一窗口的顺序问题，见 §3.3）。
+- [x] tmux clear/read 与 macOS 通知中心同步。
+- [x] 活动通道在全部已读路径中保持不变。
+- [x] doctor、README、安装提示与实际行为一致。
+
+> 验收记录（2026-11-11，真实 macOS 通知）：两条通知并存 → 点击目标窗口的一条，
+> 精确跳到对应 session/window/pane，目标通知消失且已读，活动通道保持 `running`；
+> **非目标窗口的通知保留**。隔离 server 与测试 session 均已清理。
 
 若只完成 fake 后端与 bats，不得宣称「点击通知已验证」；真实 GUI 验收是独立门槛。
 
