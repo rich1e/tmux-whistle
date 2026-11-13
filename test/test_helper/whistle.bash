@@ -94,6 +94,17 @@ wt_tn_removed_groups() {
 wt_start() {
   wt_reap_stale_sockets
   wt_install_default_terminal_notifier
+  # ⚠️ socket 名**按测试**唯一，不能只用 $$。
+  #
+  # $$ 是 bats 进程号，同一个 bats 进程里所有文件、所有用例共用它 ——
+  # 而 setup/teardown 每个用例都在「建 server → kill-server → 删 socket →
+  # 再建 server」地复用同一个路径。kill-server 返回时 server 未必真退出，
+  # 旧 server 退出时会再 unlink 一次同路径的 socket，把**新** server 的带走了。
+  # 症状就是 TODO-21 记的「server 还活着却连不上」，随后 new-session 一直挂着。
+  #
+  # 每个用例一个名字，路径就不再被复用，这条竞态从根上消失。
+  WHISTLE_TEST_SOCK="whistle-test-$$-${BATS_TEST_NUMBER:-0}"
+  export WHISTLE_TEST_SOCK
   tmux -L "$WHISTLE_TEST_SOCK" -f /dev/null new-session -d -s main -n w1
   WHISTLE_TMUX_SOCKET="$(wt display -p '#{socket_path}')"
   export WHISTLE_TMUX_SOCKET
@@ -103,6 +114,16 @@ wt_stop() {
   local sock="${WHISTLE_TMUX_SOCKET:-}"
   tmux -L "$WHISTLE_TEST_SOCK" kill-server 2> /dev/null || true
   # kill-server 不总会 unlink socket 文件；反复跑测试会攒出几百个残留。
+  #
+  # 但要**等 server 真退出**再删：立刻 rm 会在 server 仍活着时把文件抽走，
+  # 下次同一路径起 server 就会出现「连不上」的僵尸状态（TODO-21）。
+  # 正常情况下 tmux 自己会 unlink，这个循环第一次就退出；
+  # 上限压到 100ms —— 全量套件有几百个用例，累积起来不能失控。
+  local _i=0
+  while [ -S "$sock" ] && [ "$_i" -lt 5 ]; do
+    sleep 0.02
+    _i=$((_i + 1))
+  done
   [ -n "$sock" ] && [ -S "$sock" ] && command rm -f "$sock" 2> /dev/null || true
   WHISTLE_TMUX_SOCKET=''
   export WHISTLE_TMUX_SOCKET
