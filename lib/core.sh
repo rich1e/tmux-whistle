@@ -244,12 +244,88 @@ whistle_conf_default() {
 
 # whistle_conf <option 名> → 生效值（option 优先，缺省回落默认表）
 whistle_conf() {
+  # 进程内快照优先：一次 `show -g` 拿全量，之后每次查配置都不再 fork tmux。
+  #
+  # 为什么安全：CLI 每次调用是一个**短命进程**，配置不可能在它生命周期里变。
+  # 长驻进程（lib/spin.sh 每帧重读风格、lib/detect.sh 每轮重读开关）必须
+  # 设 WHISTLE_CONF_NO_CACHE=1 —— 它们靠重读来感知用户的改动。
+  #
+  # 为什么要这样做：一次状态写入原本要发 58 次 `show`（图标/颜色被读 3~4 遍），
+  # 每次 tmux 调用约 6ms，光读配置就占掉大半耗时。
+  if whistle_conf_snapshot; then
+    if _cv=$(whistle_conf_snap_get "$1"); then
+      if [ -n "$_cv" ]; then
+        printf '%s' "$_cv"
+        return 0
+      fi
+    fi
+    whistle_conf_default "$1"
+    return 0
+  fi
+
   _cv=$(whistle_tmux show -gqv "$1" 2> /dev/null) || _cv=''
   if [ -n "$_cv" ]; then
     printf '%s' "$_cv"
     return 0
   fi
   whistle_conf_default "$1"
+}
+
+# whistle_conf_snapshot：全局 option 快照是否可用（0 = 可用）
+#
+# ⚠️ 快照**必须在 CLI 入口（bin/tmux-whistle）一次性读好并 export**，
+# 不能在这里惰性读 —— 所有调用点都写成 `$(whistle_conf ...)`，那是一个子 shell，
+# 在这里读到的变量改不回父进程，每次都要重新 fork 一个 tmux。
+# export 之后子 shell 天然继承，58 次 `show` 才能压成 1 次。
+#
+# 同理也**不能**在 source core.sh 时读：L1 单测直接 source 本文件且不碰 tmux。
+whistle_conf_snapshot() {
+  [ "${WHISTLE_CONF_NO_CACHE:-}" = 1 ] && return 1
+  [ -n "${_WC_SNAP:-}" ]
+}
+
+# whistle_conf_snap_get <option> → 原始值（**不回落默认**）
+#
+# 返回值语义要分清「未设置」与「设置为空」：
+#   0 = 找到（可能为空串）   非 0 = 没这个 option
+# whistle_conf 与 whistle_icon 对「设置为空」的处理不同（前者回落默认、
+# 后者保留空），所以这里只给原始值，回落策略留在各自那一层。
+whistle_conf_snap_get() {
+  _sg_name="$1"
+  _sg_found=1
+  _sg_val=''
+
+  while IFS= read -r _sg_line; do
+    if [ "$_sg_line" = "$_sg_name" ]; then
+      # `show -g` 对空值只打名字、不带尾随空格
+      _sg_val=''
+      _sg_found=0
+      break
+    fi
+    case "$_sg_line" in
+    "$_sg_name "*)
+      _sg_val=${_sg_line#"$_sg_name "}
+      _sg_found=0
+      break
+      ;;
+    esac
+  done << EOF
+$_WC_SNAP
+EOF
+
+  [ "$_sg_found" = 0 ] || return 1
+
+  # ⚠️ `show -g`（全量）会给需要重新解析的值加引号，`show -gqv`（单项）不会：
+  #     show -gqv @whistle_color_done  →  #af5fff
+  #     show -g     →  @whistle_color_done "#af5fff"
+  # 颜色以 '#' 开头、agent_cmds 含空格，都会被加引号。不剥掉的话
+  # 徽章里就会出现 `#[fg="#af5fff"]` —— 颜色不生效，而且看不出是引号造成的。
+  case "$_sg_val" in
+  \"*\") _sg_val=${_sg_val#\"} _sg_val=${_sg_val%\"} ;;
+  \'*\') _sg_val=${_sg_val#\'} _sg_val=${_sg_val%\'} ;;
+  esac
+
+  printf '%s' "$_sg_val"
 }
 
 # whistle_conf_bulk <option...> → 每行 "<option>|<值>"，只 fork 一次 tmux。
@@ -305,12 +381,35 @@ EOF
 #
 # 输出最多 <最大长度> 个字符（依赖 UTF-8 locale 下 cut -c 按字符切）。
 whistle_sanitize() {
-  printf '%s' "${1:-}" \
+  _sa_v="${1:-}"
+  _sa_max="${2:-$WHISTLE_MSG_MAX}"
+
+  # -- 快路径：绝大多数输入（图标、短标题）本来就干净，不该为它们 fork 6 次 ----
+  #
+  # 实测：一次完整消毒约 22ms（tr ×4 + cut + sed），而建两个徽章要调 22 次，
+  # 光这里就 200ms+ —— 一次状态写入的一半耗时都在消毒上，消的还是 "◆" 这种
+  # 单字符。
+  #
+  # 只用 shell 内建判断：含控制字符 / # { } | / 首尾或连续空格 / 超长 → 走慢路径。
+  # 长度用 `${#_sa_v}`（字节数）与上限比：**字节数 ≥ 字符数**，所以字节不超限就
+  # 一定不需要截断，不会因为多字节字符误判。
+  case "$_sa_v" in
+  '') return 0 ;;
+  *[[:cntrl:]]* | *'#'* | *'{'* | *'}'* | *'|'* | ' '* | *' ' | *'  '*) ;;
+  *)
+    if [ "${#_sa_v}" -le "$_sa_max" ]; then
+      printf '%s' "$_sa_v"
+      return 0
+    fi
+    ;;
+  esac
+
+  printf '%s' "$_sa_v" \
     | tr '\n\r\t' '   ' \
     | tr -d '[:cntrl:]' \
     | tr -d '#{}|' \
     | tr -s ' ' \
-    | cut -c "1-${2:-$WHISTLE_MSG_MAX}" \
+    | cut -c "1-${_sa_max}" \
     | sed -e 's/^ *//' -e 's/ *$//'
 }
 

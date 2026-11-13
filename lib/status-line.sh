@@ -24,6 +24,18 @@ WHISTLE_RIGHT_SENTINEL='#{E:@whistle_status_right}'
 #   空     → 就用空（用户明确不想要图标，比如只要一个纯数字计数）
 # 用 show 的退出码区分 —— 未设置的 option 上 tmux show 返回非零。
 whistle_icon() {
+  # 与 whistle_conf 共用同一份进程内快照（少 fork 一次 tmux）。
+  # 差别只在回落策略：图标**设置为空就是空**（用户可能有意关掉某个图标），
+  # 而 whistle_conf 对空值回落默认表。
+  if whistle_conf_snapshot; then
+    if _ic_raw=$(whistle_conf_snap_get "$1"); then
+      whistle_sanitize "$_ic_raw"
+    else
+      whistle_conf_default "$1"
+    fi
+    return 0
+  fi
+
   if _ic_raw=$(whistle_tmux show -gv "$1" 2> /dev/null); then
     whistle_sanitize "$_ic_raw"
   else
@@ -54,26 +66,71 @@ whistle_icon() {
 # @whistle_badge off 时生成空串：哨兵照常注入，但渲染为空 —— 状态栏格式保持
 # 原样。走「注入空串」而不是「注入后再移除」，是因为移除会和主题重算打架
 # （见 whistle_ensure_status_line 的自愈逻辑），空串则天然与两种顺序兼容。
-whistle_mark_build() {
-  [ "$(whistle_conf '@whistle_badge')" = off ] && return 0
+# -- 徽章取配置：一次赋值到变量，不用 $(...) -------------------------------
+#
+# 为什么不用 `_c_done=$(whistle_conf ...)`：那每个都是一次 subshell fork
+# （实测约 7ms），建两个徽章要 20 次，140ms 就没了。这里用 eval 赋值
+# （内建，不 fork），读的还是同一份进程内快照。
+#
+# 变量名带 _mv_ 前缀：POSIX sh 没有 local，这些会留在调用方作用域里。
+whistle_mark_values_load() {
+  if whistle_conf_snapshot; then
+    _mv_names='_mv_badge @whistle_badge
+_mv_c_done @whistle_color_done
+_mv_c_wait @whistle_color_wait
+_mv_c_err @whistle_color_error
+_mv_c_run @whistle_color_running
+_mv_c_idle @whistle_color_idle
+_mv_s_done @whistle_icon_done
+_mv_s_wait @whistle_icon_wait
+_mv_s_err @whistle_icon_error
+_mv_s_run @whistle_icon_running
+_mv_s_idle @whistle_icon_idle'
+    while IFS=' ' read -r _mv_var _mv_opt; do
+      [ -n "$_mv_var" ] || continue
+      if whistle_conf_snap_get "$_mv_opt"; then
+        # 图标「设置为空就是空」；其余（含开关）空值回落默认表。
+        case "$_mv_var" in
+        _mv_s_*) eval "$_mv_var=\$_sg_val" ;;
+        *) if [ -n "${_sg_val:-}" ]; then
+          eval "$_mv_var=\$_sg_val"
+        else
+          eval "$_mv_var=\$(whistle_conf_default \"\$_mv_opt\")"
+        fi ;;
+        esac
+      else
+        eval "$_mv_var=\$(whistle_conf_default \"\$_mv_opt\")"
+      fi
+    done << EOF
+$_mv_names
+EOF
+    return 0
+  fi
 
-  _c_done=$(whistle_conf '@whistle_color_done')
-  _c_wait=$(whistle_conf '@whistle_color_wait')
-  _c_err=$(whistle_conf '@whistle_color_error')
-  _c_run=$(whistle_conf '@whistle_color_running')
-  _c_idle=$(whistle_conf '@whistle_color_idle')
-  _s_done=$(whistle_icon '@whistle_icon_done')
-  _s_wait=$(whistle_icon '@whistle_icon_wait')
-  _s_err=$(whistle_icon '@whistle_icon_error')
-  _s_run=$(whistle_icon '@whistle_icon_running')
-  _s_idle=$(whistle_icon '@whistle_icon_idle')
+  # 没有快照（长驻进程 / L1 单测）：退回逐项查询
+  _mv_badge=$(whistle_conf '@whistle_badge')
+  _mv_c_done=$(whistle_conf '@whistle_color_done')
+  _mv_c_wait=$(whistle_conf '@whistle_color_wait')
+  _mv_c_err=$(whistle_conf '@whistle_color_error')
+  _mv_c_run=$(whistle_conf '@whistle_color_running')
+  _mv_c_idle=$(whistle_conf '@whistle_color_idle')
+  _mv_s_done=$(whistle_icon '@whistle_icon_done')
+  _mv_s_wait=$(whistle_icon '@whistle_icon_wait')
+  _mv_s_err=$(whistle_icon '@whistle_icon_error')
+  _mv_s_run=$(whistle_icon '@whistle_icon_running')
+  _mv_s_idle=$(whistle_icon '@whistle_icon_idle')
+}
+
+whistle_mark_build() {
+  whistle_mark_values_load
+  [ "$_mv_badge" = off ] && return 0
 
   _w='#{@whistle_win}'
-  printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_c_done" "$_s_done"
-  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_c_wait" "$_s_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_w" "$_c_err" "$_s_err"
-  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_w" "$_c_run" "$_s_run"
-  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_w" "$_c_idle" "$_s_idle"
+  printf '#{?#{==:%s,done},#[fg=%s]%s#[default],' "$_w" "$_mv_c_done" "$_mv_s_done"
+  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_w" "$_mv_c_wait" "$_mv_s_wait"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_w" "$_mv_c_err" "$_mv_s_err"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_w" "$_mv_c_run" "$_mv_s_run"
+  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_w" "$_mv_c_idle" "$_mv_s_idle"
 }
 
 # whistle_summary_build → 全 server 的各状态分布（纯 format，零 fork）
@@ -206,23 +263,14 @@ whistle_mark_publish() {
 # 同样是五层嵌套，结尾 `}}}}}` 一个都不能少（改这里要同步改 whistle_mark_build，
 # 两份必须保持同一个状态集，否则窗口徽章与边框状态行会各自显示不同的状态）。
 whistle_pane_mark_build() {
-  _c_done=$(whistle_conf '@whistle_color_done')
-  _c_wait=$(whistle_conf '@whistle_color_wait')
-  _c_err=$(whistle_conf '@whistle_color_error')
-  _c_run=$(whistle_conf '@whistle_color_running')
-  _c_idle=$(whistle_conf '@whistle_color_idle')
-  _s_done=$(whistle_icon '@whistle_icon_done')
-  _s_wait=$(whistle_icon '@whistle_icon_wait')
-  _s_err=$(whistle_icon '@whistle_icon_error')
-  _s_run=$(whistle_icon '@whistle_icon_running')
-  _s_idle=$(whistle_icon '@whistle_icon_idle')
+  whistle_mark_values_load
 
   _p='#{@whistle_eff}'
-  printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_c_done" "$_s_done"
-  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_c_wait" "$_s_wait"
-  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_p" "$_c_err" "$_s_err"
-  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_p" "$_c_run" "$_s_run"
-  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_p" "$_c_idle" "$_s_idle"
+  printf ' #{?#{==:%s,done},#[fg=%s]%s#[default],' "$_p" "$_mv_c_done" "$_mv_s_done"
+  printf '#{?#{==:%s,wait},#[fg=%s]%s#[default],' "$_p" "$_mv_c_wait" "$_mv_s_wait"
+  printf '#{?#{==:%s,error},#[fg=%s]%s#[default],' "$_p" "$_mv_c_err" "$_mv_s_err"
+  printf '#{?#{==:%s,running},#[fg=%s]%s#[default],' "$_p" "$_mv_c_run" "$_mv_s_run"
+  printf '#{?#{==:%s,idle},#[fg=%s]%s#[default],}}}}}' "$_p" "$_mv_c_idle" "$_mv_s_idle"
 }
 
 whistle_pane_mark_publish() {
@@ -240,6 +288,25 @@ whistle_pane_mark_publish() {
 #
 # 全部幂等，重复调用不会叠出双徽章。
 whistle_ensure_status_line() {
+  # -- 快路径：配置没变、格式也还在，就什么都不用重做 ----------------------
+  #
+  # 这段在**每次** deliver 时都跑。重建一次约 400~600ms（两个徽章 + 状态栏
+  # 串 + 三处 format 补丁），而其中绝大多数时候配置与格式都没变 ——
+  # 纯属白花钱，还把每次状态写入拖到近 1 秒。
+  #
+  # 判据：配置签名（纯 shell 算，不 fork）+ 三处 format 里是否还有我们的哨兵。
+  # 任一不满足就走完整路径。
+  _es_stamp=$(whistle_mark_stamp)
+  _es_prev=$(whistle_tmux show -gqv '@whistle_mark_stamp' 2> /dev/null) || _es_prev=''
+  if [ -n "$_es_stamp" ] && [ "$_es_stamp" = "$_es_prev" ]; then
+    # 格式可能被 oh-my-tmux 覆盖，仍然要查（3 次 show 很便宜）
+    if whistle_format_ok window-status-format \
+      && whistle_format_ok window-status-current-format \
+      && whistle_status_right_ok; then
+      return 0
+    fi
+  fi
+
   whistle_status_right_publish
   whistle_status_right_patch
 
@@ -247,6 +314,40 @@ whistle_ensure_status_line() {
   whistle_pane_mark_publish
   whistle_format_patch window-status-format
   whistle_format_patch window-status-current-format
+
+  # 记账：下次同样的配置直接跳过（写完格式再记，避免记了但格式没落地）
+  [ -n "$_es_stamp" ] && whistle_tmux set -g @whistle_mark_stamp "$_es_stamp" 2> /dev/null
+  return 0
+}
+
+# whistle_mark_stamp → 影响徽章/状态栏渲染的配置签名（纯 shell，不 fork）
+#
+# 只包含**会改变渲染结果**的项：改了颜色/图标/开关/计数，签名就变，才会重建。
+# 计数也在里面 —— @whistle_status_right 里嵌着计数占位，但那是 format 引用，
+# 不需要因计数变化重建，所以刻意**不**放计数。
+whistle_mark_stamp() {
+  whistle_mark_values_load
+  printf '%s%s%s%s%s%s%s%s%s%s%s' \
+    "$_mv_badge" "$_mv_c_done" "$_mv_c_wait" "$_mv_c_err" "$_mv_c_run" "$_mv_c_idle" \
+    "$_mv_s_done" "$_mv_s_wait" "$_mv_s_err" "$_mv_s_run" "$_mv_s_idle"
+}
+
+# whistle_format_ok <option> → 该 window 格式里是否已含我们的哨兵
+whistle_format_ok() {
+  _fo_fmt=$(whistle_tmux show -gwv "$1" 2> /dev/null) || return 1
+  case "$_fo_fmt" in
+  *"$WHISTLE_MARK_SENTINEL"*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+# whistle_status_right_ok → status-right 里是否已含我们的串
+whistle_status_right_ok() {
+  _sro_sr=$(whistle_tmux show -gv status-right 2> /dev/null) || return 1
+  case "$_sro_sr" in
+  *'@whistle_status_right'*) return 0 ;;
+  *) return 1 ;;
+  esac
 }
 
 # -- 幂等注入（KP-4 / KP-5） ------------------------------------------------

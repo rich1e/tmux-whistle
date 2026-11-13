@@ -22,6 +22,7 @@
 
 ## 已修复
 
+- [x] **TODO-30** 单次状态写入固定 80 次 tmux fork（读配置占 58 次），把测试套件拖到十几分钟 —— 压到 25 次，CPU 1.7x / wall 2.2x。**注意不是 O(窗口数)**，是每次写入的固定成本；详见 `CLAUDE.md`「状态写入的成本」
 - [x] **TODO-29** 换终端后点击桌面通知跳回旧终端（tmux server 环境是启动快照）
 - [x] **TODO-26** 子 agent 在跑时 Stop 把 running 烤进 `@whistle`，标记清掉后那盏 ▶ 永不熄灭
 - [x] **TODO-18** 后台 Bash（`run_in_background`）在跑时状态栏看不见

@@ -14,6 +14,11 @@
 
 set -u
 
+# 长驻循环必须**关掉配置快照缓存**：它靠每帧重读 @whistle_spin / @whistle_spin_style
+# 来感知用户的改动（换风格不用重启推进器）。缓存了就会一直用启动时的值。
+WHISTLE_CONF_NO_CACHE=1
+export WHISTLE_CONF_NO_CACHE
+
 WHISTLE_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 export WHISTLE_ROOT
 

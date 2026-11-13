@@ -60,6 +60,16 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - **`tabs.list()` 别假设是字符串数组。** `new Set(list)` 遇上 `{sessionID}` 对象会让 `has()` 永远为假 → 所有事件被静默过滤。支持两种形状，取不到 id 时 **fail-open**。
 - 排查顺序看三段证据：`tui-probe`（加载了没）→ `subs=N`（订阅几条）→ `js-trace`（事件到没到、为什么丢）。`doctor` 已展示 `subs`，`subs=0` 会报红。
 
+## 性能：写入热路径
+
+一次状态写入的固定成本是**进程数**，不是窗口数（早先误判成 O(窗口数)）。80 次 tmux fork → 25 次：
+
+- 配置快照必须**在 CLI 入口** `show -g` 后 `export`；在 `whistle_conf` 里惰性读没用 —— 调用点都是 `$(...)` 子 shell。
+- 长驻进程（`lib/spin.sh` / `lib/detect.sh`）必须 `WHISTLE_CONF_NO_CACHE=1`，它们靠重读感知配置变化。
+- `show -g` 会给 `#` 开头或含空格的值加引号，`show -gqv` 不会 → 快照必须剥引号，否则 `#[fg="#af5fff"]`。
+- `whistle_sanitize` 有快路径（干净短串直接返回）；改消毒逻辑要两条路径一起改。
+- `ensure_status_line` 用 `@whistle_mark_stamp` 跳过重建；新增影响渲染的配置项必须加进签名。
+
 ## 测试
 
 三层：`test/unit/`（不碰 tmux）→ `test/integration/`（`tmux -L` 隔离 server）→ `test/e2e/`（完整 CLI/hook 链路，`menu_popup.bats` 需要 `expect`）。

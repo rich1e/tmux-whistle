@@ -13,6 +13,11 @@
 
 set -u
 
+# 常驻轮询必须**关掉配置快照缓存**：它靠每轮重读 @whistle_detect 来感知用户关闭
+# 检测（`while :; do [ "$(whistle_conf @whistle_detect)" = on ] || break`）。
+WHISTLE_CONF_NO_CACHE=1
+export WHISTLE_CONF_NO_CACHE
+
 WHISTLE_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 export WHISTLE_ROOT
 

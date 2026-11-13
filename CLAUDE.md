@@ -220,6 +220,31 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
   判据链是「探针证明加载 / subs 证明订阅 / trace 证明事件真的到了」——
   只看第一条会得出相反的结论。
 
+**状态写入的成本（改热路径前先看）**
+
+一次 `done` / `running` 的写入原本要 fork **80 次 tmux**，其中 58 次是读配置
+（同一批图标/颜色被读 3~4 遍），另有 22 次 `whistle_sanitize`（每次约 22ms）。
+2026-11-13 压到 **25 次**（CPU 1.7x、wall 2.2x）。四条优化各自都有前提，改错会静默失效：
+
+- **配置快照必须在 CLI 入口读并 `export`**（`bin/tmux-whistle` 里一次 `show -g`）。
+  不能在 `whistle_conf` 里惰性读 —— 所有调用点都写成 `$(whistle_conf ...)`，
+  那是**子 shell**，在里面设的变量改不回父进程，惰性缓存等于没有缓存（实测仍是 58 次）。
+  也不能在 source `lib/core.sh` 时读：L1 单测直接 source 它且不碰 tmux。
+- **长驻进程必须 `WHISTLE_CONF_NO_CACHE=1`**：`lib/spin.sh` 靠每帧重读 `@whistle_spin_style`
+  实现「换风格不用重启推进器」，`lib/detect.sh` 靠每轮重读 `@whistle_detect` 感知关闭。
+  缓存了它们就永远用启动时的值。
+- **快照必须剥引号**：`show -g`（全量）会给以 `#` 开头或含空格的值加引号，
+  `show -gqv`（单项）不会。颜色与 `agent_cmds` 都中招，症状是徽章里出现
+  `#[fg="#af5fff"]` —— 颜色不生效，而肉眼很难看出是引号造成的。
+- **`whistle_sanitize` 有纯 shell 快路径**（干净短串直接返回）。判据是
+  「含控制字符 / `#{}|` / 首尾或连续空格 / 字节数超上限」→ 任一命中走原来的管道。
+  长度用**字节数**比上限：字节 ≥ 字符数，所以字节不超限必然不需要截断，
+  多字节字符不会被误截。**改消毒逻辑要两条路径一起改**，单测同时钉两份行为。
+- **`whistle_ensure_status_line` 用配置签名 `@whistle_mark_stamp` 跳过重建**
+  （它每次 deliver 都跑，重建一次 400~600ms）。新增**影响渲染**的配置项必须加进
+  `whistle_mark_stamp`，否则改了不生效 —— 这正是这类缓存的经典失效方式。
+  计数**不进**签名：format 里是引用，不需要因计数变化重建。
+
 **SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。

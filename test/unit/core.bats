@@ -530,3 +530,95 @@ s|w1|wn|1|%2|done|done||做完了
 EOF
     assert_eq "$output" '1|0|1|0|0'
 }
+
+# -- whistle_sanitize 的快路径（2026-11-13 性能优化）------------------------
+#
+# 完整消毒要 fork 6 次（约 22ms），而建两个徽章要调 22 次。绝大多数输入
+# （图标 "◆"、短标题）本来就干净，所以加了一条纯 shell 快路径。
+# 这里钉住「快路径与慢路径结果一致」—— 优化不能改语义。
+
+@test "sanitize 快路径: 干净的短字符串原样返回" {
+    run whistle_sanitize '重构完成'
+    assert_eq "$output" '重构完成'
+}
+
+@test "sanitize 快路径: 单字符图标原样返回（徽章就是这种输入）" {
+    run whistle_sanitize '◆'
+    assert_eq "$output" '◆'
+}
+
+@test "sanitize 快路径: 不含空格的英文与符号不受影响" {
+    run whistle_sanitize 'API-Error:Rate_limit'
+    assert_eq "$output" 'API-Error:Rate_limit'
+}
+
+@test "sanitize 慢路径: 内部空格不折叠时走原逻辑" {
+    # 单个空格是干净的，快路径应该放行（不能把 "a b" 当脏值）
+    run whistle_sanitize 'a b'
+    assert_eq "$output" 'a b'
+}
+
+@test "sanitize 慢路径: 连续空格仍然折叠" {
+    run whistle_sanitize 'a  b'
+    assert_eq "$output" 'a b'
+}
+
+@test "sanitize 慢路径: 超长仍按上限截断（字节数判断不会误放行）" {
+    local long
+    long=$(printf 'x%.0s' $(seq 1 100))
+    run whistle_sanitize "$long"
+    assert_eq "$(printf '%s' "$output" | wc -c | tr -d ' ')" 80
+}
+
+@test "sanitize 慢路径: 含 # { } | 一定要被剔除（快路径不能漏判）" {
+    run whistle_sanitize 'a#{b}|c'
+    assert_eq "$output" 'abc'
+}
+
+@test "sanitize 慢路径: 首尾空格仍被去掉" {
+    run whistle_sanitize ' x '
+    assert_eq "$output" 'x'
+}
+
+# -- whistle_conf 快照的引号剥离 -------------------------------------------
+#
+# `show -g`（全量）与 `show -gqv`（单项）输出格式不同：前者会给以 '#' 开头的
+# 值、含空格的值加引号。快照用全量读，必须剥掉，否则徽章里会出现
+# #[fg="#af5fff"] —— 颜色不生效且看不出原因。
+
+@test "conf 快照: 双引号包裹的值被剥掉引号（颜色就是这种）" {
+    _WC_SNAP='@whistle_color_done "#af5fff"'
+    run whistle_conf_snap_get '@whistle_color_done'
+    assert_eq "$output" '#af5fff'
+    unset _WC_SNAP
+}
+
+@test "conf 快照: 含空格被加引号的值也剥掉（agent_cmds 就是这种）" {
+    _WC_SNAP='@whistle_agent_cmds "claude claude.exe opencode"'
+    run whistle_conf_snap_get '@whistle_agent_cmds'
+    assert_eq "$output" 'claude claude.exe opencode'
+    unset _WC_SNAP
+}
+
+@test "conf 快照: 单引号包裹同样剥掉" {
+    _WC_SNAP="@whistle_x 'a b'"
+    run whistle_conf_snap_get '@whistle_x'
+    assert_eq "$output" 'a b'
+    unset _WC_SNAP
+}
+
+@test "conf 快照: 空值只有名字也能取到（返回空、退出 0）" {
+    _WC_SNAP='@whistle_os_app
+@whistle_other 1'
+    run whistle_conf_snap_get '@whistle_os_app'
+    assert_eq "$status" 0
+    assert_eq "$output" ''
+    unset _WC_SNAP
+}
+
+@test "conf 快照: 不存在的 option 返回非零（好让调用方回落默认）" {
+    _WC_SNAP='@whistle_other 1'
+    run whistle_conf_snap_get '@whistle_missing'
+    [ "$status" -ne 0 ]
+    unset _WC_SNAP
+}

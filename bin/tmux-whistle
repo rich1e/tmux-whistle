@@ -51,6 +51,24 @@ for _m in core status-line deliver menu; do
 done
 unset _m
 
+# -- 配置快照 --------------------------------------------------------------
+#
+# 一次 `show -g` 把全局 option 全读进来并 export，之后 whistle_conf / whistle_icon
+# 都查内存，不再逐项 fork tmux。
+#
+# 为什么必须在这里做、而不是在 whistle_conf 里惰性读：所有调用点都是
+# `$(whistle_conf ...)` —— 那是一个子 shell，在它里面设的变量改不回父进程，
+# 惰性缓存等于没有缓存（实测仍是 58 次 show）。export 之后子 shell 才继承。
+#
+# 也不能在 source core.sh 时读：L1 单测直接 source 它且不碰 tmux。
+#
+# 长驻进程（lib/spin.sh 每帧重读风格、lib/detect.sh 每轮重读开关）不经过这里，
+# 它们自己 export WHISTLE_CONF_NO_CACHE=1，仍然逐项实时读。
+if [ "${WHISTLE_CONF_NO_CACHE:-}" != 1 ]; then
+  _WC_SNAP=$(whistle_tmux show -g 2> /dev/null) || _WC_SNAP=''
+  export _WC_SNAP
+fi
+
 WHISTLE_PROG=$(basename "$0")
 WHISTLE_SELF=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/$WHISTLE_PROG
 
