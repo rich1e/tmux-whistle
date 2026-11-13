@@ -34,6 +34,7 @@ bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 
 ```
 L4 生产者   hooks/claude-code.sh   Claude Code hook 推送（主路径，async:true）
+            hooks/opencode/tui.js  OpenCode TUI 插件 → hooks/opencode.sh（第二个接入源）
             lib/detect.sh          关键词兜底轮询（默认关，会误报）
                         │ 调 bin/tmux-whistle
                         ▼
@@ -47,6 +48,20 @@ L1 存储     tmux user option（tmux server 内存，不落盘、不跨 tmux �
 
 旁路        lib/spin.sh            Braille 帧推进器（只在有 running 时活着）
 ```
+
+**两个接入源的区别（不要照抄 Claude 那套）**
+
+OpenCode 是「TUI 进程 + `opencode serve --service` 共享守护」双进程。**事件里没有任何
+pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**启动快照** —— 所以：
+
+- **pane 归属只能由 TUI 提供。** `$TMUX_PANE` 在 TUI 里可信，在 server 里是启动时的那个
+  pane（所有 pane 的事件都汇进它）。按 `location.directory` 猜也不行：同目录下可能既有
+  `opencode` 又有 `claude.exe`（实测）。
+- `tui.js` **只做转发与身份过滤**，映射全在 `lib/opencode.sh`（纯函数，可被 L1 source）+
+  `hooks/opencode.sh`（薄壳）。逻辑进 JS 就破了「`make check` 不需要 node」。
+- 插件必须以**目录形态**软链（`~/.config/opencode/plugins/tmux-whistle` → `hooks/opencode`，
+  链接名不带 `.js`）：单文件会被当成 server part，`plugins` 配置里的单文件路径会被官方
+  静默跳过。`tui.js` 这个**文件名是契约**，改名就不被认成 TUI part。
 
 **状态存储约定**
 
@@ -167,6 +182,28 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
 
 **绝不覆盖别人的东西**：`lib/install-hooks.sh` 往 `~/.claude/settings.json` 合并时只增删
 带 `tmux-whistle` marker 的条目，用户已有的 hook 原样保留；改前先备份。
+
+**OpenCode 侧：启动必须报 `idle`，事件必须串行**（2026-11-13 真机踩到）
+
+- **TUI 启动要写一次 `idle`**（`hooks/opencode.sh --tui-start`）。上一轮退出的收尾是
+  `gone`（rank 0：不显示、不计数、不进菜单），而推导层只把**空**状态推成 idle ——
+  `gone` 不是空，救不回来。少了这一步，重启 TUI 后那个 pane 在状态栏上**彻底不存在**，
+  用户会以为插件没装上。已有 `running`/`idle` 时不覆盖，否则插件热重载会把正在干活的
+  状态打回空闲。
+- **事件写入必须串行**（`tui.js` 用 promise 链，不 `detach`）。并发 spawn 时子进程完成
+  顺序不保证：实测 `permission.asked`(wait) 与 `execution.succeeded`(done) 同时触发时，
+  后到的 `done` 把 `◔` 盖成了 `◆`，等待提示闪一下就没了。状态写入是「后发生者赢」的
+  有序语义，queue 不能省。
+- **cleanup 要先 `await queue` 再写 `gone`**：否则退出会把排队中还没落盘的事件冲掉
+  （实测最后那条 `succeeded` 的 `done` 会丢）。
+- `session.execution.interrupted` **必须按 `reason` 分派**，不能一律 `idle`：
+  `superseded` 意味着**正在跑新的一轮**（写 idle 会把 `▶` 打成 `◉`）；
+  `shutdown` 要写 `gone`；只有 `user` / `inactivity` 才是 `idle`。
+- `permission.replied` **必须按 `reply` 分派**：`once`/`always` 只清通知、活动态不动；
+  `reject` 要把活动态收成 `idle` —— 拒绝会结束当前 step，之后**可能没有**
+  `succeeded`/`failed` 来收尾，否则留一盏永不灭的 `▶`。
+- 后台 shell 用「**在飞 id 集合**」（`@whistle_oc_shell`，存 pane option 不落盘），
+  不用计数器：重复的 `started` 天然幂等，`ended` 按 id 精确移除。集合非空时不写 `done`。
 
 **SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，

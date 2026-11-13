@@ -253,6 +253,12 @@ global option `@whistle_mark`，用户配置里只留 `#{E:@whistle_mark}` 占�
 养成忽略弹窗的习惯）。tmux hooks（⑥）只负责清除状态与重算聚合，**推送侧完全不碰
 tmux hooks** —— 有人往 pane 里敲命令不会触发通知。
 
+**两个推送源，两种进程模型。** Claude Code 的 hook 跑在 pane 进程树里，继承 `TMUX_PANE`；
+OpenCode 的 TUI 插件跑在 TUI 进程里，而 `opencode serve --service` 是共享守护、环境是
+启动快照，事件里又没有 pane 信息（99 个 V2 事件一个都没有）。所以 OpenCode 侧**只能由
+TUI 提供 pane 归属**，且必须以**目录形态**软链插件（单文件会被当成 server part）。
+细节与踩坑见 [opencode-integration-plan.md](opencode-integration-plan.md)。
+
 ## 改代码时的红线
 
 下面每一条都踩过 —— 违反了不会报错，只会**静默出错**。完整版见 [`CLAUDE.md`](../CLAUDE.md)。

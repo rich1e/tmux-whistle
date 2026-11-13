@@ -48,6 +48,15 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - 别删 `whistle_deliver` 开头的 `whistle_ensure_status_line`：oh-my-tmux 在 source 完 `tmux.conf.local` 后才重设状态栏，自愈是唯一不依赖加载顺序的时机。
 - 只在「状态变化」触发同步的逻辑，必须在加载路径（`scripts/setup.sh`）也跑一次。
 
+## OpenCode 接入（第二个推送源）
+
+- **pane 归属只能由 TUI 提供。** 事件里没有 pane 信息，`opencode serve --service` 的环境是启动快照 —— 按 cwd 猜必错（同目录可能既有 opencode 又有 claude）。
+- 插件必须**目录形态**软链（`~/.config/opencode/plugins/tmux-whistle` → `hooks/opencode`，链接名不带 `.js`）。单文件会被当成 server part；`plugins` 配置里的单文件路径会被静默跳过。`tui.js` 文件名是契约。
+- **TUI 启动要写 `idle`**（`--tui-start`）。上一轮的 `gone`（rank 0）不会自己恢复成 idle，因为推导层只把**空**状态推成 idle。
+- **事件必须串行**（`tui.js` 的 promise 链，不 detach）。并发 spawn 会乱序：实测 `wait` 被后到的 `done` 盖掉。cleanup 要先 `await queue` 再写 `gone`。
+- `interrupted` 按 `reason` 分派（`superseded` 不动活动通道、`shutdown` 写 `gone`）；`permission.replied` 按 `reply` 分派（`reject` 要收成 idle）。
+- 后台 shell 用**在飞 id 集合**（`@whistle_oc_shell`）而非计数器；集合非空时不写 `done`。
+
 ## 测试
 
 三层：`test/unit/`（不碰 tmux）→ `test/integration/`（`tmux -L` 隔离 server）→ `test/e2e/`（完整 CLI/hook 链路，`menu_popup.bats` 需要 `expect`）。
