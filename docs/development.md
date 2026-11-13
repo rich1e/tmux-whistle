@@ -51,7 +51,8 @@ bats --print-output-on-failure test/unit        # 失败时打印输出
 改代码 → make fmt → make check → git commit
 ```
 
-`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了。五道关卡依次过，
+`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了（**完整一遍约 9~10 分钟**，
+604 项；拆解见下文[「跑一次 make check 要多久」](#跑一次-make-check-要多久)）。五道关卡依次过，
 任一关红了就就地停住；全绿才允许提交：
 
 ```mermaid
@@ -321,13 +322,62 @@ TUI 提供 pane 归属**，且必须以**目录形态**软链插件（单文件�
 
 helper（`test/test_helper/whistle.bash`）的约定：
 
-- 每个测试文件一个独立 socket（`tmux -L whistle-test-$$`），用 `-f /dev/null` 起 server，
-  绝不读用户真实的 `tmux.conf`。
+- 每个**用例**一个独立 socket（`tmux -L whistle-test-<bats pid>-<用例号>`），用 `-f /dev/null`
+  起 server，绝不读用户真实的 `tmux.conf`。早先是「每个文件一个 socket」，但同一进程里
+  所有用例复用同一路径（建 server → kill-server → 删 socket → 再建）会撞上
+  「旧 server 退出时把新 server 的 socket 带走」的竞态（TODO-21），所以改成按用例唯一。
 - **绝不在 helper 里装 `trap ... EXIT`** —— 会覆盖 bats 自己的 trap，静默吞掉测试失败
   （表现是 `Executed N instead of expected M`，而不是 `not ok`）。清理交给 `teardown()`。
-- `teardown` 必须 kill-server **并显式删掉 socket 文件**（`kill-server` 不总会 unlink）。
+- `teardown` 必须 kill-server，**并且等 server 真退出后再删 socket 文件**
+  （立刻 rm 会抽走仍活着那个 server 的文件，下次同路径起 server 就连不上）。
 - `display -pF` 不解析 `#[...]` 样式，断言前要剥掉（helper 的 `wt_render_windows` 已处理）。
 - hook 走 `run-shell -b` 是异步的，断言前用 `wt_wait_until` 轮询，别 sleep 一下就假定好了。
+
+## 跑一次 `make check` 要多久
+
+实测（2026-11-13，macOS，604 项）：
+
+| 阶段 | 用时 |
+|---|---|
+| `check-version` + `lint` + `fmt-check` | 7.8s |
+| `test-unit`（143 项，不碰 tmux） | 9.3s |
+| `test-integration`（integration 359 + e2e 102，**一次 bats 调用**） | ~565s |
+| `check-no-stray-servers` | <1s |
+| **合计** | **582s ≈ 9 分 42 秒** |
+
+### 时间花在哪，以及为什么压不下去了
+
+`integration + e2e` 的 565 秒里约有 **216 秒是固定开销**：每个用例一个隔离 tmux
+server，启动 + 销毁约 0.47s，461 个用例 × 0.47s。这是地板 —— 参照 `version.bats`
+（13 项，几乎不调 CLI）也要 6.15s。
+
+剩下约 350 秒才是真实工作（CLI 写入、播种窗口、expect 驱动 popup）。写入路径本身
+已经压过一轮（见 `CLAUDE.md`「状态写入的成本」：单次写入 80 → 25 次 tmux fork），
+继续优化的边际收益很低。
+
+**再想快只能动「一个用例一个 server」这个结构**（按文件复用 server、或合并断言同一批
+状态的用例）。但那会牺牲隔离性 —— 现在每个用例独享 server 是「测试互不污染」的保证，
+不值得为了速度去换。
+
+### 日常怎么跑
+
+```sh
+make test-unit                                   # 10 秒，改纯函数时够用
+bats test/integration/badge.bats                 # 单文件，几秒到几十秒
+bats -f 'menu-args' test/integration/cli.bats    # 按用例名过滤
+make check                                       # 提交前跑这一条（9~10 分钟）
+```
+
+### 历史对比
+
+| | 优化前 | 现在 |
+|---|---|---|
+| `make check` | >15 分钟（600s / 900s 超时都跑不完） | 9 分 42 秒 |
+| 用例数 | 455 | 604（多 33%） |
+
+也就是说：**用例多了三分之一，时间少了约四成。** 两处来源：生产侧的单次写入成本
+（`perf: 80 → 25 次 fork`）与测试侧/菜单侧的播种与标签开销
+（`perf(test): 播种改为一次 tmux 链`）。
 
 ## 风格
 

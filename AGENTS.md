@@ -76,12 +76,13 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 
 三层：`test/unit/`（不碰 tmux）→ `test/integration/`（`tmux -L` 隔离 server）→ `test/e2e/`（完整 CLI/hook 链路，`menu_popup.bats` 需要 `expect`）。
 
-- 每个测试文件一个独立 socket `whistle-test-$$`，`-f /dev/null` 起 server，绝不读用户真实 tmux.conf。
+- 每个**用例**一个独立 socket `whistle-test-<pid>-<用例号>`，`-f /dev/null` 起 server，绝不读用户真实 tmux.conf（同文件复用路径会撞 TODO-21 的竞态）。
 - **helper 里绝不要装 `trap ... EXIT`**（会覆盖 bats 的 trap，失败被吞成 `Executed N instead of expected M`）。清理只在 `teardown()`。
 - **不要 `pkill bats`**：teardown 跑不到会留下隔离 server，它会让 tmux-continuum **静默关闭自动恢复/自动保存**。`make check` 末尾的 `check-no-stray-servers` 守着这条。
 - helper 的 `opt` 读全局 option（`show -gqv`），`optw` 读全局 **window** option（`show -gwv`）；用错会静默读空、测试假绿。读某个窗口自己的 option 用 `wt show -wv -t "$w" <name>`。
 - hook 走 `run-shell -b` 是异步的，断言前用 `wt_wait_until` 轮询，不要 sleep。
 - `bin/tmux-whistle` 的 `cmd_menu` 与 `cmd_menu_args` 是两份几乎相同的循环（后者供测试断言 argv）；**改一边不改另一边 = 假绿**。
+- **完整 `make check` 约 9~10 分钟**（604 项）。其中约 216 秒是「一个用例一个 tmux server」的固定开销（0.47s/项），写入路径已优化过，再快只能动隔离架构 —— 不建议。日常用 `make test-unit`（10s）或 `bats -f '<用例名>' <文件>` 跑局部。
 
 ## 风格
 
