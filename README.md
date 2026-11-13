@@ -166,7 +166,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是动画帧，计数为 0 或 `spin off` 时用它） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
-| `@whistle_agent_cmds` | `claude claude.exe` | 哪些前台进程算「agent」（按进程发现空闲时用） |
+| `@whistle_agent_cmds` | `claude claude.exe opencode` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用星形帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_style` | `claude` | 帧风格：`claude` / `symbols_3` / `circles_5` / `lines_3` / `squares_9` / `togglers_4` |
@@ -389,7 +389,7 @@ session 里的细节"。
 
 - **会话开始 / 恢复**时 hook 报上来（`SessionStart`）；
 - **按进程发现**：某个 pane 从没上报过状态、但前台跑着 agent 进程
-  （`@whistle_agent_cmds` 里那些，默认 `claude claude.exe`）—— 用 resurrect
+  （`@whistle_agent_cmds` 里那些，默认 `claude claude.exe opencode`）—— 用 resurrect
   恢复 tmux 之后，那几个还停在提示符前等你的 agent 就属于这一类。
 
 > 按进程发现比对的是 tmux 的 `pane_current_command`，那是**进程名**而不是命令行。
@@ -467,6 +467,31 @@ long_job.sh && tmux-whistle done "备份完成" || tmux-whistle error "备份失
 ```sh
 tmux-whistle wait "需要你选数据库"
 ```
+
+### 场景三：OpenCode
+
+OpenCode 装上插件即用 —— 状态由它自己的事件推送，不需要你手动调 CLI。
+`./install.sh` 会把插件目录软链进 `~/.config/opencode/plugins/`，重启 OpenCode 生效。
+
+覆盖的状态：
+
+| OpenCode 事件 | 状态栏 |
+|---|---|
+| 开始一轮 / 调工具 | `▶` 运行中 |
+| 一轮正常结束 | `◉` 空闲 + `◆` 完成 |
+| 回合因 API 错误结束 | `◉` + `⚠` 错误 |
+| 请求权限批准 | `◔` 等待（**即时**，不用等 60 秒） |
+| 你在 TUI 里批准/拒绝 | 清掉 `◔`（拒绝会同时把 `▶` 收成 `◉`） |
+| 后台命令在飞 | 保持 `▶`，**不报** `◆` —— 直到后台也结束 |
+
+两条**已知限制**（不是 bug，是 whistle 的粒度就是 pane）：
+
+- **一个 pane 里开多个 session** → 只显示 rank 最高的那个态，不会显示 `▶3`。
+- **同一个 session 在两个 pane 的 TUI 里都开着** → 两个 pane 各显示一份，计数会翻倍。
+  事件里没有任何字段能判断「哪个 TUI 才是它的主人」。
+
+非 tmux 里启动的 OpenCode（比如 GUI 版）不会被追踪 —— 没有 pane 可标记。
+需要自检时跑 `tmux-whistle doctor`，它会报插件是否安装、形态对不对、有没有加载进 TUI 进程。
 
 ### 命令速查
 

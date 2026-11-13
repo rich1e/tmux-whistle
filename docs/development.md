@@ -107,9 +107,13 @@ make check-version
 │   ├── status-line.sh          # 徽章 format 生成、幂等注入、读侧 hooks 注册
 │   ├── deliver.sh              # 投递：边框 / 边框状态行 / 状态栏刷新 / 瞬时提示 / 桌面通知
 │   ├── detect.sh               # 关键词兜底检测（默认关，会误报）
+│   ├── opencode.sh             # OpenCode 事件 → 动作的**纯函数**层（不碰 tmux，L1 可 source）
 │   └── install-hooks.sh        # Claude Code settings.json 的幂等合并器
 ├── hooks/
-│   └── claude-code.sh          # Claude Code hook 适配器：stdin JSON → 状态
+│   ├── claude-code.sh          # Claude Code hook 适配器：stdin JSON → 状态
+│   ├── opencode.sh             # OpenCode 适配器薄壳：stdin → 定位 tmux → 调 lib/opencode.sh
+│   └── opencode/
+│       └── tui.js              # OpenCode TUI 插件：订阅 + 身份过滤 + spawn（只转发）
 ├── scripts/
 │   ├── setup.sh                # 插件加载时的初始化：发布 mark、幂等 patch、注册 hooks
 │   └── check-version.sh        # 校验 CLI 版本常量与 --version 输出
@@ -117,7 +121,10 @@ make check-version
 │   └── whistle.zsh             # 可选 OSC 133 片段
 ├── test/
 │   ├── unit/                   # L1 纯函数测试
-│   │   └── core.bats
+│   │   ├── core.bats
+│   │   ├── menu.bats
+│   │   ├── opencode.bats       # OpenCode 事件映射（含 reason/reply 分派）
+│   │   └── spin.bats
 │   ├── integration/            # L2 tmux 集成测试（隔离 server）
 │   │   ├── badge.bats
 │   │   ├── border.bats
@@ -126,15 +133,18 @@ make check-version
 │   │   ├── deliver.bats
 │   │   ├── hooks.bats
 │   │   ├── install_hooks.bats
+│   │   ├── install.bats        # 含 OpenCode 插件的**目录形态**断言
 │   │   ├── run.bats
 │   │   └── state.bats
 │   ├── e2e/                    # L3 CLI + hook 端到端
-│   │   └── claude_hook.bats
+│   │   ├── claude_hook.bats
+│   │   └── opencode_hook.bats  # OpenCode 适配器完整链路
 │   └── test_helper/
 │       └── whistle.bash        # Bats 公共 helper：隔离 server + 断言
 ├── docs/
 │   ├── development.md          # 本文档
 │   ├── notify-design-review.md # 「事件收件箱」形态的取舍评审
+│   ├── opencode-integration-plan.md  # OpenCode 接入方案（含 R3 验证方法）
 │   ├── requirements-analysis.md
 │   ├── versioning.md           # SemVer、阶段、构建戳与手工发布规范
 │   ├── superpowers/            # 执行计划（plans/），带 checkbox 的步骤清单
