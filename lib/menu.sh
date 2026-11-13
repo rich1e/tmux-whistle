@@ -96,10 +96,77 @@ whistle_menu_state_color() {
 #
 # 窗口名不裹 —— 它是「session 里的哪一格」，紧贴 session 更好读；
 # 真正需要与内容区分开的只有 session 这一层。
+# -- 菜单调色板：一次取齐，标签不再逐项 fork -------------------------------
+#
+# 一个菜单最多 26 项，但状态只有 5 种。原来的实现每个标签要两次
+# `$(whistle_conf ...)`（颜色 + 图标）= 82 次 subshell fork，41 项时
+# --menu-args 实测 2~3 秒。这里在菜单开始前把 5 种状态的颜色/图标/中文标签
+# 各取一次，之后 label 只做纯 printf。
+#
+# 变量带 _MP_ 前缀（POSIX sh 没有 local），_MP_READY 表示已加载。
+# shellcheck disable=SC2154  # _mv_* 由 whistle_mark_values_load 用 eval 赋值
+whistle_menu_palette_load() {
+  whistle_mark_values_load
+  _MP_C_DONE=$_mv_c_done
+  _MP_C_WAIT=$_mv_c_wait
+  _MP_C_ERROR=$_mv_c_err
+  _MP_C_RUNNING=$_mv_c_run
+  _MP_C_IDLE=$_mv_c_idle
+  _MP_I_DONE=$_mv_s_done
+  _MP_I_WAIT=$_mv_s_wait
+  _MP_I_ERROR=$_mv_s_err
+  _MP_I_RUNNING=$_mv_s_run
+  _MP_I_IDLE=$_mv_s_idle
+  # 中文标签是固定的 5 个词，顺手预取，省掉每项的 subshell
+  _MP_L_DONE=$(whistle_state_label 'done')
+  _MP_L_WAIT=$(whistle_state_label wait)
+  _MP_L_ERROR=$(whistle_state_label error)
+  _MP_L_RUNNING=$(whistle_state_label running)
+  _MP_L_IDLE=$(whistle_state_label idle)
+  _MP_READY=1
+}
+
+# 把某个状态的 (颜色, 图标, 标签) 取到 _ml_c / _ml_i / _ml_l
+_whistle_menu_palette_pick() {
+  case "${1:-}" in
+  running)
+    _ml_c=$_MP_C_RUNNING
+    _ml_i=$_MP_I_RUNNING
+    _ml_l=$_MP_L_RUNNING
+    ;;
+  idle)
+    _ml_c=$_MP_C_IDLE
+    _ml_i=$_MP_I_IDLE
+    _ml_l=$_MP_L_IDLE
+    ;;
+  done)
+    _ml_c=$_MP_C_DONE
+    _ml_i=$_MP_I_DONE
+    _ml_l=$_MP_L_DONE
+    ;;
+  wait)
+    _ml_c=$_MP_C_WAIT
+    _ml_i=$_MP_I_WAIT
+    _ml_l=$_MP_L_WAIT
+    ;;
+  error)
+    _ml_c=$_MP_C_ERROR
+    _ml_i=$_MP_I_ERROR
+    _ml_l=$_MP_L_ERROR
+    ;;
+  *)
+    _ml_c=''
+    _ml_i=''
+    _ml_l=${1:-}
+    ;;
+  esac
+}
+
 whistle_menu_item_label() {
+  [ -n "${_MP_READY:-}" ] || whistle_menu_palette_load
+  _whistle_menu_palette_pick "$1"
   printf '#[fg=%s]%s#[default] %s [%s]: %s %s' \
-    "$(whistle_menu_state_color "$1")" "$(whistle_menu_state_icon "$1")" \
-    "$(whistle_state_label "$1")" "$2" "$3" "${4:-}"
+    "$_ml_c" "$_ml_i" "$_ml_l" "$2" "$3" "${4:-}"
 }
 
 # whistle_menu_model：把 whistle_agent_windows 的 9 列输入变成菜单共享模型。

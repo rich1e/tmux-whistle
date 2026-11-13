@@ -69,6 +69,8 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - `show -g` 会给 `#` 开头或含空格的值加引号，`show -gqv` 不会 → 快照必须剥引号，否则 `#[fg="#af5fff"]`。
 - `whistle_sanitize` 有快路径（干净短串直接返回）；改消毒逻辑要两条路径一起改。
 - `ensure_status_line` 用 `@whistle_mark_stamp` 跳过重建；新增影响渲染的配置项必须加进签名。
+- 菜单调色板在循环前取一次（`whistle_menu_palette_load`）：条目只有 5 种状态，别每项 fork 两次。
+- 测试播种用「一次 tmux 链」而不是 N 次 CLI（`seed_pending_windows` 26 项从 37s → 4.4s）；但需要断言计数/窗口徽章的测试必须走真实写入。
 
 ## 测试
 

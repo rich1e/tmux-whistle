@@ -554,6 +554,11 @@ EOF
 # 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
 # 用于在不依赖 attached client 的情况下验证参数构造。
 cmd_menu_args() {
+  # 先把五态颜色/图标/标签取齐（一次），再进循环 —— label 在 `$(...)` 子 shell 里
+  # 执行，会继承父 shell 的变量，所以这里加载一次就够了；否则每项都重新加载，
+  # 41 项时 --menu-args 会慢到 2~3 秒。
+  whistle_menu_palette_load
+
   _items=$(whistle_agent_windows | whistle_menu_model)
   [ -n "$_items" ] || return 0
 

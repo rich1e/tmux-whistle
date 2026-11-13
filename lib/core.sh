@@ -292,28 +292,33 @@ whistle_conf_snapshot() {
 # 后者保留空），所以这里只给原始值，回落策略留在各自那一层。
 whistle_conf_snap_get() {
   _sg_name="$1"
-  _sg_found=1
-  _sg_val=''
 
-  while IFS= read -r _sg_line; do
-    if [ "$_sg_line" = "$_sg_name" ]; then
-      # `show -g` 对空值只打名字、不带尾随空格
-      _sg_val=''
-      _sg_found=0
-      break
-    fi
-    case "$_sg_line" in
-    "$_sg_name "*)
-      _sg_val=${_sg_line#"$_sg_name "}
-      _sg_found=0
-      break
-      ;;
-    esac
-  done << EOF
+  # ⚠️ 这里**不能**用 `while read ... << EOF` 遍历快照：here-doc 每次都会建临时
+  # 文件，而菜单要给每一项算颜色+图标（41 项 = 82 次查询），实测每项 68ms、
+  # 整个 --menu-args 2.8s。改成纯参数展开：前后补换行做边界，去掉匹配前缀后
+  # 取到第一个换行为值 —— 零 fork、零临时文件。
+  case "
 $_WC_SNAP
-EOF
-
-  [ "$_sg_found" = 0 ] || return 1
+" in
+  *"
+$_sg_name "*)
+    # 注意从**补了前导换行**的副本里截取，否则第一行（没有前导换行）匹配不上，
+    # ${var#pattern} 会原样返回整份快照 —— 值是错的，而且看起来像「读到了」。
+    _sg_all="
+$_WC_SNAP"
+    _sg_rest=${_sg_all#*"
+$_sg_name "}
+    _sg_val=${_sg_rest%%"
+"*}
+    ;;
+  *"
+$_sg_name
+"*)
+    # `show -g` 对空值只打名字、不带尾随空格
+    _sg_val=''
+    ;;
+  *) return 1 ;;
+  esac
 
   # ⚠️ `show -g`（全量）会给需要重新解析的值加引号，`show -gqv`（单项）不会：
   #     show -gqv @whistle_color_done  →  #af5fff

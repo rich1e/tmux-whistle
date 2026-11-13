@@ -245,6 +245,16 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
   `whistle_mark_stamp`，否则改了不生效 —— 这正是这类缓存的经典失效方式。
   计数**不进**签名：format 里是引用，不需要因计数变化重建。
 
+**菜单与测试播种：别按「项」fork**
+
+- **菜单调色板只在循环前取一次**（`whistle_menu_palette_load`）。`whistle_menu_item_label`
+  原本每项两次 `$(whistle_conf ...)`，41 项就是 82 次 subshell fork（实测 2.8 秒）。
+  颜色/图标/中文标签都只有 5 种状态，取一次存变量即可。label 在 `$(...)` 里执行时会
+  **继承**父 shell 变量，所以父层加载一次就够。
+- **测试播种不要调 N 次 CLI**（`seed_pending_windows`）。一次 `new-window` 链建窗口 +
+  一次 `list-windows` 取 window→pane 映射 + 一次 `set -p` 链写状态，26 项从 37 秒降到
+  4.4 秒。播种只写 pane 级真源，**不要**用它替代需要断言全局计数/窗口徽章的测试。
+
 **SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。

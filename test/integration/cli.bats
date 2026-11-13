@@ -459,15 +459,69 @@ run_menu_popup_spy() {
 # -- 键位（回归：第 10 项起曾算成空） ---------------------------------------
 
 # 造 n 个待处理窗口（含 wt_start 自带的 w1）
+#
+# ⚠️ 这里直接写 pane 级真源，**不走完整写入路径**（原来 26 项要 26 次 "$CLI" done，
+# 每次约 1 秒 —— 固定 25 次 tmux fork + 投递链）。这几个用例只断言菜单输出，
+# 而 whistle_agent_windows 只 list-panes 读 pane option，不读派生计数。
+#
+# 需要断言全局计数 / 窗口徽章的用例**不要**用批量播种，必须走真实写入。
+_seed_panes() {
+  local channel="$1" w p wn wpid map names
+  shift
+  names="$*"
+
+  # 一次 list-windows 拿全部 window→pane 映射：比 N 次 `display -t <名字>` 快一个
+  # 数量级（按名字查窗口在 tmux 内是线性扫描）。
+  map=$(wt list-windows -F '#{window_name}|#{pane_id}')
+
+  set --
+  for w in $names; do
+    p=''
+    while IFS='|' read -r wn wpid; do
+      if [ "$wn" = "$w" ]; then
+        p=$wpid
+        break
+      fi
+    done << EOF
+$map
+EOF
+    [ -n "$p" ] || continue
+    if [ $# -gt 0 ]; then set -- "$@" ';'; fi
+    if [ "$channel" = notice ]; then
+      set -- "$@" set -p -t "$p" @whistle_notice 'done'
+      set -- "$@" ';' set -p -t "$p" @whistle_notice_msg "m$w"
+      set -- "$@" ';' set -p -t "$p" @whistle_notice_at 1
+    else
+      set -- "$@" set -p -t "$p" @whistle running
+      set -- "$@" ';' set -p -t "$p" @whistle_msg "m$w"
+      set -- "$@" ';' set -p -t "$p" @whistle_src manual
+      set -- "$@" ';' set -p -t "$p" @whistle_at 1
+    fi
+  done
+
+  # 一次 tmux 调用写完所有 pane（';' 是 tmux 的命令分隔符）
+  if [ $# -gt 0 ]; then
+    wt "$@"
+  fi
+  return 0
+}
+
 seed_pending_windows() {
-  local n="$1" i p
+  local n="$1" i wins=''
+  # wt_start 已有 w1，从 w2 起建；建窗口也用一条链，避免 N 次 fork。
+  set --
   for ((i = 2; i <= n; i++)); do
-    wt new-window -d -n "w$i"
+    if [ $# -gt 0 ]; then set -- "$@" ';'; fi
+    set -- "$@" new-window -d -n "w$i"
   done
+  if [ $# -gt 0 ]; then
+    wt "$@"
+  fi
   for ((i = 1; i <= n; i++)); do
-    p=$(wt display -p -t "w$i" '#{pane_id}')
-    "$CLI" "done" "m$i" -t "$p"
+    wins="$wins w$i"
   done
+  # shellcheck disable=SC2086  # wins 是空格分隔的窗口名列表，刻意分词
+  _seed_panes notice $wins
 }
 
 # 每项是 label / key / command 三行，取每组的第 2 行
@@ -476,16 +530,20 @@ menu_keys() {
 }
 
 seed_running_windows() {
-  local n="$1" i p
+  local n="$1" i wins=''
   # 注意：seed_pending_windows 能省掉 i=1 是因为 wt_start 已经建了 w1。
-  # 这里用的是自己的 r* 命名，必须从 i=1 建起。
+  # 这里用的是自己的 r* 命名，必须从 i=1 建起；同样用一条链建窗口。
+  set --
   for ((i = 1; i <= n; i++)); do
-    wt new-window -d -n "r$i"
+    if [ $# -gt 0 ]; then set -- "$@" ';'; fi
+    set -- "$@" new-window -d -n "r$i"
+    wins="$wins r$i"
   done
-  for ((i = 1; i <= n; i++)); do
-    p=$(wt display -p -t "r$i" '#{pane_id}')
-    "$CLI" "running" -t "$p"
-  done
+  if [ $# -gt 0 ]; then
+    wt "$@"
+  fi
+  # shellcheck disable=SC2086  # wins 是空格分隔的窗口名列表，刻意分词
+  _seed_panes activity $wins
 }
 
 @test "menu-args: 第 9 项是数字 9，第 10 项起接字母" {
