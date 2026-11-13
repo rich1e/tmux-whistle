@@ -1049,6 +1049,8 @@ cmd_doctor() {
   # 探针只在 @whistle_debug=on 时落盘，所以 debug 关了不能报红：
   # 那只是「没在收集证据」，不是「插件没跑」。
   _oc_probe="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
+  _oc_subs=''
+  _oc_failed=''
   if [ -f "$_oc_probe" ] && grep -q 'event=tui-probe' "$_oc_probe" 2> /dev/null; then
     # 订阅条数来自最近一条 tui-probe（新版本才带 subs=）。
     # 这是「加载了但事件订阅全失败」的判别点 —— 探针照样有记录，
@@ -1075,6 +1077,37 @@ cmd_doctor() {
   fi
   if [ -z "${TMUX_PANE:-}" ]; then
     _warn_line '当前进程没有 TMUX_PANE（TUI 不在 tmux 里时插件是 no-op）'
+  fi
+
+  # 逐事件展开订阅清单 —— 只说「订阅 11 个事件」看不出订了哪 11 个，
+  # 也看不出「声明了 12 条、运行时只挂上 11 条」这类半失效。
+  #
+  # 权威清单是 tui.js 里的 EVENTS 数组：优先读部署路径（软链目标，
+  # 反映 OpenCode 真正加载的那份），退回到本仓库。
+  _oc_tui="$_oc_link/tui.js"
+  [ -f "$_oc_tui" ] || _oc_tui="$(dirname -- "$WHISTLE_BIN_DIR")/hooks/opencode/tui.js"
+  if [ -f "$_oc_tui" ]; then
+    _oc_list=$(sed -n '/^const EVENTS = \[/,/^\];/p' "$_oc_tui" 2> /dev/null \
+      | sed -n 's/^[[:space:]]*"\([^"]*\)".*/\1/p')
+    _oc_decl=0
+    [ -n "$_oc_list" ] && _oc_decl=$(printf '%s\n' "$_oc_list" | grep -c .)
+    if [ "$_oc_decl" = 0 ]; then
+      _warn_line "没能从 $_oc_tui 解析出 EVENTS 清单（文件被改过？）"
+    else
+      # 声明数与运行时实际订阅数不一致 = 逐条 try/catch 里有失败。
+      if [ -n "$_oc_subs" ] && [ "$_oc_subs" != "$_oc_decl" ]; then
+        _warn_line "声明 $_oc_decl 条、实际挂上 $_oc_subs 条 —— 有订阅失败，看 js-trace 行"
+      fi
+      printf '  \033[2m订阅清单（%s）\033[0m\n' "$_oc_decl"
+      printf '%s\n' "$_oc_list" \
+        | while IFS= read -r _oc_ev; do
+          [ -n "$_oc_ev" ] || continue
+          case ",$_oc_failed," in
+          *",$_oc_ev,"*) printf '    \033[31m✗\033[0m %-32s ← 订阅失败\n' "$_oc_ev" ;;
+          *) printf '    %s\n' "$_oc_ev" ;;
+          esac
+        done
+    fi
   fi
 
   printf '\nClaude Code hooks\n'

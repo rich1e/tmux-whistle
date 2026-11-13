@@ -302,3 +302,60 @@ PY
 
   assert_contains "$output" 'config.toml 里还有 inline [hooks]'
 }
+
+# -- OpenCode：逐事件列出订阅 --------------------------------------------------
+#
+# 只说「订阅 11 个事件」看不出订了哪 11 个，也看不出「声明了 12 条、
+# 运行时只挂上 11 条」—— 都要能在这里看出来。
+
+write_tui_events() {
+  local d="$1"
+  mkdir -p "$d/opencode/plugins/tmux-whistle"
+  cat > "$d/opencode/plugins/tmux-whistle/tui.js" << 'TUI'
+const EVENTS = [
+  "session.execution.started",
+  "permission.asked",
+  "session.idle",
+];
+TUI
+}
+
+@test "doctor: 逐事件列出 OpenCode 插件订阅" {
+  local x="$BATS_TEST_TMPDIR/xdg"
+  local log="$BATS_TEST_TMPDIR/hooks.log"
+  write_tui_events "$x"
+  printf '2026-11-13 [1] agent=opencode event=tui-probe TMUX_PANE=%%1 loaded=ok subs=3\n' > "$log"
+
+  run env XDG_CONFIG_HOME="$x" WHISTLE_HOOK_LOG="$log" "$CLI" doctor
+
+  assert_eq "$status" 0
+  assert_contains "$output" '插件已加载，订阅 3 个事件'
+  assert_contains "$output" '订阅清单（3）'
+  assert_contains "$output" 'session.execution.started'
+  assert_contains "$output" 'permission.asked'
+  assert_contains "$output" 'session.idle'
+}
+
+@test "doctor: 订阅失败的事件逐条标出，并告警声明数与实际数不一致" {
+  local x="$BATS_TEST_TMPDIR/xdg"
+  local log="$BATS_TEST_TMPDIR/hooks.log"
+  write_tui_events "$x"
+  printf '2026-11-13 [1] agent=opencode event=tui-probe TMUX_PANE=%%1 loaded=ok subs=2 failed=permission.asked\n' > "$log"
+
+  run env XDG_CONFIG_HOME="$x" WHISTLE_HOOK_LOG="$log" "$CLI" doctor
+
+  assert_contains "$output" '声明 3 条、实际挂上 2 条'
+  assert_contains "$output" 'permission.asked'
+  assert_contains "$output" '← 订阅失败'
+}
+
+@test "doctor: debug 关闭（无探针日志）时仍列出声明的事件清单" {
+  local x="$BATS_TEST_TMPDIR/xdg"
+  write_tui_events "$x"
+
+  run env XDG_CONFIG_HOME="$x" WHISTLE_HOOK_LOG="$BATS_TEST_TMPDIR/none.log" "$CLI" doctor
+
+  assert_contains "$output" '订阅清单（3）'
+  assert_contains "$output" 'session.execution.started'
+  assert_not_contains "$output" '声明 3 条、实际挂上'
+}

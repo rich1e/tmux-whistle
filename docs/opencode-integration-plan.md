@@ -858,6 +858,8 @@ cleanup → @whistle=gone，通知保留
 10:17:53 agent=opencode event=tui-probe TMUX_PANE=%8 loaded=ok subs=11
 ```
 
-11 条订阅全部建立，`doctor` 现在会报「插件已加载，订阅 11 个事件」。
+11 条订阅全部建立，`doctor` 现在会报「插件已加载，订阅 11 个事件」，并把
+`tui.js` 里 `EVENTS` 数组逐条列出来（失败的那条标 `✗ ← 订阅失败`；声明数
+与实际挂上数不一致时额外告警）。
 此前 doctor 只能回答「加载了没」，回答不了「订阅建立了没」—— 而后者才是
 「加载了却一直 ◉」的判别点。
