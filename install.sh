@@ -144,6 +144,10 @@ if [ "$UNINSTALL" = 1 ]; then
   remove_block "$TMUX_CONF_LOCAL"
   [ -L "$BIN_DIR/tmux-whistle" ] && run command rm -f "$BIN_DIR/tmux-whistle"
   [ -L "$PLUGIN_DIR" ] && run command rm -f "$PLUGIN_DIR"
+  # OpenCode 插件也是软链，形态与上面两条一致（指向目录）。
+  # 漏了这一条 → 卸载后插件仍被加载、仍往 tmux 写状态。
+  _oc_link="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/tmux-whistle"
+  [ -L "$_oc_link" ] && run command rm -f "$_oc_link"
   say '  完成。重载 tmux：prefix + r（或 tmux source-file ~/.config/tmux/tmux.conf）'
   [ "$DRY" = 1 ] && say '（dry-run：以上均未真正执行）'
   exit 0
@@ -192,7 +196,31 @@ if [ "$CLEANUP" = 1 ]; then
   fi
 fi
 
-# 5. Claude Code hooks
+# 5. OpenCode 插件（软链**目录**，不是文件）
+#
+# ⚠️ 三个细节都不能省，理由见 docs/opencode-integration-plan.md §6.1：
+#   1. 链的是 hooks/opencode（目录）—— 目录形态才按文件名识别 part，
+#      tui.js 才会被当成 TUI part。链单文件会被当成 server part，
+#      而 server 的 TMUX_PANE 是启动快照，pane 归属就是错的。
+#   2. 链接名不带 .js —— 带扩展名同样会被当成「直接 .js 文件」。
+#   3. 用户可能从没装过 OpenCode 插件，父目录要自己建。
+#
+# 装不上不算失败：没装 OpenCode 的人不该被这条拦住。
+#
+# 不需要判断「~/.config/opencode 是否存在」—— 不存在就不装插件是错的：
+# mkdir -p 本来就该把父目录建出来（与上面 PLUGIN_DIR / BIN_DIR 的做法一致）。
+# 早先写成「父目录不在就跳过」，dry-run 下判断还会与真实执行分叉。
+OC_PLUGIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins"
+OC_PLUGIN_LINK="$OC_PLUGIN_DIR/tmux-whistle"
+if [ -e "$OC_PLUGIN_LINK" ] && [ ! -L "$OC_PLUGIN_LINK" ]; then
+  say "  跳过 OpenCode 插件：${OC_PLUGIN_LINK} 已存在且不是符号链接"
+else
+  run mkdir -p "$OC_PLUGIN_DIR"
+  run ln -sfn "$ROOT/hooks/opencode" "$OC_PLUGIN_LINK"
+  say "  OpenCode   -> ${OC_PLUGIN_LINK}（目录软链）"
+fi
+
+# 6. Claude Code hooks
 if [ "$INSTALL_HOOKS" = 1 ]; then
   if [ "$DRY" = 1 ]; then
     "$ROOT/lib/install-hooks.sh" --dry-run > /dev/null 2>&1 \
