@@ -946,15 +946,137 @@ cmd_doctor() {
   fi
 
   printf '\nClaude Code hooks\n'
-  _settings="${HOME}/.claude/settings.json"
-  if [ -f "$_settings" ]; then
+  # 逐事件展开订阅，而不是只说「已配置」—— 排查时要知道**具体哪一条**不对。
+  #
+  # 要能看出四类漂移（都不报错，只是行为不对）：
+  #   1. 命令路径指向别处（tpm 装的另一份 / 旧仓库），于是改了这边不生效
+  #   2. Notification 的 matcher 少了 idle_prompt（漏「回合结束 60 秒没打字」）
+  #   3. PreToolUse 被加了 matcher（普通工具调用被挡在外面，plan 批准后不亮 ▶）
+  #   4. SessionEnd 被改成 async（退出时清不掉，留一盏灭不掉的 ▶）
+  _settings="${CLAUDE_SETTINGS:-${HOME}/.claude/settings.json}"
+  _want_cmd="$(dirname -- "$WHISTLE_BIN_DIR")/hooks/claude-code.sh"
+  if [ ! -f "$_settings" ]; then
+    _warn_line "找不到 $_settings（装了 Claude Code 才会用到这一节）"
+  elif ! command -v python3 > /dev/null 2>&1; then
+    _warn_line '缺 python3，无法解析 settings.json 的 hook 明细'
     if grep -q 'tmux-whistle' "$_settings" 2> /dev/null; then
-      _ok_line "$_settings 已配置"
+      _ok_line '已配置（只做了 grep 确认）'
     else
       _warn_line '未配置。跑 tmux-whistle install-hooks'
     fi
   else
-    _warn_line "找不到 $_settings"
+    export WHISTLE_DG_SETTINGS="$_settings"
+    export WHISTLE_DG_CMD="$_want_cmd"
+    _dg_out=$(
+      python3 << 'PY' 2> /dev/null
+import json, os, sys
+
+path = os.environ["WHISTLE_DG_SETTINGS"]
+want_cmd = os.environ["WHISTLE_DG_CMD"]
+EVENTS = ["Stop", "StopFailure", "PreToolUse", "SubagentStop",
+          "Notification", "SessionStart", "UserPromptSubmit", "SessionEnd"]
+# Notification 必须含 idle_prompt；其余类型与本插件无关。
+NEED_MATCHER = "idle_prompt"
+
+def out(kind, text):
+    sys.stdout.write("%s:%s\n" % (kind, text))
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception as e:
+    out("warn", "settings.json 解析失败（%s）" % e)
+    sys.exit(0)
+
+hooks = data.get("hooks") if isinstance(data, dict) else None
+if not isinstance(hooks, dict):
+    out("warn", "settings.json 里没有 hooks 字段 —— 未配置，跑 tmux-whistle install-hooks")
+    sys.exit(0)
+
+def ours(entry):
+    for h in entry.get("hooks", []) or []:
+        if "tmux-whistle" in str(h.get("command", "")):
+            return h
+    return None
+
+found = {}
+dups = []
+for ev in EVENTS:
+    hits = [h for h in (hooks.get(ev) or []) if isinstance(h, dict) and ours(h)]
+    found[ev] = ours(hits[0]) if hits else None
+    if len(hits) > 1:
+        dups.append(ev)
+
+# 单条命令的横向摘要：async / matcher / 路径
+matcher_of = {}
+for ev in EVENTS:
+    entries = [e for e in (hooks.get(ev) or []) if isinstance(e, dict) and ours(e)]
+    matcher_of[ev] = entries[0].get("matcher", "") if entries else ""
+
+missing = [ev for ev in EVENTS if not found[ev]]
+if missing:
+    out("warn", "缺 %d 个事件：%s（跑 tmux-whistle install-hooks）" % (len(missing), ", ".join(missing)))
+else:
+    out("ok", "%s：%d/%d 个事件已订阅" % (path, len(EVENTS), len(EVENTS)))
+
+if dups:
+    out("warn", "重复订阅：%s —— 跑 install-hooks 会归一，别手改" % ", ".join(dups))
+
+for ev in EVENTS:
+    h = found[ev]
+    if not h:
+        out("info", "  %-16s 缺" % ev)
+        continue
+    cmd = str(h.get("command", ""))
+    flags = []
+    if ev == "SessionEnd":
+        flags.append("sync" if not h.get("async") else "async ← 应为同步")
+    else:
+        flags.append("async" if h.get("async") else "sync ← 应为 async")
+    m = matcher_of.get(ev, "")
+    if m:
+        flags.append("matcher=%s" % m)
+    out("info", "  %-16s %s" % (ev, " ".join(flags)))
+
+# -- 漂移检查 -------------------------------------------------------------
+notify_m = matcher_of.get("Notification", "")
+if found["Notification"]:
+    if NEED_MATCHER not in notify_m:
+        out("warn", "Notification 的 matcher 少了 idle_prompt —— 会漏「回合结束后 60 秒没打字」的提醒")
+if found["PreToolUse"] and matcher_of.get("PreToolUse"):
+    out("warn", "PreToolUse 不该有 matcher（%s）—— 普通工具调用会被挡在外面，plan 批准后不亮 ▶"
+        % matcher_of["PreToolUse"])
+if found["SessionEnd"] and found["SessionEnd"].get("async"):
+    out("bad", "SessionEnd 是 async —— Claude Code 退出会带走子进程，清不掉会留一盏灭不掉的 ▶")
+
+cmds = sorted({str(h.get("command", "")) for h in found.values() if h})
+for c in cmds:
+    if c != want_cmd:
+        out("warn", "命令指向 %s" % c)
+        out("info", "  当前仓库是 %s —— 改了这边不会生效，跑 install-hooks 让它指回来" % want_cmd)
+    if not os.access(c, os.X_OK):
+        out("bad", "命令不可执行：%s（chmod +x 或重装）" % c)
+PY
+    )
+    # python 只吐协议行（ok/warn/bad/info），颜色与计数留在 shell 这一侧 ——
+    # _warn/_bad 的自增语义不能漏。
+    #
+    # ⚠️ 必须用「重定向读临时文件」而不是 `printf | while`：管道右侧在子 shell 里，
+    # 那两个计数器改了也不会传回父 shell，doctor 的退出码就永远是对的（假绿）。
+    _dg_tmp="${TMPDIR:-/tmp}/tmux-whistle-doctor-$$"
+    printf '%s\n' "$_dg_out" > "$_dg_tmp"
+    while IFS= read -r _dg_line; do
+      [ -n "$_dg_line" ] || continue
+      _dg_kind=${_dg_line%%:*}
+      _dg_text=${_dg_line#*:}
+      case "$_dg_kind" in
+      ok) _ok_line "$_dg_text" ;;
+      warn) _warn_line "$_dg_text" ;;
+      bad) _bad_line "$_dg_text" ;;
+      *) printf '%s\n' "$_dg_text" ;;
+      esac
+    done < "$_dg_tmp"
+    command rm -f "$_dg_tmp"
   fi
 
   printf '\n失效的旧绑定\n'

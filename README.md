@@ -74,6 +74,21 @@ cd tmux-whistle
 3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块（改前备份原文件）
 4. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`（改前备份，只管理带 `tmux-whistle` marker 的条目）
 
+装完随时可以核对订阅内容 —— `tmux-whistle doctor` 会**逐事件**列出 Claude Code 装了哪些：
+
+```
+Claude Code hooks
+  ✓ ~/.claude/settings.json：8/8 个事件已订阅
+  Stop             async
+  Notification     async matcher=permission_prompt|...|idle_prompt
+  SessionEnd       sync
+```
+
+它同时会点出四类「不报错但行为不对」的漂移：命令路径指向别的 checkout（改了这边不生效）、
+`Notification` 的 matcher 少了 `idle_prompt`（漏「回合结束 60 秒没打字」的提醒）、
+`PreToolUse` 被加了 matcher（普通工具调用被挡住）、`SessionEnd` 被改成 async
+（退出时清不掉，留一盏灭不掉的 `▶`）。
+
 常用参数：
 
 ```sh
