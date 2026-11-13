@@ -197,16 +197,21 @@ whistle_finish() {
   if whistle_is_activity "$_ff_wrote" && whistle_is_notified "$_ff_eff"; then
     # 活动通道的写入遇上了未读通知：不重新扇出那条旧通知
     _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
-    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane"
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
+    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
+      "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
     return 0
   fi
 
   if whistle_is_notified "$_ff_eff"; then
     _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_msg 2> /dev/null) || _ff_msg=''
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_body 2> /dev/null) || _ff_body=''
   else
     _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
   fi
-  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane"
+  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
+    "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
 }
 
 # cmd_set <状态> [选项...] [消息...]

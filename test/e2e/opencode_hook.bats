@@ -172,6 +172,49 @@ notice() {
   [ "$(activity)" = "running" ]
 }
 
+@test "oc-e2e: 子 session 的 done 不覆盖主 session 的通知文案" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"session.execution.succeeded","sessionID":"s1","message":"主线完成"}' | feed
+  [ "$(notice)" = "done" ]
+  [ "$(wt show -pqv -t "$TMUX_PANE" @whistle_notice_msg)" = "主线完成" ]
+
+  # 多 session 时子 agent 收尾很常见：它绝不能把主线的 done 改写成自己的文案
+  echo '{"event":"session.execution.succeeded","sessionID":"s2","child":"1","message":"子任务完成"}' | feed
+  [ "$(notice)" = "done" ]
+  [ "$(wt show -pqv -t "$TMUX_PANE" @whistle_notice_msg)" = "主线完成" ]
+}
+
+@test "oc-e2e: 子 session 的 done 不覆盖等待中的权限请求" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"permission.asked","sessionID":"s1","message":"要授权"}' | feed
+  [ "$(notice)" = "wait" ]
+
+  echo '{"event":"session.execution.succeeded","sessionID":"s2","child":"1","message":""}' | feed
+  [ "$(notice)" = "wait" ]
+  [ "$(wt show -pqv -t "$TMUX_PANE" @whistle_notice_msg)" = "要授权" ]
+}
+
+@test "oc-e2e: 子 session 在空档时补一条固定文案（空标题也不留空消息）" {
+  echo '{"event":"session.execution.succeeded","sessionID":"s2","child":"1","message":""}' | feed
+  [ "$(notice)" = "done" ]
+  [ "$(wt show -pqv -t "$TMUX_PANE" @whistle_notice_msg)" = "子 agent 完成" ]
+}
+
+@test "oc-e2e: 子 session 有后台在飞时既不写通知、也不写活动态" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"session.execution.interrupted","sessionID":"s1","reason":"user"}' | feed
+  [ "$(activity)" = "idle" ]
+
+  echo '{"event":"session.shell.started","sessionID":"s1","shellID":"sh1","shellStatus":"running"}' | feed
+  echo '{"event":"session.execution.succeeded","sessionID":"s2","child":"1","message":""}' | feed
+
+  # 旧实现会在这个分支里替子 session 写一次 --activity running，
+  # 把主 agent 真正的 idle 改成假 ▶。
+  [ "$(activity)" = "idle" ]
+  [ -z "$(notice)" ]
+  [ -z "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" ]
+}
+
 # -- 收尾 ------------------------------------------------------------------
 
 @test "oc-e2e: --tui-exit 写 gone（不是清空）" {

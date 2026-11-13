@@ -75,6 +75,9 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - 后台 shell 用**在飞 id 集合**（`@whistle_oc_shell`）而非计数器；集合非空时不写 `done`。
 - **订阅要逐条 `try/catch` + `data.listen` 兜底。** 一条 `data.on()` 抛异常会断掉整个循环，后面全收不到；而探针在循环之前，`doctor` 照样报绿。
 - **`tabs.list()` 别假设是字符串数组。** `new Set(list)` 遇上 `{sessionID}` 对象会让 `has()` 永远为假 → 所有事件被静默过滤。支持两种形状，取不到 id 时 **fail-open**。
+- **通知文案必须兜底**：多 session / 多 TUI 时 `session.get()` 可能取不到标题，空 msg 会让徽章只剩图标、桌面通知只剩状态标签。按 `title → slug → "OpenCode"` 回落。
+- **子 session 的 `done` 不覆盖主 session**：只在通知通道为空且没有后台在飞时补一条固定文案，且绝不替子 session 写活动通道。
+- 桌面通知的 group **每条唯一**（`@whistle_os_group` 记最近一条）。固定 group 下「先删旧再加新」与已读 `-remove` 会撞出空横幅。
 - 排查顺序看三段证据：`tui-probe`（加载了没）→ `subs=N`（订阅几条）→ `js-trace`（事件到没到、为什么丢）。`doctor` 已展示 `subs`，`subs=0` 会报红。
 
 ## 性能：写入热路径

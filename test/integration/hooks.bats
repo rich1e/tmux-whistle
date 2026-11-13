@@ -133,6 +133,27 @@ win_of() {
 
 # -- 已读清除的实际行为 -----------------------------------------------------
 
+@test "公共撤回: 已发送过的通知按记录的 group 撤回，而不是基础 id" {
+  wt set -g @whistle_os on
+  local p w group
+  p=$(wt display -p -t w1 '#{pane_id}')
+  w=$(win_of w1)
+  whistle_state_set "done" '做完了' "$p" > /dev/null
+  whistle_recompute_window "$w"
+
+  whistle_deliver "$w" "done" '做完了' "$p"
+  group=$(wt show -pqv -t "$p" @whistle_os_group)
+  [ -n "$group" ]
+  [ "$group" != "tmux-whistle:$WHISTLE_TMUX_SOCKET:$p" ]
+
+  : > "$WHISTLE_TEST_TN_LOG"
+  run "$WHISTLE_CLI" --read-window "$w"
+
+  assert_eq "$status" 0
+  assert_eq "$(wt_tn_removed_groups)" "$group"
+  [ -z "$(wt show -pqv -t "$p" @whistle_os_group)" ]
+}
+
 @test "已读：切进窗口后该窗口的待处理状态被清除" {
   wt new-window -d -n w2
   local p w1

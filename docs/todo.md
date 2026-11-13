@@ -22,6 +22,7 @@
 
 ## 已修复
 
+- [x] **TODO-32** 多 session 下桌面通知变空白（空 msg / 同 group 替换竞态 / 子 session 串台 / body 从不进通知）
 - [x] **TODO-31** 测试播种与菜单标签的低效：`seed_pending_windows` 用 N 次 `"$CLI" done`（26 项 37 秒），`--menu-args` 每项两次 subshell 取颜色/图标（41 项 2.8 秒）—— 前者改成一次 tmux 链写 + 一次 list-windows 取映射（37s → 4.45s，8.3x），后者加菜单调色板一次取齐（`cli.bats` 317s → 183s，−42%）
 - [x] **TODO-30** 单次状态写入固定 80 次 tmux fork（读配置占 58 次），把测试套件拖到十几分钟 —— 压到 25 次，CPU 1.7x / wall 2.2x。**注意不是 O(窗口数)**，是每次写入的固定成本；详见 `CLAUDE.md`「状态写入的成本」
 - [x] **TODO-29** 换终端后点击桌面通知跳回旧终端（tmux server 环境是启动快照）
@@ -1594,3 +1595,50 @@ bundle id」「client 的 termtype 首词映射到已知终端 bundle id」；
 **验收**（2026-11-10，Ghostty 1.4.0）：点击新发出的通知已聚焦 Ghostty；此前已送达的
 旧通知仍指向 iTerm2 —— 符合预期，`-activate` 在发送那一刻就写死了，只能等新通知或
 `terminal-notifier -remove ALL`。
+
+---
+
+## TODO-32 · 多 session 下桌面通知变空白 / 文案串台
+
+✅ 已修复（2026-11-13）
+
+**现象**：OpenCode 一轮跑完后，macOS 横幅里没有任何文字（只剩一个空的玻璃壳）；
+状态栏徽章那一格也只剩图标。开多个 OpenCode session（两个 `opencode` 窗口 +
+TUI 内多个 tab）时最容易复现。
+
+**证据链**（2026-11-13 18:12）：`session.execution.succeeded` 在 `%8` 到达 →
+`--notice done "问候" --body "问候"` → `@whistle_notice_msg=问候` →
+`whistle_os_notify` 的 `-title/-subtitle/-message` 都非空。按同样参数单独发一次，
+`terminal-notifier -list ALL` 三列齐全、横幅也有字。所以不是「没传文本」。
+
+**原因**：四条独立缺陷叠在一起。
+
+1. `tui.js` 只在 `session.get(id)?.title` 存在时才发 `message`。多 session / 多 TUI
+   时取不到标题（别的 TUI 的 session、尚未加载、`tabs.list()` fail-open 收到的事件）
+   → `--notice done ''` → msg 空。徽章只剩图标、通知正文只剩状态标签。
+2. 子 session 的 `done` 与主 session 共用 pane 上唯一的通知槽：子 agent 收尾会改写
+   主线的 `done` / `wait` 文案；更糟的是 `notice:done-guarded` 分支里在有后台在飞时
+   会写一次 `--activity running`，**绕过了「子 session 不碰活动通道」的过滤**。
+3. 桌面通知的 group 是固定 `socket + pane`。`terminal-notifier` 对同 group 的语义是
+   「先删旧再加新」，而已读路径也会对同 group 发 `-remove` —— 多 session / 多 tab
+   同时收尾、或刚跑完就切窗口时两者撞在一起，macOS 26 会留下一个内容已被拆掉的空横幅。
+4. `@whistle_notice_body` 从来没进过桌面通知：`whistle_deliver` 只传 msg，
+   正文等于白存。
+
+**修法**：
+
+1. `tui.js`：标题按 `title → slug → "OpenCode"` 回落，并在 `handle()` 末尾统一兜底。
+2. `whistle_deliver` 增加第五个参数（正文），`whistle_os_notify` 用
+   `whistle_os_extra` 取「正文里多出来的第一个非空行」补成通知第二行；
+   单行长文与短消息本是同一句的截断，不硬接。
+3. `whistle_os_group_next` 给每条通知追加 pane 内序号，并记进 `@whistle_os_group`；
+   发送前用上一条的 group 精确 `-remove`，已读时用记录的 group 撤回
+   （没有记录时回落基础 id，兼容升级前的旧通知）。
+4. `hooks/opencode.sh`：子 session 的 done 只在「通知通道为空**且**没有后台在飞」时
+   补一条「子 agent 完成」，且不再写活动通道。
+
+**回归用例**：`test/unit/opencode.bats`（done 类判定、子 session 文案兜底）、
+`test/e2e/opencode_hook.bats`（子 session 不覆盖 done/wait、空档补文案、后台在飞时
+不写活动态）、`test/integration/deliver.bats`（唯一 group、撤回记录、正文第二行、
+单行长文不硬接）、`test/integration/cli.bats`（`--body` 作为第五参下传）、
+`test/integration/hooks.bats`（已读撤记录下来的 group）。

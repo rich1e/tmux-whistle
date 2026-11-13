@@ -55,6 +55,15 @@ fake_os_calls() {
   awk '/^CALL / { print }' "$FAKE_OS_LOG"
 }
 
+# 取某个选项的完整参数（可能带换行）；遇到下一个选项行即停。
+fake_os_arg_all() {
+  awk -v option="$1" '
+    $0 == option { capture = 1; next }
+    capture && ($0 ~ /^-/ || $0 == "END") { exit }
+    capture { print }
+  ' "$FAKE_OS_LOG"
+}
+
 # -- 编排 ------------------------------------------------------------------
 
 @test "deliver: @whistle_enabled off 时什么都不做" {
@@ -393,6 +402,29 @@ stub_display_targets() {
   [ "$(whistle_os_group '%13')" != "$first" ]
 }
 
+@test "os: 每条通知用唯一 group，撤回不会拆掉正在显示的那条" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+  local p w first second
+  p=$(pane_of)
+  w=$(win_of)
+
+  whistle_os_notify "$w" "done" '第一条' "$p"
+  first=$(fake_os_arg -group)
+  assert_contains "$first" "$(whistle_os_group "$p"):"
+
+  : > "$FAKE_OS_LOG"
+  whistle_os_notify "$w" "done" '第二条' "$p"
+  second=$(fake_os_arg -group)
+
+  # 新 group 与旧 group 必须不同 —— 同 group 的“先删后加”正是空横幅的来源。
+  [ "$second" != "$first" ]
+  # 发送前撤掉的是上一条，不是自己。
+  assert_eq "$(fake_os_arg -remove)" "$first"
+  # 记录下来的永远是最新那条，已读时据此精确撤回。
+  assert_eq "$(optp @whistle_os_group "$p")" "$second"
+}
+
 @test "os: terminal-notifier 收到 subtitle、逐 pane group 与原消息" {
   fake_os_backend terminal-notifier
   wt set -g @whistle_os on
@@ -405,7 +437,8 @@ stub_display_targets() {
   assert_eq "$(fake_os_arg -title)" 'tmux · main'
   assert_eq "$(fake_os_arg -subtitle)" 'w1'
   assert_eq "$(fake_os_arg -message)" '完成: 重构完成'
-  assert_eq "$(fake_os_arg -group)" "$(whistle_os_group "$p")"
+  assert_eq "$(fake_os_arg -group)" "$(optp @whistle_os_group "$p")"
+  assert_contains "$(fake_os_arg -group)" "$(whistle_os_group "$p"):"
   assert_eq "$(fake_os_calls)" 'CALL terminal-notifier'
 }
 
@@ -563,6 +596,46 @@ CALL notify-send'
 CALL osascript'
 }
 
+@test "os: 正文补在通知第二行，与短消息重复的前缀被剪掉" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+
+  whistle_os_notify "$(win_of)" "done" '重构完成' "$(pane_of)" '重构完成
+第二行才是完整正文'
+
+  assert_eq "$(fake_os_arg_all -message)" '完成: 重构完成
+第二行才是完整正文'
+}
+
+@test "os: 正文与短消息完全相同时不重复第二行" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+
+  whistle_os_notify "$(win_of)" "done" '问候' "$(pane_of)" '问候'
+
+  assert_eq "$(fake_os_arg_all -message)" '完成: 问候'
+}
+
+@test "os: 单行长正文不硬接第二行（避免在半句话处断开）" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+
+  whistle_os_notify "$(win_of)" "done" '短消息' "$(pane_of)" '短消息后面还有很长很长的一段正文'
+
+  assert_eq "$(fake_os_arg_all -message)" '完成: 短消息'
+}
+
+@test "os: whistle_deliver 把正文作为第五参透传给桌面通知" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+
+  whistle_deliver "$(win_of)" "done" '短消息' "$(pane_of)" '短消息
+完整正文'
+
+  assert_eq "$(fake_os_arg_all -message)" '完成: 短消息
+完整正文'
+}
+
 @test "os: running 与 idle 即使打开桌面开关也不发送" {
   fake_os_backend terminal-notifier
   wt set -g @whistle_os on
@@ -576,6 +649,23 @@ CALL osascript'
   [ ! -e "$FAKE_OS_LOG" ]
 }
 
+@test "os: forget 撤掉记录下来的那条，并清掉记录" {
+  fake_os_backend terminal-notifier
+  wt set -g @whistle_os on
+  local p group
+  p=$(pane_of)
+
+  whistle_os_notify "$(win_of)" "done" '做完' "$p"
+  group=$(optp @whistle_os_group "$p")
+  [ -n "$group" ]
+
+  : > "$FAKE_OS_LOG"
+  whistle_os_forget "$p"
+  assert_eq "$?" 0
+  assert_eq "$(fake_os_arg -remove)" "$group"
+  [ -z "$(optp @whistle_os_group "$p")" ]
+}
+
 @test "os: forget 在开关 off 时仍精确撤回，且不改活动通道" {
   fake_os_backend terminal-notifier
   wt set -g @whistle_os off
@@ -585,6 +675,7 @@ CALL osascript'
 
   whistle_os_forget "$p"
   assert_eq "$?" 0
+  # 没有记录时回落到基础 id —— 兼容升级前已经发出去的那条。
   assert_eq "$(fake_os_arg -remove)" "$(whistle_os_group "$p")"
   run awk '$0 == "ALL"' "$FAKE_OS_LOG"
   assert_eq "$output" ''

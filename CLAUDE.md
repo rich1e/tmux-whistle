@@ -88,6 +88,7 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
 | pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
 | pane | `@whistle_sub` | 子 agent 标记，存的是**过期时间戳**（epoch 秒），空 = 无 |
+| pane | `@whistle_os_seq` `@whistle_os_group` | 桌面通知的序号与最近一条 group，供已读精确撤回 |
 | pane | `@whistle_eff` | 派生：该 pane 的有效态（供 pane 徽章 format 读） |
 | window | `@whistle_win` `@whistle_win_msg` `@whistle_win_count` `@whistle_win_pane` | 派生，由 `whistle_recompute_window` 重算 |
 | window | `@whistle_win_notice` `@whistle_win_notice_msg` | 派生：窗口通知态与消息 |
@@ -105,6 +106,15 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 `@whistle_body` / `@whistle_notice_body` 是「完整正文」（上限 400），
 `@whistle_msg` / `@whistle_notice_msg` 是「徽章上显示的短标题」（上限 80）。
 后者被截断就永久丢失，所以前者单独存一份。
+
+**桌面通知的 group 必须每条唯一。** `whistle_os_group` 只给「socket + pane」的基础 id；
+真正发送时用 `whistle_os_group_next` 追加 pane 内序号，并把这个 id 记进
+`@whistle_os_group` 供已读撤回。原因：terminal-notifier 对同 group 的语义是
+「先删旧再加新」，而已读路径（`whistle_os_forget`）也会对同一个 group 发 `-remove` ——
+多 session / 同 pane 多 tab 时两者撞在一起，macOS 26 会留下一个内容已被拆掉、
+只剩玻璃壳的空横幅（2026-11-13 现场）。发送前用**上一条的** group 做 `-remove`，
+所以一个 pane 仍然只保留一条。桌面通知的正文是「短消息 + 正文里多出来的第一行」
+（`whistle_os_extra`）；单行长文与短消息本是同一句的截断，不硬接。
 
 **徽章必须是纯 tmux format，一个进程都不 fork。** 状态栏每 `status-interval` 重算一次，
 写成 gpakosz 那种 shell function 就会每次刷新都 fork 一个 `sh -c`。整段徽章串存进 global
@@ -230,6 +240,15 @@ matcher 组；Codex 的信任状态按 `event/index` 记录，前插会让别人
   **所有事件被身份过滤丢掉**，不报错、不留痕。要同时支持字符串与对象
   （取 `sessionID` / `id` / `session.id`），且**拿不到 id 时 fail-open**，
   绝不把「取不到」当成「一条都不属于我」。
+- **消息必须有兜底文案，不能依赖会话标题。** `tui.js` 从 `session.get()` 取标题，
+  多 session / 多 TUI 时可能取不到（别的 TUI 的 session、尚未加载、tabs 过滤
+  fail-open 时收到的事件）。空 message 会让徽章只剩一个图标、桌面通知只剩状态标签。
+  标题按 `title → slug → "OpenCode"` 回落，`handle()` 末尾再兜一次。
+- **子 session 的 `done` 不覆盖主 session 的通知。** 子 session 通常没有标题，
+  而主 agent 往往还在跑：`hooks/opencode.sh` 只在「通知通道为空**且**没有后台在飞」
+  时才补一条固定文案（「子 agent 完成」），并且**绝不**替子 session 写活动通道 ——
+  旧实现在 `notice:done-guarded` 分支里会写一次 `--activity running`，把主 agent
+  真正的 `idle` 改成假 `▶`。
 - **诊断要能回答「订阅建立了几条」，而不只是「加载了没」。** 订阅结果带进
   `--probe`（`subs=N failed=...`），`doctor` 直接展示并在 `subs=0` 时报红；
   `--trace`（debug 开时才写）记录每个原始事件与丢弃原因

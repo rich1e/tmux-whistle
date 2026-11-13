@@ -21,6 +21,10 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// 通知/徽章文案的兜底。空 msg 会让徽章只剩一个图标、桌面通知只剩状态标签
+// （多 session 时真实发生过：session.get() 取不到标题就干脆不带 message）。
+const FALLBACK_MESSAGE = "OpenCode";
+
 // 订阅哪些事件。与 lib/opencode.sh 的 whistle_oc_actions 一一对应；
 // 这里多订 session.retry.scheduled 与 session.idle 是**故意的**：
 // 映射层不处理它们，但 debug 日志要留痕（否则「收到了但没处理」查不到）。
@@ -214,22 +218,28 @@ export default {
         payload.reply = String(data.reply ?? "");
       }
       if (type === "permission.asked") {
-        // 权限请求的文案：优先 message，回落成「动作 + 资源」。
+        // 权限请求的文案：优先 message，回落成「动作 + 资源」，最后兜底。
         const action = String(data.action ?? "");
         const res = Array.isArray(data.resources) ? data.resources.join(", ") : "";
-        payload.message = data.message || `${action}${res ? ": " + res : ""}`;
+        const fallback = `${action}${res ? ": " + res : ""}`;
+        payload.message = data.message || fallback || FALLBACK_MESSAGE;
       }
       if (type === "session.execution.failed") {
-        payload.message = String(data.error?.message ?? data.error?.type ?? "");
+        payload.message =
+          String(data.error?.message ?? data.error?.type ?? "") || FALLBACK_MESSAGE;
       }
       if (type === "session.execution.succeeded" || type === "session.execution.started") {
         // 标题：OpenCode 的 session 标题（本地缓存，不发请求）。
+        // ⚠️ 多 session / 多 TUI 时 get() 可能取不到（别的 TUI 的 session、
+        // 尚未加载完、或 tabs 过滤 fail-open 时收到的事件）。这时必须兜底，
+        // 绝不能因为标题为空就发一条只有状态标签的通知。
+        let info;
         try {
-          const title = context.data?.session?.get?.(sessionID)?.title;
-          if (title) payload.message = String(title);
+          info = context.data?.session?.get?.(sessionID);
         } catch {
           // 取不到标题不影响状态。
         }
+        payload.message = String(info?.title || info?.slug || FALLBACK_MESSAGE);
       }
       if (type === "session.shell.started" || type === "session.shell.ended") {
         const shell = data.shell ?? {};
@@ -242,6 +252,9 @@ export default {
 
       const child = isChild(sessionID);
       if (child) payload.child = child;
+
+      // 兜底：任何事件都不许带着空 message 出门。
+      if (!payload.message) payload.message = FALLBACK_MESSAGE;
 
       send(payload);
     };

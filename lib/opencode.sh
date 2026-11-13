@@ -256,3 +256,26 @@ whistle_oc_action_is_notice() {
   *) return 1 ;;
   esac
 }
+
+# whistle_oc_action_is_done <动作名>
+#
+# 只把 done 类动作挑出来 —— 子 session 的 done 必须走"先看 pane 上有没有
+# 未读通知"的守卫，不能像普通通知那样无条件覆盖。见 hooks/opencode.sh。
+whistle_oc_action_is_done() {
+  case "${1:-}" in
+  notice:done | notice:done-guarded) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+# whistle_oc_child_done_msg <子 session 标题>
+#
+# 子 session 通常没有 title：拿不到标题时给一句固定文案，
+# 否则落库的 msg 是空串 —— 徽章只剩一个图标、通知只剩状态标签。
+whistle_oc_child_done_msg() {
+  if [ -n "${1:-}" ]; then
+    printf '%s' "$1"
+  else
+    printf '子 agent 完成'
+  fi
+}

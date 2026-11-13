@@ -235,6 +235,69 @@ whistle_os_group() {
   printf 'tmux-whistle:%s:%s' "$_og_socket" "$_og_pane"
 }
 
+# 通知正文里，主消息之外最多再带多少字符
+WHISTLE_OS_BODY_MAX=160
+
+# 每条通知一个唯一 group：<基础 id>:<序号>。
+#
+# 为什么不能继续用固定 group：terminal-notifier 对同 group 的语义是
+# "先删旧再加新"，而已读路径（whistle_os_forget）也会对同一个 group 发
+# -remove。多 session / 同 pane 多 tab 时，post 与 remove 会撞在一起 ——
+# 2026-11-13 的现场就是屏幕上留下一个内容已被拆掉、只剩玻璃壳的空横幅。
+# 换成"每条一个 id"之后，remove 永远指向旧的那条，不会拆掉正在显示的这条。
+#
+# 序号按 pane 存在 @whistle_os_seq 里，撤回时靠 @whistle_os_group 找回
+# "刚发出去的那条"。
+whistle_os_group_next() {
+  _ogn_pane="${1:-}"
+  _ogn_base=$(whistle_os_group "$_ogn_pane")
+  _ogn_seq=$(whistle_tmux show -pqv -t "$_ogn_pane" @whistle_os_seq 2> /dev/null) || _ogn_seq=''
+  case "$_ogn_seq" in
+  '' | *[!0-9]*) _ogn_seq=0 ;;
+  esac
+  _ogn_seq=$((_ogn_seq + 1))
+  whistle_tmux set -p -t "$_ogn_pane" @whistle_os_seq "$_ogn_seq" > /dev/null 2>&1 || true
+  printf '%s:%s' "$_ogn_base" "$_ogn_seq"
+}
+
+# 上一条发出去的 group（没有就返回空）
+whistle_os_group_last() {
+  whistle_tmux show -pqv -t "${1:-}" @whistle_os_group 2> /dev/null || true
+}
+
+# 记下这条 group，供已读时精确撤回
+whistle_os_group_record() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  whistle_tmux set -p -t "$1" @whistle_os_group "$2" > /dev/null 2>&1 || true
+}
+
+# 正文里"短消息已经说过"之外的部分，作为通知的第二行。
+#
+# Claude Code 的 body 是完整回复、msg 是它的首行 —— 直接追加会重复；
+# 先剪掉开头的 msg，再只取剩下部分的首行，正好补上后面那句。
+# 正文与 msg 完全相同时（OpenCode 的 title 兜底）返回空，通知只显示一行。
+whistle_os_extra() {
+  _oe_msg="${1:-}"
+  _oe_body="${2:-}"
+  [ -n "$_oe_body" ] || return 0
+
+  # 只有**多行**正文才可能补出“第二行”。单行长文与 msg 本是同一句的截断，
+  # 硬接下去只会在半句话处断开，不如不补。
+  _oe_lines=$(printf '%s' "$_oe_body" | wc -l)
+  [ "${_oe_lines:-0}" -gt 0 ] || return 0
+
+  if [ -n "$_oe_msg" ]; then
+    case "$_oe_body" in
+    "$_oe_msg"*) _oe_body=${_oe_body#"$_oe_msg"} ;;
+    esac
+  fi
+
+  # 剪掉前缀后往往以换行开头，所以取“第一个非空行”，不是 head -n 1。
+  _oe_body=$(printf '%s' "$_oe_body" | awk 'NF { print; exit }' \
+    | cut -c "1-${WHISTLE_OS_BODY_MAX}")
+  printf '%s' "$_oe_body"
+}
+
 # NSUserDefaults 会把这些首字符当成 property list 语法；上游约定加前导反斜杠。
 whistle_tn_value() {
   case "${1:-}" in
@@ -282,6 +345,7 @@ whistle_os_notify() {
   _on_state="$2"
   _on_msg="$3"
   _on_pane="${4:-}"
+  _on_detail="${5:-}"
 
   [ "$(whistle_conf '@whistle_os')" = on ] || return 0
   case "$_on_state" in
@@ -293,6 +357,9 @@ whistle_os_notify() {
   _on_title="tmux · $_on_sess"
   _on_body="$(whistle_state_label "$_on_state")"
   [ -n "$_on_msg" ] && _on_body="$_on_body: $_on_msg"
+  # 正文补第二行；与短消息重复的部分已经由 whistle_os_extra 剪掉。
+  _on_extra=$(whistle_os_extra "$_on_msg" "$_on_detail")
+  [ -n "$_on_extra" ] && _on_body=$(printf '%s\n%s' "$_on_body" "$_on_extra")
   _on_found=0
 
   if command -v terminal-notifier > /dev/null 2>&1; then
@@ -303,9 +370,15 @@ whistle_os_notify() {
       -subtitle "$(whistle_tn_value "$_on_wname")" \
       -message "$(whistle_tn_value "$_on_body")"
 
+    _on_group=''
     if [ -n "$_on_pane" ]; then
       _on_socket=$(whistle_tmux display-message -p -t "$_on_pane" '#{socket_path}' 2> /dev/null)
-      _on_group=$(whistle_os_group "$_on_pane")
+      # 新 group 与旧 group 一定不同：先用旧 group 撤上一条，再用新 group 发。
+      _on_group=$(whistle_os_group_next "$_on_pane")
+      _on_prev=$(whistle_os_group_last "$_on_pane")
+      if [ -n "$_on_prev" ]; then
+        terminal-notifier -remove "$(whistle_tn_value "$_on_prev")" > /dev/null 2>&1 || true
+      fi
       set -- "$@" -group "$(whistle_tn_value "$_on_group")"
 
       # 老调用方可省略 pane；生产路径必须同时有绝对 CLI 与 socket 才生成点击回调。
@@ -328,6 +401,7 @@ whistle_os_notify() {
     fi
 
     if terminal-notifier "$@" > /dev/null 2>&1; then
+      whistle_os_group_record "$_on_pane" "$_on_group"
       return 0
     fi
     whistle_log "terminal-notifier 失败，尝试降级"
@@ -363,21 +437,29 @@ whistle_os_forget() {
   [ -n "$_of_pane" ] || return 0
   command -v terminal-notifier > /dev/null 2>&1 || return 0
 
-  _of_group=$(whistle_os_group "$_of_pane")
+  # 优先撤掉记录下来的那条（带序号）。没有记录时回落到基础 id ——
+  # 兼容升级前已经发出去、记录不存在的旧通知。
+  _of_group=$(whistle_os_group_last "$_of_pane")
+  [ -n "$_of_group" ] || _of_group=$(whistle_os_group "$_of_pane")
   if ! terminal-notifier -remove "$(whistle_tn_value "$_of_group")" > /dev/null 2>&1; then
     whistle_log "terminal-notifier 撤回失败: $_of_group"
   fi
+  whistle_tmux set -p -t "$_of_pane" -u @whistle_os_group > /dev/null 2>&1 || true
   return 0
 }
 
 # -- 编排 ------------------------------------------------------------------
 
-# whistle_deliver <window> <有效态> <消息> <pane>
+# whistle_deliver <window> <有效态> <消息> <pane> [正文]
 #
 # 第二个参数是**有效态**（pane 的 @whistle_eff）—— 活动通道 @whistle 与
 # 通知通道 @whistle_notice 按 rank 合成后的那一个值，由调用方（CLI）在写完状态
 # 并重算之后读出来传入。第三个参数是**与它对应的消息**：有效态是通知态时是
 # 通知消息，否则是活动消息。
+#
+# 第五个参数是完整正文（@whistle_notice_body / @whistle_body）。
+# 只有桌面通知用它：短消息受徽章宽度限制只取首行，正文能补上后面那句。
+# 省略时行为与改动前一致。
 #
 # 第四个参数是触发本条通知的精确 pane，桌面 group 与点击跳转都直接使用它；
 # 不能从 @whistle_win_pane 反推，那是窗口聚合赢家，不一定是本次来源。
@@ -405,6 +487,6 @@ whistle_deliver() {
   # 多读一次反而会把「同一条通知」判成两种口径。
   if whistle_is_notified "$2"; then
     whistle_display_fanout "$1" "$2" "$3"
-    whistle_os_notify "$1" "$2" "$3" "${4:-}"
+    whistle_os_notify "$1" "$2" "$3" "${4:-}" "${5:-}"
   fi
 }

@@ -34,7 +34,7 @@ make_deliver_spy_cli() {
   ln -s "$WHISTLE_ROOT/lib/menu.sh" "$root/lib/menu.sh"
   cat > "$root/lib/deliver.sh" <<'EOF'
 whistle_deliver() {
-  printf '%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "${4:-}" >> "$DELIVER_LOG"
+  printf '%s|%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "${4:-}" "${5:-}" >> "$DELIVER_LOG"
 }
 EOF
   SPY_CLI="$root/bin/tmux-whistle"
@@ -809,7 +809,19 @@ seed_running_windows() {
   run env DELIVER_LOG="$BATS_TEST_TMPDIR/deliver.log" \
     "$SPY_CLI" "done" '完成' -t "$p"
   assert_eq "$status" 0
-  assert_eq "$(cat "$BATS_TEST_TMPDIR/deliver.log")" "4|$w|done|完成|$p"
+  assert_eq "$(cat "$BATS_TEST_TMPDIR/deliver.log")" "5|$w|done|完成|$p|"
+}
+
+@test "deliver-pane: --body 作为第五参下传，且与消息分开" {
+  make_deliver_spy_cli
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+
+  run env DELIVER_LOG="$BATS_TEST_TMPDIR/deliver.log" \
+    "$SPY_CLI" "done" --title '标题' --body '完整正文' -t "$p"
+  assert_eq "$status" 0
+  assert_eq "$(cat "$BATS_TEST_TMPDIR/deliver.log")" "5|$w|done|标题|$p|完整正文"
 }
 
 @test "deliver-pane: 有旧通知时的活动写入也把来源 pane 作为第四参下传" {
@@ -824,7 +836,7 @@ seed_running_windows() {
   run "$SPY_CLI" running '继续干活' -t "$p"
 
   assert_eq "$status" 0
-  assert_eq "$(cat "$DELIVER_LOG")" "4|$w|running|继续干活|$p"
+  assert_eq "$(cat "$DELIVER_LOG")" "5|$w|running|继续干活|$p|"
 }
 
 @test "desktop-jump: 选择最近活动的 client，严格依次切换后才清通知" {

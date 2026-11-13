@@ -252,6 +252,17 @@ for _oc_act in $_oc_actions; do
     continue
   fi
 
+  # 子 session 的 done 单独走一条路：主 session 的 done / wait / error
+  # 绝不能被刚结束的子 agent 改写（多 session 时这是最常见的串台）。
+  # 这个 pane 完全没有未读通知、也没有后台在飞时，才补一条 —— 子 session
+  # 通常没有 title，用固定文案兜底，保证徽章与通知里始终有字。
+  if [ "$_oc_child" = 1 ] && whistle_oc_action_is_done "$_oc_act"; then
+    [ -n "$(_oc_opt '@whistle_notice')" ] && continue
+    whistle_oc_set_has "$_oc_set" && continue
+    _oc_cli --notice 'done' "$(whistle_oc_child_done_msg "$_oc_msg")" --body "$_oc_body" "$TMUX_PANE"
+    continue
+  fi
+
   case "$_oc_act" in
   activity:running) _oc_cli --activity running --title "$_oc_msg" --body "$_oc_body" "$TMUX_PANE" ;;
   activity:idle) _oc_cli --activity idle --title "$_oc_msg" --body "$_oc_body" "$TMUX_PANE" ;;

@@ -219,6 +219,24 @@ setup() {
   [ "$status" -ne 0 ]
 }
 
+@test "oc: done 类动作可被识别（子 session 据此单独走守卫）" {
+  run whistle_oc_action_is_done notice:done
+  [ "$status" -eq 0 ]
+  run whistle_oc_action_is_done notice:done-guarded
+  [ "$status" -eq 0 ]
+  run whistle_oc_action_is_done notice:wait
+  [ "$status" -ne 0 ]
+  run whistle_oc_action_is_done activity:idle
+  [ "$status" -ne 0 ]
+}
+
+@test "oc: 子 session 的 done 文案有兜底（空标题也不能是空串）" {
+  run whistle_oc_child_done_msg ''
+  assert_eq "$output" '子 agent 完成'
+  run whistle_oc_child_done_msg '子任务标题'
+  assert_eq "$output" '子任务标题'
+}
+
 # -- 消息截断 ---------------------------------------------------------------
 
 @test "oc: first_line 只取首行（徽章只有一行宽度）" {
