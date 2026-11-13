@@ -108,7 +108,7 @@ Claude Code 集成：
                                      / lines_3 / squares_9 / togglers_4；写错回落到 claude
   @whistle_spin_interval 0.5         每帧间隔（秒）
   @whistle_sub_ttl 1800              子 agent 标记的存活秒数（0 = 永不过期）
-  @whistle_agent_cmds "claude claude.exe"  哪些前台进程算 agent（按进程发现空闲用）
+  @whistle_agent_cmds "claude claude.exe opencode"  哪些前台进程算 agent（按进程发现空闲用）
 EOF
 }
 
@@ -889,6 +889,46 @@ cmd_doctor() {
       _warn_line "$_h 未注册"
     fi
   done
+
+  printf '\nOpenCode 插件\n'
+  # 三件都要查，因为这一环最容易静默失效：
+  # 文件在 ≠ 加载了；加载了 ≠ 加载进 TUI 进程（server 里 TMUX_PANE 是启动快照）。
+  _oc_link="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/tmux-whistle"
+  if [ -L "$_oc_link" ]; then
+    # ⚠️ 必须用 -d 判目标：目录形态用 -f 会永远为假，会误报「未安装」。
+    if [ -d "$_oc_link" ]; then
+      if [ -f "$_oc_link/tui.js" ]; then
+        _ok_line "$_oc_link -> $(readlink "$_oc_link")（含 tui.js）"
+      else
+        _warn_line "$_oc_link 缺 tui.js —— part 文件名错了就不会被当成 TUI part"
+      fi
+    else
+      _bad_line "$_oc_link 指向的不是目录（单文件会被当成 server part，pane 归属会错）"
+    fi
+  elif [ -d "$_oc_link" ]; then
+    _warn_line "$_oc_link 是真实目录而非软链 —— 可能装成了拷贝，改代码不会生效"
+  else
+    _warn_line "未安装。跑 ./install.sh（或手建目录软链，见 docs/opencode-integration-plan.md §6.1）"
+  fi
+
+  # 插件是否真的加载进 TUI 进程：看探针日志有没有 tui-probe 这一行。
+  # 这一条不能靠「文件存在」代替 —— 那正是 R3 要防的静默失效。
+  #
+  # 探针只在 @whistle_debug=on 时落盘，所以 debug 关了不能报红：
+  # 那只是「没在收集证据」，不是「插件没跑」。
+  _oc_probe="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
+  if [ -f "$_oc_probe" ] && grep -q 'event=tui-probe' "$_oc_probe" 2> /dev/null; then
+    _ok_line "插件已加载（探针日志 $(basename "$_oc_probe") 有 tui-probe 记录）"
+  elif [ "$(whistle_conf '@whistle_debug')" = on ]; then
+    _warn_line "debug 已开但探针日志里没有 tui-probe —— 插件可能没加载进 TUI 进程"
+    _warn_line "  重启 OpenCode 后再看，或按 docs/opencode-integration-plan.md §5.2 排查"
+  else
+    _warn_line "无法确认插件是否加载（@whistle_debug 是 off，不收集探针日志）"
+    _warn_line "  要验：set -g @whistle_debug on 后重启 OpenCode"
+  fi
+  if [ -z "${TMUX_PANE:-}" ]; then
+    _warn_line '当前进程没有 TMUX_PANE（TUI 不在 tmux 里时插件是 no-op）'
+  fi
 
   printf '\nClaude Code hooks\n'
   _settings="${HOME}/.claude/settings.json"
