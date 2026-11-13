@@ -259,6 +259,12 @@ OpenCode 的 TUI 插件跑在 TUI 进程里，而 `opencode serve --service` 是
 TUI 提供 pane 归属**，且必须以**目录形态**软链插件（单文件会被当成 server part）。
 细节与踩坑见 [opencode-integration-plan.md](opencode-integration-plan.md)。
 
+**自检要分三段看，只看第一段会得出相反结论。** 探针（`tui-probe`）只证明「插件加载了」；
+`subs=N` 证明「订阅建立了」；`js-trace` 证明「事件真的到了、没被过滤」。这三段对应三类
+故障：没加载 / 订阅循环被打断（一条 `data.on()` 抛异常会断掉后面全部）/ 身份过滤把事件
+丢光（`tabs.list()` 的元素形状假设错了）。`tmux-whistle doctor` 现在直接展示 `subs`，
+`subs=0` 报红。
+
 ## 改代码时的红线
 
 下面每一条都踩过 —— 违反了不会报错，只会**静默出错**。完整版见 [`CLAUDE.md`](../CLAUDE.md)。

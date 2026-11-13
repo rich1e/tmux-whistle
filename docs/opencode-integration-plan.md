@@ -549,6 +549,32 @@ grep 'event=tui-probe' "${TMPDIR:-/tmp}/tmux-whistle-hooks.log"
 - 探针日志默认不产生文件（`@whistle_debug=off` 时直接 return）—— 这是刻意的，
   不能让自检机制本身变成噪音源。
 
+### 5.3 三段证据：加载 / 订阅 / 事件
+
+排查「opencode 在跑但状态栏一直 `◉`」时，**只看第一段会得出相反结论**。
+`tui-probe` 是在订阅循环**之前**写的，所以「加载成功」不代表「能收到事件」。
+
+| 顺序 | 证据 | 证明什么 | 不满足说明 |
+|---|---|---|---|
+| ① | `event=tui-probe ... loaded=ok` | 插件加载进了 TUI 进程，`TMUX_PANE` 可信 | 加载问题（形态 / 路径 / 进程） |
+| ② | 同一行带上 `subs=N` | **N 条 `data.on()` 订阅建立成功** | 订阅循环被打断 —— 一条抛异常会断掉后面全部 |
+| ③ | `event=js-trace` 的 `accept` / `drop` 行 | 事件真的到了 TUI，以及为什么被丢 | 事件没到，或被身份过滤丢掉 |
+
+对应的两个真实故障（2026-11-13）：
+
+- ② 缺失 → 订阅没有逐条 `try/catch`，某个类型抛异常后全军覆没。
+- ③ 全是 `drop ... reason=not-my-tab` → `tabs.list()` 的元素是对象而不是字符串，
+  `new Set(list).has("ses_x")` 永远为假，**所有事件被静默过滤**。
+
+查询命令：
+
+```sh
+grep -E 'tui-probe|js-trace' "${TMPDIR:-/tmp}/tmux-whistle-hooks.log" | tail -30
+tmux-whistle doctor | sed -n '/OpenCode/,/Claude Code/p'
+```
+
+`doctor` 已展示 `subs`，`subs=0` 直接报红。
+
 若 R3 落在方案 B 或 C 上，把其余分支的安装代码删掉 —— 三套并存会让 doctor 无法判断
 「当前是哪一种」，反而制造新的静默失效面。
 

@@ -204,6 +204,21 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
   `succeeded`/`failed` 来收尾，否则留一盏永不灭的 `▶`。
 - 后台 shell 用「**在飞 id 集合**」（`@whistle_oc_shell`，存 pane option 不落盘），
   不用计数器：重复的 `started` 天然幂等，`ended` 按 id 精确移除。集合非空时不写 `done`。
+- **订阅必须逐条 `try/catch`，失败的类型走 `data.listen` 兜底。** 一条 `data.on()` 抛
+  异常会打断整个循环，后面的事件全收不到 —— 而探针写在循环**之前**，所以 `doctor`
+  照样报「已加载」，看起来一切正常。2026-11-13 的现场就是这样：`@whistle=idle`
+  （`--tui-start` 生效）、真实事件数 **0**。
+- **`tabs.list()` 的元素形状不能假设是字符串。** 原实现 `new Set(list)` 把元素当
+  `"ses_x"`，实际可能是 `{ sessionID }` 对象 —— `Set.has("ses_x")` 永远为假，于是
+  **所有事件被身份过滤丢掉**，不报错、不留痕。要同时支持字符串与对象
+  （取 `sessionID` / `id` / `session.id`），且**拿不到 id 时 fail-open**，
+  绝不把「取不到」当成「一条都不属于我」。
+- **诊断要能回答「订阅建立了几条」，而不只是「加载了没」。** 订阅结果带进
+  `--probe`（`subs=N failed=...`），`doctor` 直接展示并在 `subs=0` 时报红；
+  `--trace`（debug 开时才写）记录每个原始事件与丢弃原因
+  （`no-sessionID` / `not-my-tab` / `tabs-shape-unknown`）。
+  判据链是「探针证明加载 / subs 证明订阅 / trace 证明事件真的到了」——
+  只看第一条会得出相反的结论。
 
 **SessionEnd hook 必须同步（不加 `async`）**：Claude Code 退出时会带走后台子进程，
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
