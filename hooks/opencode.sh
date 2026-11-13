@@ -129,6 +129,37 @@ if [ "${1:-}" = --tui-start ]; then
   exit 0
 fi
 
+# -- 调试开关查询：给 TUI 侧决定要不要写 trace ------------------------------
+#
+# TUI 插件没有直接读 tmux option 的 API，所以由这里代查一次。
+# 退出码 0 = debug 开。只在 setup 时调一次，代价可忽略。
+if [ "${1:-}" = --debug-on ]; then
+  [ "$(_oc_tmux show -gqv '@whistle_debug' 2> /dev/null || true)" = on ] || exit 1
+  exit 0
+fi
+
+# -- TUI 侧 trace：把「收到了什么、被哪一步过滤掉」写进同一个 debug 日志 -----
+#
+# 为什么需要：事件订阅失败时是**完全静默**的 —— 探针能证明插件加载了，
+# 但证明不了「订阅建立了几条」。2026-11-13 的现场就是这样：探针有记录、
+# 状态栏却一直是 ◉，因为某条 data.on() 抛了异常把整个订阅循环打断。
+#
+# 只在 JS 侧判定 @whistle_debug=on 时才调（那边查一次 --debug-on 缓存结论）。
+if [ "${1:-}" = --trace ]; then
+  shift
+  _oc_tf="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
+  case "$_oc_tf" in
+  */*) _oc_td="${_oc_tf%/*}" ;;
+  *) _oc_td='.' ;;
+  esac
+  [ -n "$_oc_td" ] || _oc_td='/'
+  if [ -d "$_oc_td" ] && [ -w "$_oc_td" ]; then
+    { printf '%s [%s] agent=opencode event=js-trace TMUX_PANE=%s %s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "${TMUX_PANE:-none}" "$*" >> "$_oc_tf"; } 2> /dev/null
+  fi
+  exit 0
+fi
+
 # -- TUI 加载探针：验证「插件真的在 TUI 进程里跑起来了」 --------------------
 #
 # 这条不是状态写入，是**自检**。它一次验证四件事，缺任何一件插件都是静默失效：
@@ -141,6 +172,10 @@ fi
 # 默认不产生任何文件。doctor 就是读这一行来判断插件跑没跑。
 if [ "${1:-}" = --probe ]; then
   _oc_pf="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
+  # 第二、三个参数是 TUI 侧的订阅结果：成功几条、失败哪些。
+  # 没有它们时只报 loaded=ok（老行为）。
+  _oc_subs="${2:-}"
+  _oc_fail="${3:-}"
   if [ "$(_oc_tmux show -gqv '@whistle_debug' 2> /dev/null || true)" = on ]; then
     case "$_oc_pf" in
     */*) _oc_pd="${_oc_pf%/*}" ;;
@@ -148,8 +183,11 @@ if [ "${1:-}" = --probe ]; then
     esac
     [ -n "$_oc_pd" ] || _oc_pd='/'
     if [ -d "$_oc_pd" ] && [ -w "$_oc_pd" ]; then
-      { printf '%s [%s] agent=opencode event=tui-probe TMUX_PANE=%s loaded=ok\n' \
-        "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "${TMUX_PANE:-none}" >> "$_oc_pf"; } 2> /dev/null
+      _oc_extra=''
+      [ -n "$_oc_subs" ] && _oc_extra=" subs=${_oc_subs}"
+      [ -n "$_oc_fail" ] && _oc_extra="${_oc_extra} failed=${_oc_fail}"
+      { printf '%s [%s] agent=opencode event=tui-probe TMUX_PANE=%s loaded=ok%s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "${TMUX_PANE:-none}" "$_oc_extra" >> "$_oc_pf"; } 2> /dev/null
     fi
   fi
   exit 0

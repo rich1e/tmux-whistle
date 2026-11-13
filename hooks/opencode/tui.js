@@ -15,8 +15,9 @@
 //
 // ⚠️ spawn 时必须**显式传** TMUX_PANE / TMUX —— 不依赖继承。
 
-import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { appendFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -55,6 +56,31 @@ export default {
 
     const root = repoRoot();
     const hook = join(root, "hooks", "opencode.sh");
+
+    // 调试开关：TUI 没有读 tmux option 的 API，让 shell 代查一次（同步，开机只一次）。
+    // 开着才写 trace —— 默认零副作用，不产生任何文件。
+    const debugOn = (() => {
+      try {
+        const r = spawnSync(hook, ["--debug-on"], {
+          stdio: "ignore",
+          timeout: 1500,
+          env: { ...process.env, TMUX_PANE: pane },
+        });
+        return r.status === 0;
+      } catch {
+        return false;
+      }
+    })();
+
+    const trace = (msg) => {
+      if (!debugOn) return;
+      try {
+        const p =
+          process.env.WHISTLE_HOOK_LOG ||
+          join(process.env.TMPDIR || tmpdir(), "tmux-whistle-hooks.log");
+        appendFileSync(p, `${new Date().toISOString()} [js] agent=opencode trace ${msg}\n`);
+      } catch {}
+    };
 
     // 自检：报一次「我在 TUI 里活过来了」。
     // 这条是 R3 的可观测出口 —— 没加载则日志里一行都不会有；
@@ -118,11 +144,35 @@ export default {
     //
     // ⚠️ 若 tabs 功能关闭、list() 返回空，**不能**把事件全丢掉（那会静默无状态）。
     // 取不到就 fail-open。这条与 R11 对应。
+    // 「本 TUI 是否开着这个 session」—— 过滤掉别的 TUI 的事件。
+    // 共享 server 下所有 TUI 都收全部事件，不过滤就会在多个 pane 重复上报。
+    //
+    // ⚠️ 拿不到就 **fail-open**（返回 null = 不过滤），绝不返回空集合：
+    // tabs 功能关闭 / 单 session 模式下 list() 可能返回空或形状不同，
+    // 那时若当成「一条都不属于我」就会把所有事件丢光，且完全静默。
+    // 记 trace 是为了下次能看出到底是哪种情况（R11）。
     const mine = () => {
       try {
         const list = context.ui?.tabs?.list?.();
-        return Array.isArray(list) && list.length > 0 ? new Set(list) : null;
-      } catch {
+        if (!Array.isArray(list) || list.length === 0) {
+          trace("tabs-empty fail-open");
+          return null;
+        }
+        const ids = new Set();
+        for (const it of list) {
+          if (typeof it === "string") ids.add(it);
+          else if (it && typeof it === "object") {
+            const id = it.sessionID ?? it.sessionId ?? it.id ?? it.session?.id;
+            if (id) ids.add(String(id));
+          }
+        }
+        if (ids.size === 0) {
+          trace("tabs-shape-unknown fail-open");
+          return null;
+        }
+        return ids;
+      } catch (err) {
+        trace(`tabs-error fail-open err=${String(err && err.message ? err.message : err)}`);
         return null;
       }
     };
@@ -136,62 +186,113 @@ export default {
       }
     };
 
+    // 把一条事件翻译成 shell 能吃的扁平 JSON 并排队发送。
+    // 抽成函数是为了让「逐类型订阅」与「全量流兜底」两条路径共用同一套逻辑。
+    const handle = (type, data) => {
+      data = data ?? {};
+      const sessionID = data.sessionID;
+      if (!sessionID) {
+        trace(`drop type=${type} reason=no-sessionID`);
+        return;
+      }
+
+      const allowed = mine();
+      if (allowed && !allowed.has(sessionID)) {
+        trace(`drop type=${type} reason=not-my-tab session=${sessionID} tabs=${[...allowed].join(";")}`);
+        return;
+      }
+
+      trace(`accept type=${type} session=${sessionID}`);
+
+      // 只挑顶层标量字段，shell 侧不做嵌套解析。
+      const payload = { event: type, sessionID };
+
+      if (type === "session.execution.interrupted") {
+        payload.reason = String(data.reason ?? "");
+      }
+      if (type === "permission.replied") {
+        payload.reply = String(data.reply ?? "");
+      }
+      if (type === "permission.asked") {
+        // 权限请求的文案：优先 message，回落成「动作 + 资源」。
+        const action = String(data.action ?? "");
+        const res = Array.isArray(data.resources) ? data.resources.join(", ") : "";
+        payload.message = data.message || `${action}${res ? ": " + res : ""}`;
+      }
+      if (type === "session.execution.failed") {
+        payload.message = String(data.error?.message ?? data.error?.type ?? "");
+      }
+      if (type === "session.execution.succeeded" || type === "session.execution.started") {
+        // 标题：OpenCode 的 session 标题（本地缓存，不发请求）。
+        try {
+          const title = context.data?.session?.get?.(sessionID)?.title;
+          if (title) payload.message = String(title);
+        } catch {
+          // 取不到标题不影响状态。
+        }
+      }
+      if (type === "session.shell.started" || type === "session.shell.ended") {
+        const shell = data.shell ?? {};
+        payload.shellID = String(shell.id ?? "");
+        payload.shellStatus = String(shell.status ?? "");
+        if (type === "session.shell.started" && shell.command) {
+          payload.message = String(shell.command);
+        }
+      }
+
+      const child = isChild(sessionID);
+      if (child) payload.child = child;
+
+      send(payload);
+    };
+
+    // ⚠️ **逐类型订阅必须各自 try/catch**：某一条 data.on() 抛异常会打断
+    // 整个循环，后面所有事件都收不到，而且**完全静默** —— 探针照样有记录，
+    // 状态栏却一直是 ◉。2026-11-13 就是这么坏的。
     const unsubs = [];
+    const subscribed = [];
+    const failed = [];
+
     for (const type of EVENTS) {
-      const stop = context.data.on(type, (event) => {
-        const data = event?.data ?? {};
-        const sessionID = data.sessionID;
-        if (!sessionID) return;
-
-        const allowed = mine();
-        if (allowed && !allowed.has(sessionID)) return;
-
-        // 只挑顶层标量字段，shell 侧不做嵌套解析。
-        const payload = { event: type, sessionID };
-
-        if (type === "session.execution.interrupted") {
-          payload.reason = String(data.reason ?? "");
-        }
-        if (type === "permission.replied") {
-          payload.reply = String(data.reply ?? "");
-        }
-        if (type === "permission.asked") {
-          // 权限请求的文案：优先 message，回落成「动作 + 资源」。
-          const action = String(data.action ?? "");
-          const res = Array.isArray(data.resources) ? data.resources.join(", ") : "";
-          payload.message = data.message || `${action}${res ? ": " + res : ""}`;
-        }
-        if (type === "session.execution.failed") {
-          payload.message = String(data.error?.message ?? data.error?.type ?? "");
-        }
-        if (type === "session.execution.succeeded" || type === "session.execution.started") {
-          // 标题：OpenCode 的 session 标题（本地缓存，不发请求）。
-          try {
-            const title = context.data?.session?.get?.(sessionID)?.title;
-            if (title) payload.message = String(title);
-          } catch {
-            // 取不到标题不影响状态。
-          }
-        }
-        if (type === "session.shell.started" || type === "session.shell.ended") {
-          const shell = data.shell ?? {};
-          payload.shellID = String(shell.id ?? "");
-          payload.shellStatus = String(shell.status ?? "");
-          if (type === "session.shell.started" && shell.command) {
-            payload.message = String(shell.command);
-          }
-        }
-        if (type === "session.tool.called" || type === "session.retry.scheduled") {
-          // 不写状态，只留 debug 日志。
-        }
-
-        const child = isChild(sessionID);
-        if (child) payload.child = child;
-
-        send(payload);
-      });
-      if (typeof stop === "function") unsubs.push(stop);
+      try {
+        const stop = context.data.on(type, (event) => {
+          // 兼容两种形状：{ data } 或直接给 data。
+          handle(type, event?.data ?? event ?? {});
+        });
+        if (typeof stop === "function") unsubs.push(stop);
+        subscribed.push(type);
+      } catch (err) {
+        failed.push(type);
+        trace(`subscribe-failed type=${type} err=${String(err && err.message ? err.message : err)}`);
+      }
     }
+
+    // 兜底：逐类型订阅失败的那些，改从全量事件流里筛。
+    // 官方文档：data.listen 收全部 server 事件（形状是 { details }）。
+    if (failed.length > 0 && typeof context.data.listen === "function") {
+      try {
+        const stop = context.data.listen((arg) => {
+          const type = arg?.details?.type ?? arg?.type ?? arg?.event?.type;
+          if (!type || !failed.includes(type)) return;
+          handle(type, arg?.details?.data ?? arg?.data ?? {});
+        });
+        if (typeof stop === "function") unsubs.push(stop);
+        trace(`listen-fallback for ${failed.join(",")}`);
+      } catch (err) {
+        trace(`listen-failed err=${String(err && err.message ? err.message : err)}`);
+      }
+    }
+
+    trace(`subscribed=${subscribed.length}/${EVENTS.length} failed=${failed.join(",") || "none"}`);
+
+    // 把订阅结果带进探针，doctor 一眼能看出「订阅建立了几条」。
+    try {
+      const summary = spawn(hook, ["--probe", String(subscribed.length), failed.join(",")], {
+        stdio: "ignore",
+        env: { ...process.env, TMUX_PANE: pane },
+      });
+      summary.on("error", () => {});
+    } catch {}
 
     // cleanup：TUI 要退了，同步写 gone。
     // 不写 gone 会留一盏灭不掉的 ▶ —— 收尾时 pane_current_command 仍是 opencode，

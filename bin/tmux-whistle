@@ -918,7 +918,22 @@ cmd_doctor() {
   # 那只是「没在收集证据」，不是「插件没跑」。
   _oc_probe="${WHISTLE_HOOK_LOG:-${TMPDIR:-/tmp}/tmux-whistle-hooks.log}"
   if [ -f "$_oc_probe" ] && grep -q 'event=tui-probe' "$_oc_probe" 2> /dev/null; then
-    _ok_line "插件已加载（探针日志 $(basename "$_oc_probe") 有 tui-probe 记录）"
+    # 订阅条数来自最近一条 tui-probe（新版本才带 subs=）。
+    # 这是「加载了但事件订阅全失败」的判别点 —— 探针照样有记录，
+    # 状态栏却一直是 ◉，2026-11-13 就是这么坏的。
+    _oc_last=$(grep 'event=tui-probe' "$_oc_probe" 2> /dev/null | tail -1)
+    _oc_subs=$(printf '%s' "$_oc_last" | sed -n 's/.* subs=\([0-9][0-9]*\).*/\1/p')
+    _oc_failed=$(printf '%s' "$_oc_last" | sed -n 's/.* failed=\([^ ]*\).*/\1/p')
+    if [ -n "$_oc_subs" ] && [ "$_oc_subs" = 0 ]; then
+      _bad_line "插件加载了，但**事件订阅一条都没建立**（状态栏会一直是 ◉）"
+      [ -n "$_oc_failed" ] && _bad_line "  失败的订阅：$_oc_failed"
+      _bad_line "  看 $(basename "$_oc_probe") 的 js-trace 行定位"
+    else
+      _oc_msg='插件已加载'
+      [ -n "$_oc_subs" ] && _oc_msg="插件已加载，订阅 ${_oc_subs} 个事件"
+      [ -n "$_oc_failed" ] && _oc_msg="$_oc_msg（失败：$_oc_failed）"
+      _ok_line "$_oc_msg"
+    fi
   elif [ "$(whistle_conf '@whistle_debug')" = on ]; then
     _warn_line "debug 已开但探针日志里没有 tui-probe —— 插件可能没加载进 TUI 进程"
     _warn_line "  重启 OpenCode 后再看，或按 docs/opencode-integration-plan.md §5.2 排查"

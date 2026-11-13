@@ -813,3 +813,25 @@ succeeded → @whistle=idle, @whistle_notice=done
 permission.asked → @whistle_notice=wait, msg="edit: a.js"
 cleanup → @whistle=gone，通知保留
 ```
+
+### rev 6（2026-11-13：opencode 在跑但状态栏一直 ◉）
+
+现场：`%8` 的 `@whistle=idle`（`--tui-start` 生效），但真实事件数为 **0**。
+
+排查暴露两个「静默吞掉全部事件」的缺陷，都不报错：
+
+| 编号 | 问题 | 修正 |
+|---|---|---|
+| I12 | **订阅循环没有逐条 try/catch** —— 任意一条 `data.on()` 抛异常就打断整个循环，后面的事件全收不到，探针却照样有记录（探针在循环之前） | 逐类型 try/catch；失败的类型改由 `data.listen` 全量流兜底；订阅结果带进 `--probe`（`subs=N failed=...`），doctor 直接展示 |
+| I13 | **`tabs.list()` 的元素形状假设错了** —— 原实现 `new Set(list)` 把元素当字符串，实际可能是对象（`{sessionID}`）。`Set.has("ses_x")` 永远为假 → **所有事件被身份过滤丢掉**，且完全静默 | 元素既支持字符串也支持对象（取 `sessionID`/`id`/`session.id`）；**拿不到 id 时 fail-open** 而不是当成「都不属于我」 |
+| I14 | 排查时无据可依 | 新增 `--trace`：debug 开时把每个原始事件与丢弃原因（`no-sessionID` / `not-my-tab` / `tabs-shape-unknown`）写进同一份 hook 日志 |
+
+真机复核（插件热重载后）：
+
+```
+10:17:53 agent=opencode event=tui-probe TMUX_PANE=%8 loaded=ok subs=11
+```
+
+11 条订阅全部建立，`doctor` 现在会报「插件已加载，订阅 11 个事件」。
+此前 doctor 只能回答「加载了没」，回答不了「订阅建立了没」—— 而后者才是
+「加载了却一直 ◉」的判别点。
