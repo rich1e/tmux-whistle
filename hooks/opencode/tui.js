@@ -68,23 +68,49 @@ export default {
       probe.on("error", () => {});
     } catch {}
 
+    // 启动报 idle（◉）——「TUI 起来了」不等于「agent 在干活」。
+    // 必须做，否则上一轮退出写的 gone（rank 0、不显示）会一直留着：
+    // 推导层只把**空**状态推成 idle，gone 不是空，救不回来。
+    try {
+      const start = spawn(hook, ["--tui-start"], {
+        stdio: "ignore",
+        env: { ...process.env, TMUX_PANE: pane },
+      });
+      start.on("error", () => {});
+    } catch {}
+
     // 事件 → 传给 shell 的扁平 JSON。
     // 只取需要的字段：shell 侧不做嵌套解析（jq/python3/sed 三级降级都只认顶层）。
+    //
+    // ⚠️ **必须串行**：每条事件 spawn 一个子进程去写 tmux。并发 spawn 时
+    // 子进程完成顺序不保证 —— 实测过 `permission.asked`(wait) 与
+    // `execution.succeeded`(done) 并发时，done 后到把 ◔ 盖成了 ◆。
+    // 状态写入是有序语义（后发生的事件赢），所以这里用一条 promise 链排队。
+    //
+    // 代价是串行延迟（每个子进程几十毫秒）。事件频率不高 ——
+    // tool.called 可能密一些，但它只写一个 @whistle=running，幂等且极快。
+    let queue = Promise.resolve();
     const send = (payload, extra) => {
       const body = JSON.stringify({ ...payload, ...extra });
-      try {
-        const child = spawn(hook, [], {
-          stdio: ["pipe", "ignore", "ignore"],
-          detached: true,
-          env: { ...process.env, TMUX_PANE: pane },
-        });
-        child.on("error", () => {});
-        child.stdin.on("error", () => {});
-        child.stdin.end(body);
-        child.unref();
-      } catch {
-        // whistle 出问题绝不能影响 OpenCode 本身。
-      }
+      queue = queue
+        .then(
+          () =>
+            new Promise((resolve) => {
+              try {
+                const child = spawn(hook, [], {
+                  stdio: ["pipe", "ignore", "ignore"],
+                  env: { ...process.env, TMUX_PANE: pane },
+                });
+                child.on("error", () => resolve());
+                child.on("close", () => resolve());
+                child.stdin.on("error", () => {});
+                child.stdin.end(body);
+              } catch {
+                resolve();
+              }
+            })
+        )
+        .catch(() => {});
     };
 
     // 「本 TUI 是否开着这个 session」—— 过滤掉别的 TUI 的事件。
@@ -170,18 +196,29 @@ export default {
     // cleanup：TUI 要退了，同步写 gone。
     // 不写 gone 会留一盏灭不掉的 ▶ —— 收尾时 pane_current_command 仍是 opencode，
     // 清空状态会被紧接着的重算又认成 idle。
-    return () => {
+    //
+    // ⚠️ 必须先等 queue 排空：退出时可能有事件还没落盘（比如最后那条
+    // execution.succeeded），直接写 gone 会把它们冲掉。
+    // 然后同步等 --tui-exit 结束 —— 异步的话 TUI 退出会带走子进程，
+    // 清除跑到一半被杀，gone 就写不进去。
+    return async () => {
       for (const stop of unsubs) {
         try {
           stop();
         } catch {}
       }
       try {
-        const child = spawn(hook, ["--tui-exit"], {
-          stdio: "ignore",
-          env: { ...process.env, TMUX_PANE: pane },
+        await queue;
+      } catch {}
+      try {
+        await new Promise((resolve) => {
+          const child = spawn(hook, ["--tui-exit"], {
+            stdio: "ignore",
+            env: { ...process.env, TMUX_PANE: pane },
+          });
+          child.on("error", () => resolve());
+          child.on("close", () => resolve());
         });
-        child.on("error", () => {});
       } catch {}
     };
   },

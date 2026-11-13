@@ -226,6 +226,37 @@ notice() {
   [ -z "$(notice)" ]
 }
 
+@test "oc-e2e: --tui-start 把 gone 推回 idle（重启后要能看见 ◉）" {
+  # 上一轮退出的收尾是 gone（rank 0，不显示）。不写 idle 的话，
+  # 重启 TUI 后这个 pane 在状态栏上彻底不存在 —— 用户会以为插件没装。
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-exit
+  [ "$status" -eq 0 ]
+  [ "$(activity)" = "gone" ]
+
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-start
+  [ "$status" -eq 0 ]
+  [ "$(activity)" = "idle" ]
+}
+
+@test "oc-e2e: --tui-start 不覆盖已有的 running（热重载不能把干活的打回空闲）" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  [ "$(activity)" = "running" ]
+
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-start
+  [ "$status" -eq 0 ]
+  [ "$(activity)" = "running" ]
+}
+
+@test "oc-e2e: --tui-start 不碰通知通道（空闲不代表已读）" {
+  echo '{"event":"session.execution.succeeded","sessionID":"s1","message":"完成"}' | feed
+  [ "$(notice)" = "done" ]
+
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-start
+  [ "$status" -eq 0 ]
+  [ "$(notice)" = "done" ]
+}
+
 # -- 健壮性 ----------------------------------------------------------------
 
 @test "oc-e2e: 未知事件不写任何状态" {

@@ -785,3 +785,31 @@ POSIX_SH := $(LIB_SH) $(HOOK_SH) $(BIN_SH)   # :14
 | I7 | R3 可观测性 | `tui.js` setup 时 spawn `--probe`；该分支只在 `@whistle_debug=on` 落盘，默认零副作用 |
 | I8 | 实测记录 | `opencode plugin list` 识别目录形态；server 只尝试加载单文件 `petdex.js` 并失败（V1 形状）—— 两点都印证 §3.1.1 的判断 |
 | I9 | `make check` | 452 项全绿，无残留隔离 server |
+
+### rev 5（真机验证补记）
+
+真机跑通后补了两处实现缺陷，都是「不报错、只是效果不对」的类型：
+
+| 编号 | 问题 | 修正 |
+|---|---|---|
+| I10 | **TUI 启动没写 idle** —— 上次退出的 `gone`（rank 0）一直留着，而推导层只把**空**状态推成 idle，`gone` 不是空。用户重启 TUI 后那个 pane 在状态栏上彻底不存在，看起来像「插件没装上」 | 新增 `hooks/opencode.sh --tui-start`：启动报 `idle`（与 Claude 侧 SessionStart 同一理由）。已有 `running`/`idle` 时不覆盖，避免热重载把正在干活的打回空闲 |
+| I11 | **事件并发 spawn 导致乱序** —— 实测 `permission.asked`(wait) 与 `execution.succeeded`(done) 并发时，后到的 done 把 ◔ 盖成 ◆。状态写入是「后发生者赢」的有序语义 | `tui.js` 改成 promise 链串行；cleanup 先 `await queue` 再写 `gone`，否则退出会把排队中未落盘的事件冲掉 |
+
+R3 的最终结论（2026-11-13 09:39 真机日志）：
+
+```
+09:39:31 [11015] agent=opencode event=tui-probe TMUX_PANE=%8 loaded=ok
+```
+
+- 插件**确实加载进了 TUI 进程**（`TMUX_PANE=%8` 是正确 pane，不是 server 的启动快照）。
+- `opencode plugin list` 识别目录形态；server 只尝试加载单文件 `petdex.js` 并失败。
+- 目录 + `tui.js` 的形态得到验证，无需回退到方案 B/C。
+
+另外用模拟 context 直接驱动 `tui.js` 验证了完整链路（JS → `hooks/opencode.sh` → tmux）：
+
+```
+started → @whistle=running
+succeeded → @whistle=idle, @whistle_notice=done
+permission.asked → @whistle_notice=wait, msg="edit: a.js"
+cleanup → @whistle=gone，通知保留
+```

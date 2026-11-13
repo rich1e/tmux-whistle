@@ -108,6 +108,27 @@ fi
 
 [ -x "$WHISTLE_CLI" ] || exit 0
 
+# -- TUI 启动：报 idle ------------------------------------------------------
+#
+# 「TUI 起来了」不等于「agent 在干活」—— 刚打开、--continue 恢复出来的会话，
+# 都是停在提示符前**等着**。所以报 idle（空闲 ◉），不是 running。
+# 与 Claude 侧的 SessionStart 完全同一个理由。
+#
+# ⚠️ 这一条不能省：上次退出写的是 gone（rank 0，不显示、不计数），
+# 而推导层只会把**空**状态推成 idle —— gone 不是空，救不回来。
+# 少了它，重启 TUI 后那个 pane 在状态栏上就是彻底不存在，
+# 用户会以为「插件没装上」。
+if [ "${1:-}" = --tui-start ]; then
+  [ -n "${TMUX_PANE:-}" ] || exit 0
+  # 已经报过 running / idle 就不覆盖：同一 pane 可能开了第二个 TUI，
+  # 或者插件被热重载（reconciliation），此时不该把正在干活的状态打回空闲。
+  case "$(_oc_opt '@whistle')" in
+  running | idle) exit 0 ;;
+  esac
+  _oc_cli --activity idle "$TMUX_PANE"
+  exit 0
+fi
+
 # -- TUI 加载探针：验证「插件真的在 TUI 进程里跑起来了」 --------------------
 #
 # 这条不是状态写入，是**自检**。它一次验证四件事，缺任何一件插件都是静默失效：
