@@ -17,7 +17,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 - **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`（回合被 API 错误中断）、`running`（在跑）、`idle`（进程在但闲着）五态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
 - **跨 session 且粘性**：通知出现在你正看着的那个 session，一直保留到你切进去处理完
 - **六个独立信号**：窗口徽章、全局计数 `⚑N`、边框变色、边框状态行、瞬时提示、桌面通知，各管各的，可单独关闭
-- **任何 agent 都能接入**：Claude Code 装上 hooks 即用；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
+- **主流 agent 装上即用**：Claude Code、Codex、OpenCode 各有专用适配器；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
 - **零运行时依赖**：只用 tmux 自身能力，兼容 oh-my-tmux 与 tpm / tpack
 
 详见 [使用](#使用)、[配置](#配置)、[兼容性](#兼容性)。
@@ -52,7 +52,7 @@ set -g @plugin 'rich1e/tmux-whistle'
 **还要补两步**（tpm 路径不会自动做）：
 
 ```sh
-# ① 装 Claude Code hooks —— 不装的话 agent 干完不会自动亮徽章
+# ① 装 Claude Code / Codex hooks —— 不装的话 agent 干完不会自动亮徽章
 ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle install-hooks
 
 # ② 把 CLI 链进 PATH —— 不装的话 tmux-whistle 命令找不到
@@ -64,17 +64,20 @@ ln -sfn ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle ~/.local/bin/tmux-w
 ```sh
 git clone https://github.com/rich1e/tmux-whistle.git
 cd tmux-whistle
-./install.sh          # 链接 + 写 tmux.conf.local + 装 Claude Code hooks
+./install.sh          # 链接 + 写 tmux.conf.local + 装 Claude Code / Codex hooks
 ```
 
-`install.sh` 做四件事：
+`install.sh` 做五件事：
 
 1. 把仓库软链到 `~/.local/share/tmux-whistle`
 2. 把 CLI 软链到 `~/.local/bin/tmux-whistle`（hook 与命令行都要能找到它）
 3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块（改前备份原文件）
-4. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`（改前备份，只管理带 `tmux-whistle` marker 的条目）
+4. 软链 OpenCode TUI 插件目录
+5. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`，把 Codex hooks 合并进
+   `~/.codex/hooks.json`（改前都备份，只管理带 `tmux-whistle` marker 的条目）
 
-装完随时可以核对订阅内容 —— `tmux-whistle doctor` 会**逐事件**列出 Claude Code 装了哪些：
+装完随时可以核对订阅内容 —— `tmux-whistle doctor` 会**逐事件**列出 Claude Code 与
+Codex 装了哪些：
 
 ```
 Claude Code hooks
@@ -82,24 +85,31 @@ Claude Code hooks
   Stop             async
   Notification     async matcher=permission_prompt|...|idle_prompt
   SessionEnd       sync
+
+Codex hooks
+  ✓ ~/.codex/hooks.json：9/9 个事件已订阅
+  UserPromptSubmit sync
+  PostToolUse      async
+  SessionEnd       sync
 ```
 
-它同时会点出四类「不报错但行为不对」的漂移：命令路径指向别的 checkout（改了这边不生效）、
+它同时会点出这些「不报错但行为不对」的漂移：命令路径指向别的 checkout（改了这边不生效）、
 `Notification` 的 matcher 少了 `idle_prompt`（漏「回合结束 60 秒没打字」的提醒）、
 `PreToolUse` 被加了 matcher（普通工具调用被挡住）、`SessionEnd` 被改成 async
-（退出时清不掉，留一盏灭不掉的 `▶`）。
+（退出时清不掉，留一盏灭不掉的 `▶`）、Codex 的 `PostToolUse` 被改成 sync
+（每次工具调用都等 hook），以及 Codex 的 hooks.json 与 inline `[hooks]` 重复。
 
 常用参数：
 
 ```sh
 ./install.sh --dry-run     # 预览安装与配置改动
-./install.sh --no-hooks    # 不修改 Claude Code 的 settings.json
+./install.sh --no-hooks    # 不改 Claude Code / Codex 的 hook 配置
 ./install.sh --cleanup     # 额外清理失效的 tmux-notify 按键绑定
-./install.sh --uninstall   # 移除本插件的 marker 配置块与两个软链
+./install.sh --uninstall   # 移除本插件的 marker 配置块与软链
 ```
 
-卸载不会动 Claude Code hooks；也要移除的话，再跑
-`lib/install-hooks.sh --uninstall`，它只摘除本插件的条目。
+卸载不会动 agent hooks；也要移除的话，再跑
+`tmux-whistle install-hooks --uninstall`，它只摘除本插件的条目。
 
 > **两条路别混用。** `install.sh` 会往 `tmux.conf.local` 写一行加载插件的命令；
 > 如果 tpm 也装了同一个插件，就会加载两份、互相覆盖 `@whistle_root`。选一条即可。
@@ -117,11 +127,16 @@ tmux-whistle version             # 或 tmux-whistle --version
 当前首个内测 tag 为 `v0.1.0-alpha.1`；tag 只含 SemVer base，CLI 输出还包含构建 metadata。
 完整规则见 [版本号与发布规范](docs/versioning.md)。
 
-> **升级插件后要重跑一次 `tmux-whistle install-hooks`。** 当前共管理 8 个事件；
+> **升级插件后要重跑一次 `tmux-whistle install-hooks`。** Claude Code 当前管理 8 个事件、
+> Codex 当前管理 9 个事件；
 > hooks 是快照式写进 `settings.json` 的，这次新增的 `PreToolUse` /
 > `SubagentStop` 不会自己出现。不重跑的话，工具调用（含 plan 批准后继续跑）与
 > 后台/子 agent 的状态不会完整上报。该命令幂等，其它 hook 原样保留；
 > 重跑后需重启 Claude Code 或开新会话才生效。
+
+> **Codex 需要额外信任一次。** 新装或命令变化后，启动 Codex 并输入 `/hooks`，
+> 审核并信任 `tmux-whistle` 的 9 个 hooks。Codex 把信任绑定到 hook 哈希，
+> 安装器不会代你修改信任状态。
 
 ### macOS：桌面通知（可选，默认关）
 
@@ -181,7 +196,7 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是动画帧，计数为 0 或 `spin off` 时用它） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
-| `@whistle_agent_cmds` | `claude claude.exe opencode` | 哪些前台进程算「agent」（按进程发现空闲时用） |
+| `@whistle_agent_cmds` | `claude claude.exe codex codex.exe opencode` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用星形帧轮转（`off` 退回静态图标） |
 | `@whistle_spin_style` | `claude` | 帧风格：`claude` / `symbols_3` / `circles_5` / `lines_3` / `squares_9` / `togglers_4` |
@@ -404,7 +419,7 @@ session 里的细节"。
 
 - **会话开始 / 恢复**时 hook 报上来（`SessionStart`）；
 - **按进程发现**：某个 pane 从没上报过状态、但前台跑着 agent 进程
-  （`@whistle_agent_cmds` 里那些，默认 `claude claude.exe opencode`）—— 用 resurrect
+  （`@whistle_agent_cmds` 里那些，默认 `claude claude.exe codex codex.exe opencode`）—— 用 resurrect
   恢复 tmux 之后，那几个还停在提示符前等你的 agent 就属于这一类。
 
 > 按进程发现比对的是 tmux 的 `pane_current_command`，那是**进程名**而不是命令行。
@@ -458,7 +473,31 @@ hooks 装好后自动工作：
 还在跑的任务）。残留限制：后台进程被手工 kill、agent 又没被叫醒时，那盏 `▶` 会留到
 下一次事件才被改掉。
 
-### 场景二：任何 agent / 脚本
+### 场景二：Codex —— 装 hooks 后自动工作
+
+`./install.sh` 会把 9 个 hooks 合并进 `~/.codex/hooks.json`，保留你已有的
+ping-island 等条目。安装后启动 Codex，**先输入 `/hooks` 审核并信任**新增的
+`tmux-whistle` 条目；Codex 的信任绑定到 hook 哈希，命令变化后还要再审核一次。
+
+| Codex 事件 | 状态栏 |
+|---|---|
+| 启动 / 恢复 / 开新会话 | `◉` 空闲（停在提示符前等你） |
+| 提交 prompt | `▶` 运行中，并清掉上一轮未读通知 |
+| 请求权限批准 | `◔` + ⚑ + 提示（**即时**） |
+| 权限批准后工具真正运行 | 清掉 `◔`，活动态仍为 `▶` |
+| 子 agent 开始 / 结束 | 开始后保持 `▶`；结束时只清子 agent 标记 |
+| 主回合结束 | `◉` + `◆` + ⚑ + 提示；子 agent 还在跑时，读掉 `◆` 后会回到 `▶` |
+| 用户打断当前回合 | `◉`，并清掉未解决的 `◔` |
+| 退出 / 结束 Codex 会话 | `▶` / `◉` 熄灭（`◆` / `◔` / `⚠` 保留） |
+
+实现上刻意只让 `PostToolUse` 异步（它只清 wait、不写活动态），其余生命周期
+事件同步，保证 `SessionStart → UserPromptSubmit → Stop` 的写入顺序。
+Codex 目前没有与 Claude `StopFailure` 等价、能稳定表达「整回合最终失败」的事件，
+所以 API 失败不自动落 `⚠`；需要时脚本仍可显式调 `tmux-whistle error`。
+完整事件表、同步/异步取舍与信任机制见
+[docs/codex-integration-plan.md](docs/codex-integration-plan.md)。
+
+### 场景三：任何 agent / 脚本
 
 不需要 Claude Code，在 tmux 的 pane 里直接调：
 
@@ -483,7 +522,7 @@ long_job.sh && tmux-whistle done "备份完成" || tmux-whistle error "备份失
 tmux-whistle wait "需要你选数据库"
 ```
 
-### 场景三：OpenCode
+### 场景四：OpenCode
 
 OpenCode 装上插件即用 —— 状态由它自己的事件推送，不需要你手动调 CLI。
 `./install.sh` 会把插件目录软链进 `~/.config/opencode/plugins/`，重启 OpenCode 生效。
@@ -531,6 +570,8 @@ tmux-whistle clear                 # 清当前窗口
 tmux-whistle clear -a              # 全清
 tmux-whistle on | off              # 总开关
 tmux-whistle doctor                # 自检
+tmux-whistle install-hooks         # 安装/更新 Claude Code + Codex hooks
+tmux-whistle install-codex-hooks   # 只安装/更新 Codex hooks
 tmux-whistle version               # 显示完整版本（--version 同义）
 ```
 
@@ -553,7 +594,7 @@ tmux-whistle done --title '重构完成' --body '第一段…第二段…（全�
 | `--body` | 通知命令 `done` / `wait` / `error` 存 `@whistle_notice_body`；活动命令 `running` / `idle` 存 `@whistle_body` —— 完整内容（会消毒：剔掉 `# { } \|`、折叠换行） | 400 字符 |
 
 只给 `--body` 时徽章会显示正文的前 80 字；都不给就只有一个普通消息。
-Claude Code 的回复全文也会自动作为 `--body` 存下来。
+Claude Code / Codex 的回复全文也会自动作为 `--body` 存下来。
 
 > 完整正文目前**存了但没有正文详情界面**，也不会默认塞进桌面横幅。
 > 桌面通知只显示短消息，点击后跳到对应 pane；以上面的 `done` 为例，手工查完整正文：

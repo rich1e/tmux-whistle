@@ -594,9 +594,9 @@ EOF
 }
 
 @test "conf 快照: 含空格被加引号的值也剥掉（agent_cmds 就是这种）" {
-    _WC_SNAP='@whistle_agent_cmds "claude claude.exe opencode"'
+    _WC_SNAP='@whistle_agent_cmds "claude claude.exe codex codex.exe opencode"'
     run whistle_conf_snap_get '@whistle_agent_cmds'
-    assert_eq "$output" 'claude claude.exe opencode'
+    assert_eq "$output" 'claude claude.exe codex codex.exe opencode'
     unset _WC_SNAP
 }
 

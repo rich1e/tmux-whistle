@@ -1,10 +1,12 @@
 #!/bin/sh
 # tmux-whistle 本地安装 / 卸载。
 #
-# 三件事：
+# 五件事：
 #   1. 把仓库符号链接进 $TMUX_PLUGIN_MANAGER_PATH/tmux-whistle
 #   2. 把 CLI 链接进 ~/.local/bin（hook 与 shell 都要能找到它）
 #   3. 往 tmux.conf.local 追加一段带 marker 的配置块
+#   4. 软链 OpenCode TUI 插件
+#   5. 安装 Claude Code 与 Codex hooks
 #
 # 只改自己那段 marker 块，绝不碰别的配置。重复执行安全。
 #
@@ -159,9 +161,12 @@ fi
 _in_version=$("$ROOT/bin/tmux-whistle" --version)
 say "$_in_version 安装"
 [ -x "$ROOT/hooks/claude-code.sh" ] || run chmod +x "$ROOT/hooks/claude-code.sh"
+[ -x "$ROOT/hooks/codex.sh" ] || run chmod +x "$ROOT/hooks/codex.sh"
 [ -x "$ROOT/tmux-whistle.tmux" ] || run chmod +x "$ROOT/tmux-whistle.tmux"
 [ -x "$ROOT/scripts/setup.sh" ] || run chmod +x "$ROOT/scripts/setup.sh"
 [ -x "$ROOT/lib/detect.sh" ] || run chmod +x "$ROOT/lib/detect.sh"
+[ -x "$ROOT/lib/install-agent-hooks.sh" ] || run chmod +x "$ROOT/lib/install-agent-hooks.sh"
+[ -x "$ROOT/lib/install-codex-hooks.sh" ] || run chmod +x "$ROOT/lib/install-codex-hooks.sh"
 
 mkdir -p "$(dirname "$PLUGIN_DIR")" "$BIN_DIR" || die '创建目录失败'
 
@@ -220,16 +225,16 @@ else
   say "  OpenCode   -> ${OC_PLUGIN_LINK}（目录软链）"
 fi
 
-# 6. Claude Code hooks
+# 6. Agent hooks（Claude Code + Codex）
 if [ "$INSTALL_HOOKS" = 1 ]; then
   if [ "$DRY" = 1 ]; then
-    "$ROOT/lib/install-hooks.sh" --dry-run > /dev/null 2>&1 \
-      && say "  [dry-run] 会合并 Claude Code hooks 到 ~/.claude/settings.json"
+    "$ROOT/lib/install-agent-hooks.sh" --dry-run > /dev/null 2>&1 \
+      && say "  [dry-run] 会安装 Claude Code 与 Codex hooks"
   else
-    if "$ROOT/lib/install-hooks.sh"; then
+    if "$ROOT/lib/install-agent-hooks.sh"; then
       :
     else
-      say '  Claude Code hooks 未安装（可稍后手动跑 lib/install-hooks.sh）'
+      say '  Agent hooks 未完整安装（可稍后手动跑 tmux-whistle install-hooks）'
     fi
   fi
 fi

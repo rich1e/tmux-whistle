@@ -8,7 +8,7 @@
 git clone https://github.com/rich1e/tmux-whistle.git
 cd tmux-whistle
 make deps        # 装 bats-core / shellcheck / shfmt
-./install.sh     # 链接 + 写 tmux.conf.local + 装 Claude Code hooks
+./install.sh     # 链接 + 写 tmux.conf.local + 装 Claude Code / Codex hooks
 ```
 
 然后重载 tmux 并自检：
@@ -45,14 +45,19 @@ bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 bats --print-output-on-failure test/unit        # 失败时打印输出
 ```
 
+> `test/e2e/menu_popup.bats` 通过 `expect` 附着伪终端，要求 `TERM` 能被 tmux
+> 识别。若在 `TERM=dumb` 的非交互环境里跑，9 条 popup 用例会以
+> `open terminal failed: terminal does not support clear` 假红；改用
+> `TERM=xterm-256color make check` 即可。
+
 ## 提交流程
 
 ```
 改代码 → make fmt → make check → git commit
 ```
 
-`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了（**完整一遍约 9~10 分钟**，
-604 项；拆解见下文[「跑一次 make check 要多久」](#跑一次-make-check-要多久)）。五道关卡依次过，
+`make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了（**完整一遍约 10 分钟**，
+648 项；拆解见下文[「跑一次 make check 要多久」](#跑一次-make-check-要多久)）。五道关卡依次过，
 任一关红了就就地停住；全绿才允许提交：
 
 ```mermaid
@@ -109,9 +114,12 @@ make check-version
 │   ├── deliver.sh              # 投递：边框 / 边框状态行 / 状态栏刷新 / 瞬时提示 / 桌面通知
 │   ├── detect.sh               # 关键词兜底检测（默认关，会误报）
 │   ├── opencode.sh             # OpenCode 事件 → 动作的**纯函数**层（不碰 tmux，L1 可 source）
-│   └── install-hooks.sh        # Claude Code settings.json 的幂等合并器
+│   ├── install-hooks.sh        # Claude Code settings.json 的幂等合并器
+│   ├── install-codex-hooks.sh  # Codex hooks.json 的幂等合并器
+│   └── install-agent-hooks.sh  # 聚合入口：Claude Code + Codex
 ├── hooks/
 │   ├── claude-code.sh          # Claude Code hook 适配器：stdin JSON → 状态
+│   ├── codex.sh                # Codex hook 适配器：stdin JSON → 状态
 │   ├── opencode.sh             # OpenCode 适配器薄壳：stdin → 定位 tmux → 调 lib/opencode.sh
 │   └── opencode/
 │       └── tui.js              # OpenCode TUI 插件：订阅 + 身份过滤 + spawn（只转发）
@@ -133,16 +141,19 @@ make check-version
 │   │   ├── cli.bats
 │   │   ├── deliver.bats
 │   │   ├── hooks.bats
+│   │   ├── install_codex_hooks.bats
 │   │   ├── install_hooks.bats
 │   │   ├── install.bats        # 含 OpenCode 插件的**目录形态**断言
 │   │   ├── run.bats
 │   │   └── state.bats
 │   ├── e2e/                    # L3 CLI + hook 端到端
 │   │   ├── claude_hook.bats
+│   │   ├── codex_hook.bats
 │   │   └── opencode_hook.bats  # OpenCode 适配器完整链路
 │   └── test_helper/
 │       └── whistle.bash        # Bats 公共 helper：隔离 server + 断言
 ├── docs/
+│   ├── codex-integration-plan.md     # Codex 事件映射、信任与验证
 │   ├── development.md          # 本文档
 │   ├── notify-design-review.md # 「事件收件箱」形态的取舍评审
 │   ├── opencode-integration-plan.md  # OpenCode 接入方案（含 R3 验证方法）
@@ -164,13 +175,14 @@ make check-version
         └── ci.yml              # CI：macOS + ubuntu 上跑 make check
 ```
 
-下面三个文件是 tpm 路径的**硬依赖**，少一个就装不起来：
+下面这些文件必须保持可执行；前三个是 tpm 路径的硬依赖，hook 适配器则由各 agent spawn：
 
 | 文件 | 为什么必须是可执行文件 |
 |---|---|
 | `tmux-whistle.tmux` | tpm 把插件目录下的 `*.tmux` 当**可执行文件**运行，不 source |
 | `scripts/setup.sh` | 由 `.tmux-whistle.conf` 的 `run-shell -b` 拉起 |
 | `hooks/claude-code.sh` | 由 Claude Code 按 `settings.json` 里的路径 spawn |
+| `hooks/codex.sh` | 由 Codex 按 `hooks.json` 里的路径 spawn |
 
 > `HANDOFF.md` 是本地的任务交接快照，已在 `.gitignore` 里，不属于仓库内容。
 
@@ -180,6 +192,7 @@ make check-version
 flowchart LR
   subgraph P["① 生产者 —— 推送源"]
     CC["Claude Code hooks<br/>Stop / Notification<br/>async:true 不阻塞 agent"]
+    CX["Codex hooks<br/>Stop / PermissionRequest<br/>生命周期同步，工具后置异步"]
     DET["lib/detect.sh<br/>关键词兜底轮询<br/>默认关"]
     ANY["任意脚本<br/>tmux-whistle done ..."]
   end
@@ -211,6 +224,7 @@ flowchart LR
   USER["其它 session 的状态栏<br/>徽章 ◆ · 全局计数 ⚑N · 瞬时提示"]
 
   CC --> CLI
+  CX --> CLI
   DET --> CLI
   ANY --> CLI
   CLI --> CORE
@@ -229,9 +243,9 @@ flowchart LR
 
 **推送，不是轮询。** tmux 的 hook 只能感知 tmux 内部事件（pane 退出、窗口切换、bell），
 **不存在**能表达「agent 做完了任务」的 tmux 事件 —— 那不是 tmux 的概念。所以推送的发起方
-必须在 agent 侧（图 ①），由 Claude Code 的 hook 机制在 `Stop` / `Notification` 时真实
-spawn 一个子进程。配 `"async": true` 后 Claude Code 不等它退出，整条链路（含 osascript
-的几十毫秒）都在 agent 的关键路径之外。
+必须在 agent 侧（图 ①），由 Claude Code / Codex 的 hook 机制在生命周期事件点真实
+spawn 一个子进程。Claude Code 除 `SessionEnd` 外都用 `"async": true`；Codex 只把高频且
+不改活动态的 `PostToolUse` 设为异步，其余生命周期事件同步，保证写入顺序。
 
 **唯一写入点。** 只有 `lib/core.sh` 能写状态（② → ③）。渲染与投递（④⑤）只读不写，
 所以「换掉 agent 集成方式」不会碰到渲染代码。状态存在 tmux server 内存里 —— pane 级
@@ -254,7 +268,12 @@ global option `@whistle_mark`，用户配置里只留 `#{E:@whistle_mark}` 占�
 养成忽略弹窗的习惯）。tmux hooks（⑥）只负责清除状态与重算聚合，**推送侧完全不碰
 tmux hooks** —— 有人往 pane 里敲命令不会触发通知。
 
-**两个推送源，两种进程模型。** Claude Code 的 hook 跑在 pane 进程树里，继承 `TMUX_PANE`；
+**三个推送源，三种进程模型。** Claude Code 的 hook 跑在 pane 进程树里，继承 `TMUX_PANE`；
+Codex 的 hook 也在 pane 进程树里，但事件集不同：权限等待是 `PermissionRequest`，
+子 agent 是 `SubagentStart` / `SubagentStop`，没有 `Notification` / `StopFailure`。
+Codex 的配置在 `~/.codex/hooks.json`，新增条目必须到 Codex 的 `/hooks` 里人工信任；
+信任绑定到 hook 哈希，所以改命令后要重新审核。除 `PostToolUse` 外都同步执行，避免
+`SessionStart → UserPromptSubmit → Stop` 的写入乱序。
 OpenCode 的 TUI 插件跑在 TUI 进程里，而 `opencode serve --service` 是共享守护、环境是
 启动快照，事件里又没有 pane 信息（99 个 V2 事件一个都没有）。所以 OpenCode 侧**只能由
 TUI 提供 pane 归属**，且必须以**目录形态**软链插件（单文件会被当成 server part）。
@@ -308,7 +327,8 @@ TUI 提供 pane 归属**，且必须以**目录形态**软链插件（单文件�
   `whistle_spin_build` 的帧选择器，消毒会把 `#{}` 剔掉、整个 format 变成空串。
 - **不要删 `whistle_deliver` 开头的 `whistle_ensure_status_line`** —— oh-my-tmux 在 source 完
   `tmux.conf.local` 之后才重算主题，会覆盖状态栏补丁；自愈是唯一不依赖加载顺序的时机。
-- `lib/install-hooks.sh` 合并 `settings.json` 时只增删带 marker 的条目，**绝不覆盖用户已有的 hook**。
+- `lib/install-hooks.sh` / `lib/install-codex-hooks.sh` 只增删带 marker 的条目，
+  **绝不覆盖用户已有的 hook**；Codex 侧还必须追加而不是前插，否则 trust index 会漂移。
 - `lib/core.sh` 里 `whistle_sanitize` / `whistle_rank` / `whistle_aggregate` /
   `whistle_count_states` 四个函数**不得出现任何 tmux 调用** —— 这是 L1 单测能脱离 tmux 跑的前提。
 

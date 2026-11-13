@@ -205,3 +205,100 @@ OK_MATCHER='permission_prompt|agent_completed|idle_prompt'
   assert_contains "$output" '缺 8 个事件'
   assert_contains "$output" 'install-hooks'
 }
+
+# -- Codex hooks 明细 -------------------------------------------------------
+
+write_codex_hooks() {
+  local path="$1" cmd="$2" post_async="${3:-1}" session_end_async="${4:-0}" omit="${5:-}"
+  CODEX_HOOK_CMD="$cmd" POST_ASYNC="$post_async" \
+    SESSION_END_ASYNC="$session_end_async" OMIT="$omit" \
+    python3 - "$path" << 'PY'
+import json, os, sys
+
+cmd = os.environ["CODEX_HOOK_CMD"]
+post_async = os.environ["POST_ASYNC"] == "1"
+se_async = os.environ["SESSION_END_ASYNC"] == "1"
+omit = set(x for x in os.environ["OMIT"].split(",") if x)
+events = ("SessionStart", "UserPromptSubmit", "PermissionRequest",
+          "PostToolUse", "SubagentStart", "SubagentStop", "Stop",
+          "Interrupt", "SessionEnd")
+
+hooks = {}
+for event in events:
+    if event in omit:
+        continue
+    hook = {"type": "command", "command": cmd}
+    if event == "PostToolUse" and post_async:
+        hook["async"] = True
+    if event == "SessionEnd" and se_async:
+        hook["async"] = True
+    hooks[event] = [{"hooks": [hook]}]
+
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump({"hooks": hooks}, f, ensure_ascii=False, indent=2)
+PY
+}
+
+@test "doctor: 逐事件列出 Codex 订阅（含 async 与 matcher）" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh"
+
+  run env CODEX_HOOKS="$h" "$CLI" doctor
+
+  assert_contains "$output" '9/9 个事件已订阅'
+  assert_contains "$output" 'PostToolUse      async'
+  assert_contains "$output" 'SessionEnd       sync'
+  assert_contains "$output" '在 Codex 里输入 /hooks 审核并信任'
+  assert_not_contains "$output" '命令指向'
+}
+
+@test "doctor: Codex PostToolUse 被改成 sync 时告警" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh" 0
+
+  run env CODEX_HOOKS="$h" "$CLI" doctor
+
+  assert_contains "$output" 'PostToolUse 是 sync'
+}
+
+@test "doctor: Codex SessionEnd 被改成 async 时告警" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh" 1 1
+
+  run env CODEX_HOOKS="$h" "$CLI" doctor
+
+  assert_contains "$output" 'SessionEnd 是 async'
+  assert_contains "$output" '生命周期写入可能乱序'
+}
+
+@test "doctor: Codex 命令路径指向别处时提示改了不生效" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  write_codex_hooks "$h" "/tmp/tmux-whistle-old/hooks/codex.sh"
+
+  run env CODEX_HOOKS="$h" "$CLI" doctor
+
+  assert_contains "$output" '命令指向 /tmp/tmux-whistle-old/hooks/codex.sh'
+  assert_contains "$output" '改了这边不会生效'
+}
+
+@test "doctor: Codex 缺事件时点名缺了哪些" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh" 1 0 'Interrupt,SubagentStart'
+
+  run env CODEX_HOOKS="$h" "$CLI" doctor
+
+  assert_contains "$output" '缺 2 个事件'
+  assert_contains "$output" 'Interrupt'
+  assert_contains "$output" 'SubagentStart'
+}
+
+@test "doctor: Codex hooks.json 与 inline [hooks] 并存时告警" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  local c="$BATS_TEST_TMPDIR/codex-config.toml"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh"
+  printf '[[hooks.Stop]]\nmatcher = "*"\n\n[[hooks.Stop.hooks]]\ntype = "command"\ncommand = "x"\n' > "$c"
+
+  run env CODEX_HOOKS="$h" CODEX_CONFIG="$c" "$CLI" doctor
+
+  assert_contains "$output" 'config.toml 里还有 inline [hooks]'
+}

@@ -104,8 +104,11 @@ $WHISTLE_PROG $WHISTLE_VERSION_FULL — tmux 内跨 session 的 agent 状态通�
                                    活动 → @whistle_body；上限 400）
       --dry-run                     只打印会做什么，不执行
 
-Claude Code 集成：
+Agent hooks 集成：
   $WHISTLE_PROG install-hooks [--dry-run] [--uninstall]
+                                    同时安装 Claude Code 与 Codex hooks
+  $WHISTLE_PROG install-codex-hooks [--dry-run] [--uninstall]
+                                    只安装 Codex hooks
 
 配置（tmux 里 set -g @whistle_xxx）：
   @whistle_enabled on|off            总开关（默认 on）
@@ -126,7 +129,8 @@ Claude Code 集成：
                                      / lines_3 / squares_9 / togglers_4；写错回落到 claude
   @whistle_spin_interval 0.5         每帧间隔（秒）
   @whistle_sub_ttl 1800              子 agent 标记的存活秒数（0 = 永不过期）
-  @whistle_agent_cmds "claude claude.exe opencode"  哪些前台进程算 agent（按进程发现空闲用）
+  @whistle_agent_cmds "claude claude.exe codex codex.exe opencode"
+                                    哪些前台进程算 agent（按进程发现空闲用）
 EOF
 }
 
@@ -663,6 +667,10 @@ cmd_recompute() {
 #   tmux-whistle --notice   <done|wait|error> [msg] [--body <正文>] [pane]
 #   tmux-whistle --sub-agent-start [pane]
 #   tmux-whistle --sub-agent-stop  [pane]
+#   tmux-whistle --agent-idle [pane]
+#   tmux-whistle --prompt-start [pane]
+#   tmux-whistle --turn-end <done|error> [msg] [--body <正文>] [pane]
+#   tmux-whistle --turn-interrupt [pane]
 #
 # --activity / --notice 与用户语法走**同一条实现**（cmd_set）；
 # 唯一的差别是最后一个位置参数写成 %N 时当目标 pane —— hook 手上只有
@@ -700,6 +708,107 @@ cmd_sub_agent() {
   start) whistle_finish "$_sa_pane" running ;;
   *) whistle_finish "$_sa_pane" idle ;;
   esac
+}
+
+# 以下四个是 Codex hook 的组合写入。它们存在的唯一理由是**减少进程数**：
+# Codex 除 PostToolUse 外都同步执行，同一轮里分两次调 CLI 会让
+# SessionStart / Stop 各多付一次启动 + 全量重算 + 投递的成本（实测 Stop 0.6s）。
+#
+# 组合写入仍走 core 的两个状态函数，且只调用一次 whistle_finish ——
+# 「唯一状态写入点」没有被绕开。
+
+cmd_agent_idle() {
+  _ai_pane=$(whistle_resolve_pane "${1:-}") || exit 1
+  whistle_sub_set stop "$_ai_pane" > /dev/null || exit 1
+  whistle_activity_set idle "$_ai_pane" hook '' '' > /dev/null || exit 1
+  whistle_finish "$_ai_pane" idle
+}
+
+cmd_prompt_start() {
+  _ps_pane=$(whistle_resolve_pane "${1:-}") || exit 1
+  whistle_activity_set running "$_ps_pane" hook '' '' > /dev/null || exit 1
+
+  _ps_notice=$(whistle_tmux show -pqv -t "$_ps_pane" @whistle_notice 2> /dev/null) || _ps_notice=''
+  _ps_cleared=0
+  if whistle_is_notified "$_ps_notice"; then
+    whistle_state_clear "$_ps_pane" > /dev/null || exit 1
+    _ps_cleared=1
+  fi
+
+  whistle_finish "$_ps_pane" running || exit 1
+
+  if [ "$_ps_cleared" = 1 ]; then
+    _ps_win=$(whistle_pane_window "$_ps_pane")
+    [ -n "$_ps_win" ] && whistle_border_release "$_ps_win"
+    [ -n "$_ps_win" ] && whistle_border_status_release "$_ps_win"
+    [ -n "$_ps_win" ] && whistle_refresh_sessions "$_ps_win"
+  fi
+}
+
+# cmd_turn_end <done|error> [msg] [--body <正文>] [pane]
+cmd_turn_end() {
+  _te_state="${1:-}"
+  case "$_te_state" in
+  done | error) ;;
+  *) whistle_die "用法：$WHISTLE_PROG --turn-end <done|error> [消息] [--body <正文>] [pane]" ;;
+  esac
+  shift
+
+  _te_msg=''
+  _te_body=''
+  _te_pane=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --title)
+      _te_msg="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    --body)
+      _te_body="${2:-}"
+      shift 2 2> /dev/null || shift
+      ;;
+    %*)
+      if [ -z "$_te_pane" ] && [ $# -eq 1 ]; then
+        _te_pane="$1"
+        shift
+      else
+        _te_msg="${_te_msg:+$_te_msg }$1"
+        shift
+      fi
+      ;;
+    *)
+      _te_msg="${_te_msg:+$_te_msg }$1"
+      shift
+      ;;
+    esac
+  done
+
+  _te_pane=$(whistle_resolve_pane "$_te_pane") || exit 1
+  whistle_activity_set idle "$_te_pane" hook '' '' > /dev/null || exit 1
+  whistle_notice_set "$_te_state" "$_te_msg" "$_te_body" "$_te_pane" > /dev/null || exit 1
+  whistle_finish "$_te_pane" "$_te_state"
+}
+
+cmd_turn_interrupt() {
+  _ti_pane=$(whistle_resolve_pane "${1:-}") || exit 1
+  whistle_activity_set idle "$_ti_pane" hook '' '' > /dev/null || exit 1
+  whistle_sub_set stop "$_ti_pane" > /dev/null || exit 1
+
+  _ti_notice=$(whistle_tmux show -pqv -t "$_ti_pane" @whistle_notice 2> /dev/null) || _ti_notice=''
+  _ti_cleared=0
+  if [ "$_ti_notice" = wait ]; then
+    whistle_state_clear "$_ti_pane" > /dev/null || exit 1
+    _ti_cleared=1
+  fi
+
+  whistle_finish "$_ti_pane" idle || exit 1
+
+  if [ "$_ti_cleared" = 1 ]; then
+    _ti_win=$(whistle_pane_window "$_ti_pane")
+    [ -n "$_ti_win" ] && whistle_border_release "$_ti_win"
+    [ -n "$_ti_win" ] && whistle_border_status_release "$_ti_win"
+    [ -n "$_ti_win" ] && whistle_refresh_sessions "$_ti_win"
+  fi
 }
 
 cmd_read_window() {
@@ -1102,6 +1211,139 @@ PY
     command rm -f "$_dg_tmp"
   fi
 
+  printf '\nCodex hooks\n'
+  # Codex 的 hooks.json 与 Claude 的 settings.json 是两套格式，不能用同一段
+  # 解析器。这里同样逐事件展开，重点看三类静默漂移：
+  #   1. 命令路径指向旧 checkout
+  #   2. PostToolUse 没有 async（每次工具调用都阻塞 Codex）
+  #   3. 其它事件被误设 async（生命周期写入可能乱序）
+  _cx_hooks="${CODEX_HOOKS:-${CODEX_HOME:-${HOME}/.codex}/hooks.json}"
+  _cx_config="${CODEX_CONFIG:-${CODEX_HOME:-${HOME}/.codex}/config.toml}"
+  _cx_want="$(dirname -- "$WHISTLE_BIN_DIR")/hooks/codex.sh"
+  if [ ! -f "$_cx_hooks" ]; then
+    if command -v codex > /dev/null 2>&1; then
+      _warn_line "找不到 $_cx_hooks —— 未安装 tmux-whistle 的 Codex hooks"
+      _warn_line '跑 tmux-whistle install-codex-hooks'
+    else
+      _warn_line '未安装 Codex，跳过这一节'
+    fi
+  elif ! command -v python3 > /dev/null 2>&1; then
+    _warn_line '缺 python3，无法解析 hooks.json 的 hook 明细'
+    if grep -q 'tmux-whistle' "$_cx_hooks" 2> /dev/null; then
+      _ok_line '已配置（只做了 grep 确认）'
+    else
+      _warn_line '未配置。跑 tmux-whistle install-codex-hooks'
+    fi
+  else
+    export WHISTLE_DG_CODEX_HOOKS="$_cx_hooks"
+    export WHISTLE_DG_CODEX_CMD="$_cx_want"
+    _dg_cx_out=$(
+      python3 << 'PY' 2> /dev/null
+import json, os, sys
+
+path = os.environ["WHISTLE_DG_CODEX_HOOKS"]
+want_cmd = os.environ["WHISTLE_DG_CODEX_CMD"]
+EVENTS = ["SessionStart", "UserPromptSubmit", "PermissionRequest",
+          "PostToolUse", "SubagentStart", "SubagentStop", "Stop",
+          "Interrupt", "SessionEnd"]
+ASYNC = {"PostToolUse"}
+
+def out(kind, text):
+    sys.stdout.write("%s:%s\n" % (kind, text))
+
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception as e:
+    out("warn", "hooks.json 解析失败（%s）" % e)
+    sys.exit(0)
+
+hooks = data.get("hooks") if isinstance(data, dict) else None
+if not isinstance(hooks, dict):
+    out("warn", "hooks.json 里没有 hooks 字段 —— 未配置，跑 tmux-whistle install-codex-hooks")
+    sys.exit(0)
+
+def ours(entry):
+    for h in entry.get("hooks", []) or []:
+        if isinstance(h, dict) and "tmux-whistle" in str(h.get("command", "")):
+            return h
+    return None
+
+found = {}
+matcher_of = {}
+dups = []
+for ev in EVENTS:
+    hits = [e for e in (hooks.get(ev) or []) if isinstance(e, dict) and ours(e)]
+    found[ev] = ours(hits[0]) if hits else None
+    matcher_of[ev] = hits[0].get("matcher", "") if hits else ""
+    if len(hits) > 1:
+        dups.append(ev)
+
+missing = [ev for ev in EVENTS if not found[ev]]
+if missing:
+    out("warn", "缺 %d 个事件：%s（跑 tmux-whistle install-codex-hooks）"
+        % (len(missing), ", ".join(missing)))
+else:
+    out("ok", "%s：%d/%d 个事件已订阅" % (path, len(EVENTS), len(EVENTS)))
+
+if dups:
+    out("warn", "重复订阅：%s —— 跑 install-codex-hooks 会归一，别手改" % ", ".join(dups))
+
+for ev in EVENTS:
+    h = found[ev]
+    if not h:
+        out("info", "  %-16s 缺" % ev)
+        continue
+    actual_async = bool(h.get("async"))
+    want_async = ev in ASYNC
+    if actual_async == want_async:
+        flags = ["async" if want_async else "sync"]
+    else:
+        flags = ["async ← 应为 sync" if actual_async else "sync ← 应为 async"]
+    m = matcher_of.get(ev, "")
+    if m:
+        flags.append("matcher=%s" % m)
+    out("info", "  %-16s %s" % (ev, " ".join(flags)))
+    if actual_async != want_async:
+        if ev == "PostToolUse":
+            out("warn", "PostToolUse 是 sync —— 每次工具调用都会等 hook，建议重装")
+        else:
+            out("warn", "%s 是 async —— 生命周期写入可能乱序（SessionEnd 尤其不能）" % ev)
+
+cmds = sorted({str(h.get("command", "")) for h in found.values() if h})
+for c in cmds:
+    if c != want_cmd:
+        out("warn", "命令指向 %s" % c)
+        out("info", "  当前仓库是 %s —— 改了这边不会生效，跑 install-codex-hooks 让它指回来" % want_cmd)
+    if not os.access(c, os.X_OK):
+        out("bad", "命令不可执行：%s（chmod +x 或重装）" % c)
+PY
+    )
+    _dg_tmp="${TMPDIR:-/tmp}/tmux-whistle-doctor-$$"
+    printf '%s\n' "$_dg_cx_out" > "$_dg_tmp"
+    while IFS= read -r _dg_line; do
+      [ -n "$_dg_line" ] || continue
+      _dg_kind=${_dg_line%%:*}
+      _dg_text=${_dg_line#*:}
+      case "$_dg_kind" in
+      ok) _ok_line "$_dg_text" ;;
+      warn) _warn_line "$_dg_text" ;;
+      bad) _bad_line "$_dg_text" ;;
+      *) printf '%s\n' "$_dg_text" ;;
+      esac
+    done < "$_dg_tmp"
+    command rm -f "$_dg_tmp"
+
+    # hooks 的信任状态由 Codex 自己的 /hooks 管理，doctor 不猜它的哈希格式。
+    # 只把「新条目必须人工审核」这件事说清楚，避免用户以为装完就生效。
+    printf '  - 新安装或命令变化后，在 Codex 里输入 /hooks 审核并信任\n'
+
+    if [ -f "$_cx_config" ] \
+      && grep -Eq '^[[:space:]]*\[\[hooks\.(SessionStart|UserPromptSubmit|PermissionRequest|PostToolUse|SubagentStart|SubagentStop|Stop|Interrupt|SessionEnd)\]\]' "$_cx_config" 2> /dev/null; then
+      _warn_line "config.toml 里还有 inline [hooks]；Codex 会同时加载 hooks.json 并提示重复来源"
+    fi
+  fi
+
   printf '\n失效的旧绑定\n'
   # list-keys 的输出是多空格对齐的（"bind-key    -T prefix C-m     ..."），
   # 所以模式必须容忍任意空白，不能用单个空格。
@@ -1177,7 +1419,11 @@ doctor)
   ;;
 install-hooks)
   shift
-  exec "$WHISTLE_BIN_DIR/../lib/install-hooks.sh" "$@"
+  exec "$WHISTLE_BIN_DIR/../lib/install-agent-hooks.sh" "$@"
+  ;;
+install-codex-hooks)
+  shift
+  exec "$WHISTLE_BIN_DIR/../lib/install-codex-hooks.sh" "$@"
   ;;
 -h | --help | help)
   whistle_usage
@@ -1213,6 +1459,22 @@ install-hooks)
 --sub-agent-stop)
   shift
   cmd_sub_agent stop "$@"
+  ;;
+--agent-idle)
+  shift
+  cmd_agent_idle "$@"
+  ;;
+--prompt-start)
+  shift
+  cmd_prompt_start "$@"
+  ;;
+--turn-end)
+  shift
+  cmd_turn_end "$@"
+  ;;
+--turn-interrupt)
+  shift
+  cmd_turn_interrupt "$@"
   ;;
 --recompute)
   shift

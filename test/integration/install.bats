@@ -14,7 +14,7 @@ setup() {
   # 不继承宿主机 PATH：否则 macOS 真 osascript 会混进「无后端」分支。
   # install dry-run 仍需要这些基础工具，逐一链接但不带任何通知后端。
   local tool
-  for tool in dirname awk sed mkdir rm ln cp mv date chmod; do
+  for tool in dirname awk sed mkdir rm ln cp mv date chmod python3; do
     ln -s "$(command -v "$tool")" "$INSTALL_TOOLS_BIN/$tool"
   done
 }
@@ -109,6 +109,19 @@ EOF
   assert_contains "$output" 'terminal-notifier / osascript / notify-send'
   assert_not_contains "$output" 'Script Editor'
   [ ! -e "$INSTALL_UNEXPECTED" ]
+}
+
+@test "install: 默认同时预览 Claude Code 与 Codex hooks" {
+  run env \
+    HOME="$INSTALL_HOME" \
+    WHISTLE_HOME="$INSTALL_HOME/data/tmux-whistle" \
+    WHISTLE_BIN_DIR="$INSTALL_HOME/bin" \
+    TMUX_CONF_LOCAL="$INSTALL_HOME/tmux.conf.local" \
+    PATH="$INSTALL_FAKE_BIN:$INSTALL_TOOLS_BIN" \
+    "$WHISTLE_ROOT/install.sh" --dry-run
+
+  assert_eq "$status" 0
+  assert_contains "$output" '会安装 Claude Code 与 Codex hooks'
 }
 
 # -- OpenCode 插件形态（docs/opencode-integration-plan.md §6.1）-------------

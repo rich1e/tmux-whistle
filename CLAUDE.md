@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目一句话
 
-tmux 插件：让 agent（Claude Code 或任何脚本）把状态**推**给 tmux，跨 session 显示在状态栏上。
+tmux 插件：让 agent（Claude Code / Codex / OpenCode 或任何脚本）把状态**推**给 tmux，
+跨 session 显示在状态栏上。
 「我做完了」和「我在等你」由 agent 自己上报 —— tmux 层面不猜、不轮询。
 
 ## 开发命令
@@ -28,13 +29,14 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 502 项测试（89 单测 + 342 集成 + 71 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 648 项测试（143 单测 + 384 集成 + 121 e2e）。
 
 ## 架构：分层与唯一写入点
 
 ```
 L4 生产者   hooks/claude-code.sh   Claude Code hook 推送（主路径，async:true）
-            hooks/opencode/tui.js  OpenCode TUI 插件 → hooks/opencode.sh（第二个接入源）
+            hooks/codex.sh          Codex hook 推送（第二个接入源）
+            hooks/opencode/tui.js  OpenCode TUI 插件 → hooks/opencode.sh（第三个接入源）
             lib/detect.sh          关键词兜底轮询（默认关，会误报）
                         │ 调 bin/tmux-whistle
                         ▼
@@ -49,7 +51,20 @@ L1 存储     tmux user option（tmux server 内存，不落盘、不跨 tmux �
 旁路        lib/spin.sh            Braille 帧推进器（只在有 running 时活着）
 ```
 
-**两个接入源的区别（不要照抄 Claude 那套）**
+**三个接入源的区别（不要照抄 Claude 那套）**
+
+Codex 的 hook 进程也在 pane 进程树里，`TMUX_PANE` 可信，但事件集不同：
+
+- 权限等待是 `PermissionRequest`，子 agent 是 `SubagentStart` / `SubagentStop`；
+  **没有** `Notification` / `StopFailure`。
+- `PostToolUse` 是唯一异步事件，只清 wait、不写活动态；其余生命周期事件同步，
+  保证 `SessionStart → UserPromptSubmit → Stop` 的写入顺序。
+- `Stop` 输入没有 `background_tasks`；主回合结束时照常写 `idle + done`。若子 agent
+  还在跑，`@whistle_sub` 让推导层合成 `running` —— 通知 rank 更高，用户先看到 `◆`，
+  读掉后回到 `▶`，`SubagentStop` 清标记后再回 `idle`。
+- 配置在 `~/.codex/hooks.json`。安装器必须**追加**条目：Codex 的 trust key 带
+  `event/index`，前插会让用户已有的第三方 hook（如 ping-island）失去信任。
+- 新 hook 由 Codex 按哈希要求人工审核；安装器只能提示用户输入 `/hooks`。
 
 OpenCode 是「TUI 进程 + `opencode serve --service` 共享守护」双进程。**事件里没有任何
 pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**启动快照** —— 所以：
@@ -103,7 +118,7 @@ publish，不用重载 tmux 配置。
 **CLI 表面**：`done|wait|error`（写**通知通道**）、`running|idle`（写**活动通道**），
 都可以带 `--title` / `--body`；`run -- 命令`（开始置活动 `running`，结束置活动
 `idle` + 通知 `done`/`error`，带耗时）、`clear` / `list` / `menu` / `jump`（只碰通知通道）/
-`on|off` / `doctor` / `install-hooks`。菜单键是 `prefix + n`。
+`on|off` / `doctor` / `install-hooks` / `install-codex-hooks`。菜单键是 `prefix + n`。
 hook 专用、不进用户语法的内部子命令：`--activity <running|idle|gone>`、
 `--notice <done|wait|error>`、`--sub-agent-start`、`--sub-agent-stop`。
 菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
@@ -182,6 +197,8 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
 
 **绝不覆盖别人的东西**：`lib/install-hooks.sh` 往 `~/.claude/settings.json` 合并时只增删
 带 `tmux-whistle` marker 的条目，用户已有的 hook 原样保留；改前先备份。
+`lib/install-codex-hooks.sh` 对 `~/.codex/hooks.json` 同一原则，且**只追加**我们的
+matcher 组；Codex 的信任状态按 `event/index` 记录，前插会让别人的已信任条目错位。
 
 **OpenCode 侧：启动必须报 `idle`，事件必须串行**（2026-11-13 真机踩到）
 

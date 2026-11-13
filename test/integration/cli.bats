@@ -1562,6 +1562,10 @@ select-pane -t $p"
   assert_not_contains "$output" '--activity'
   assert_not_contains "$output" '--notice'
   assert_not_contains "$output" '--sub-agent'
+  assert_not_contains "$output" '--agent-idle'
+  assert_not_contains "$output" '--prompt-start'
+  assert_not_contains "$output" '--turn-end'
+  assert_not_contains "$output" '--turn-interrupt'
 }
 
 # -- doctor ----------------------------------------------------------------
