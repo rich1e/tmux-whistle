@@ -225,6 +225,11 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_icon_error ⚠
 @whistle_icon_running ▶
 @whistle_icon_idle ◉
+@whistle_agent_icons on
+@whistle_icon_agent_claude ✶
+@whistle_icon_agent_codex ◈
+@whistle_icon_agent_opencode ◫
+@whistle_icon_agent_other ·
 @whistle_spin on
 @whistle_spin_style claude
 @whistle_spin_interval 0.5
@@ -557,8 +562,9 @@ whistle_aggregate() {
 
 # whistle_count_states
 #
-# stdin  = 与 whistle_aggregate 同一份推导输出（5 列或 9 列：
-#          9 列的是菜单那份，pane id 在第 5 列）
+# stdin  = 与 whistle_aggregate 同一份推导输出（5 列或 10 列：
+#          10 列的是菜单那份，pane id 在第 5 列；有效态紧跟在 pane id 后面，
+#          所以下面按 pane id 定位相对列。）
 # stdout = "<running>|<idle>|<done>|<wait>|<error>" 各有多少个 pane
 #
 # 与 whistle_aggregate 的分工：它算「窗口该显示哪个状态」+ 待处理总数，
@@ -572,7 +578,7 @@ whistle_aggregate() {
 # 两边对不上时最难看懂，调用方是按位置 cut 的。
 #
 # 列定位：pane id（以 % 开头的那一列）之后依次是有效态、通知态、活动态。
-# 5 列那份 pane id 在第 1 列，9 列那份在第 5 列 —— 所以不写死列号，
+# 5 列那份 pane id 在第 1 列，10 列那份在第 5 列 —— 所以不写死列号，
 # 按 pane id 那一列定位，两种布局都能吃。
 whistle_count_states() {
   awk -F'|' '
@@ -1250,7 +1256,7 @@ whistle_list_lines() {
 }
 
 # 所有 pane 的 (session, window_id, window_name, window_index, pane_id, 有效态,
-#               通知态, 活动态, 消息)
+#               通知态, 活动态, agent 类型, 消息)
 #
 # 与 whistle_pending_windows 的区别：**不过滤** whistle_is_notified，
 # 所以 running / idle 也在内 —— 菜单要能列出「哪些 agent」，
@@ -1264,6 +1270,10 @@ whistle_list_lines() {
 #
 # 第 5 列是 pane id，菜单据此 select-pane —— 窗口切成多格时不会落在隔壁格子。
 #
+# 第 9 列是 agent 类型（claude / codex / opencode / other），菜单据此画
+# 品牌图标。来源是 pane 的前台进程名（`#{pane_current_command}`），按前缀
+# 归一化 —— 与「谁算 agent」同一套事实，不从屏幕文字里猜。
+#
 # 同一窗口出现多条时，行尾（消息列内）追加「·格N」区分：N 是该 pane 在窗口里
 # 的位置。位置按 list-panes 顺序**数所有 pane**（含不入菜单的）得到 —— 它天然
 # 等于 pane_index - pane_base_index + 1，与用户是否设了 pane-base-index 无关。
@@ -1271,30 +1281,46 @@ whistle_list_lines() {
 #
 # ⚠️ 后缀拼在**行尾**而不是新增一列：消息列必须在末位（POSIX read 在字段数
 # 多于变量数时会把余下的全塞进最后一个变量），且下游（whistle_menu_model、
-# whistle_menu_render、cmd_menu 的降级路径、cmd_menu_args）都按 9 列读。
+# whistle_menu_render、cmd_menu 的降级路径、cmd_menu_args）都按 10 列读。
 #
-# 第 10 列是子 agent 标记（可选列）、第 11 列是前台进程名：
-# 没上报过、但跑着 agent 的 pane 也要列进菜单（活动态算 idle）——
-# 与窗口徽章、状态栏汇总同一口径。
+# list-panes 的 format 里命令列出现**两次**：第 6 位那份是为了让推导层把它当
+# 前导列原样带出来（归一化成 agent 类型），末位那份是推导层判「哪些进程算
+# agent」用的 $NF。推导层会把末位那一列去掉。
 #
-# 注意：推导层会**去掉命令列与子 agent 标记列**，所以下面 awk 看到的行是 9 列。
+# 注意：推导层输出的是 10 列（前 5 列 + 命令 + 有效态/通知态/活动态/消息），
+# 下面 awk 再把它重排成「前 5 列 + 有效态/通知态/活动态/agent 类型/消息」。
 whistle_agent_windows() {
   whistle_tmux list-panes -a \
-    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' \
+    -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' \
     2> /dev/null \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 6 5 \
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 7 6 \
     | awk -F'|' -v gone="$WHISTLE_GONE_STATE" '
     {
       # 窗口内位置：**每一行都数**（包括下一行就被过滤掉的 pane），
       # 于是「格N」是它在该窗口里的真实位置，而不是「第几个 agent」。
       pos[$2]++
-      if ($6 == "" || $6 == gone) next
+      # 第 6 列是前台进程名，第 7 列起才是状态块 —— 列号被挪过，别再写 $6。
+      if ($7 == "" || $7 == gone) next
+
+      # 进程名 → agent 类型。去掉 .exe 再按前缀匹配，于是 claude / claude.exe
+      # 落在同一种；认不出的（手动 tmux-whistle done、shell 里的包装器）记 other。
+      cmd = tolower($6)
+      sub(/\.exe$/, "", cmd)
+      if (cmd ~ /^claude/) agent = "claude"
+      else if (cmd ~ /^codex/) agent = "codex"
+      else if (cmd ~ /^opencode/) agent = "opencode"
+      else agent = "other"
+
+      # 消息列必须原样保留（里面可以有 |），用 $10 起把它拼回去。
+      msg = $10
+      for (k = 11; k <= NF; k++) msg = msg "|" $k
+
       n++
-      row[n] = $0
+      # 重排：前 5 列 + 有效态 + 通知态 + 活动态 + agent 类型 + 消息
+      row[n] = $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $7 "|" $8 "|" $9 "|" agent "|" msg
       win[n] = $2
       at[n] = pos[$2]
-      # 消息为空时行尾就是那个 | 分隔符 —— 靠它判，消息里带 | 也不会误判。
-      empty[n] = (substr($0, length($0), 1) == "|")
+      empty[n] = (msg == "")
       cnt[$2]++
     }
     END {

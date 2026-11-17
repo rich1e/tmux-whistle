@@ -123,9 +123,9 @@ run_popup() {
   # 第一项从 ◉ 空闲变成 ▶ 运行中 = 菜单自己重绘过（整个场景只开一次菜单）。
   # 锚在行首状态而非消息文本：popup 内宽有限，长消息会被 clip 截断，
   # 拿完整 marker 当判据会假红（2026-11-02 踩过）。初始两项都是 idle，
-  # 所以 "(1) ▶ 运行中" 只在刷新之后出现。
+  # 所以 "(1) <agent> ▶ 运行中" 只在刷新之后出现。
   assert_contains \
-    "$(grep -a '(1) ▶ 运行中' "$EXPECT_LOG")" \
+    "$(grep -a '(1) .*▶ 运行中' "$EXPECT_LOG")" \
     '运行中'
   assert_contains "$(cat "$EXPECT_LOG")" 'POPUP_FRESH_RUNNING_MARKER'
 }

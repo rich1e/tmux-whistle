@@ -647,6 +647,40 @@ pane_of() {
   assert_eq "$(printf '%s\n' "$output" | grep -c '·格')" '2'
 }
 
+@test "agent_windows: 前台跑着 claude 的 pane 带 claude 类型列（10 列）" {
+  # agent 图标不能靠 cwd 或屏幕文字猜：判据是 pane 的前台进程名，
+  # 与「哪些进程算 agent」同一套事实。
+  #
+  # 必须是一个**真的叫 claude 的可执行文件**：pane_current_command 取的是
+  # 前台进程的 executable 名，脚本会报解释器（bash），符号链接会解析成
+  # /bin/sleep。系统二进制拷改名会被 macOS 杀掉，所以就地编一个。
+  command -v cc > /dev/null 2>&1 || skip "没有 C 编译器，无法伪造 pane_current_command"
+  local fakes
+  fakes="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$fakes"
+  printf '#include <unistd.h>\nint main(void){ sleep(30); return 0; }\n' \
+    > "$BATS_TEST_TMPDIR/agent.c"
+  cc -O0 -o "$fakes/claude" "$BATS_TEST_TMPDIR/agent.c"
+  wt split-window -t w1 "$fakes/claude"
+
+  wt_wait_until 3000 \
+    "[ \"\$(wt list-panes -t w1 -F '#{pane_current_command}' | tail -1)\" = claude ]"
+
+  run whistle_agent_windows
+  assert_eq "$status" 0
+  # 10 列：session|window_id|window_name|index|pane|eff|notice|activity|agent|msg
+  assert_eq "$(printf '%s\n' "$output" | tail -1 | awk -F'|' '{print NF}')" '10'
+  assert_contains "$output" '|claude|'
+}
+
+@test "agent_windows: 认不出的前台命令记 other，不冒充品牌" {
+  whistle_state_set "done" '做完了'
+
+  run whistle_agent_windows
+  assert_eq "$status" 0
+  assert_contains "$output" '|other|'
+}
+
 @test "conf: 未设置的 option 回落到默认表" {
   run whistle_conf '@whistle_color_done'
   assert_eq "$output" '#af5fff'

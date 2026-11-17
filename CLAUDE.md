@@ -131,7 +131,9 @@ publish，不用重载 tmux 配置。
 `on|off` / `doctor` / `install-hooks` / `install-codex-hooks`。菜单键是 `prefix + n`。
 hook 专用、不进用户语法的内部子命令：`--activity <running|idle|gone>`、
 `--notice <done|wait|error>`、`--sub-agent-start`、`--sub-agent-stop`。
-菜单项格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，
+菜单项格式是 `agent图标 状态图标 状态 [session]: 窗口 消息` —— agent 图标按
+pane 的前台进程名（`claude` / `codex` / `opencode` / `other`）画，`@whistle_agent_icons off`
+可整列关掉；session 名用 `[]` 裹住，
 和窗口名、agent 的话分开（`whistle_menu_item_label` 是唯一定义处，
 `cmd_menu` 与 `cmd_menu_args` 共用它）。**菜单按 agent 列出，一个 pane 一条**；
 同一窗口里有多个 agent 时，消息列末尾带 `·格N`（N 是该 pane 在窗口里的位置）
@@ -140,6 +142,9 @@ hook 专用、不进用户语法的内部子命令：`--activity <running|idle|g
 **图标与颜色**（都可配，见 `WHISTLE_DEFAULTS`）：`◆` 完成（紫 `#af5fff`）、`◔` 等待、
 `⚠` 错误、`▶` 运行中（绿 `#00af00`）、`◉` 空闲（灰 `#8a8a8a`）、`⚑` 待处理总数（青 `#5fd7d7`）。
 菜单里每项都带对应图标，且与状态栏语义一致：`▶` = 在跑、`◉` = 空闲。
+agent 图标默认是 `✶` / `◈` / `◫`（主字体自带的符号，尺寸与正文一致）；
+想用 Nerd Fonts 的品牌码位（`cod-claude` U+EC82 / `cod-openai` U+EC81）可以逐项覆盖，
+但部分终端会把回退字形画得比正文大一圈；缺字形时设 `@whistle_agent_icons off`。
 
 ## 不变量（改代码前必须知道）
 
@@ -397,8 +402,11 @@ input`），`hooks/claude-code.sh` 把它映射成 `wait`（标题「等你回�
 全部，消息里带 `|` 也不会被截断），而**中间不能多留列** —— 多留一列，
 消息列就变成「消息|进程名」，而 `@whistle_win_msg` 与菜单标签会把它原样显示出去。
 `whistle_resolve_idle_panes` 因此**把命令列整列去掉**再往下传，输出的列布局是
-`<前导列> | pane_id | 有效态 | 通知态 | 活动态 | 消息`（消息在末位）；
-`whistle_aggregate` 只读 **5** 个变量，菜单那侧读 **9** 个 —— 改列数时两边都要跟着改。
+`<前导列> | 有效态 | 通知态 | 活动态 | 消息`（消息在末位）；
+`whistle_agent_windows` 再把前导列里的前台进程名归一化成 agent 类型、挪到消息前面，
+得到 **10 列**：`session|wid|窗口名|序号|pane_id|有效态|通知态|活动态|agent|消息`。
+`whistle_aggregate` 只读 **5** 个变量，菜单模型读 **10** 列（再吐 9 列给渲染）——
+改列数时三处都要跟着改。
 
 **`gone` 不是用户能报的状态**：只有 `SessionEnd` 会写它（`whistle_forget_agent`）。
 它解决的是一个具体竞态：钩子跑的时候 agent 进程**还没退出**，

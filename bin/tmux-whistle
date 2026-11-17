@@ -503,14 +503,15 @@ cmd_menu() {
   # 模型：宽度与行数都按它算（菜单项 ≤26，多的折进溢出提示）。
   _mn_model=$(printf '%s\n' "$_items" | whistle_menu_model)
 
-  # 宽度按内容定：最长的一行有多宽，popup 就装多宽（+2 是左右边框）。
-  # 这样内容少时不会留一大片空白；内容多时靠 whistle_menu_clip 截断，不会撑破布局。
+  # 宽度按内容定：最长的一行有多宽，popup 就装多宽（+2 是左右边框，+2 是
+  # 右侧留白 —— 文字紧贴右边框时看着像被裁掉了）。内容多时靠 whistle_menu_clip
+  # 截断；留白不参与 clip，所以最长的一行右侧仍有 2 列空隙。
   _mn_pal=$(whistle_menu_palette)
   _mn_inner=$(printf '%s\n' "$_mn_model" | whistle_menu_model_width "$_mn_pal")
   case "$_mn_inner" in
   '' | *[!0-9]*) _mn_inner=40 ;;
   esac
-  _mn_width=$((_mn_inner + 2))
+  _mn_width=$((_mn_inner + 4))
 
   # 上限：不许超过主窗口宽度。绑定里传的是 #{window_width}；
   # 没传（比如手动跑 tmux-whistle menu）就用最宽的那个 client。
@@ -550,8 +551,10 @@ cmd_menu() {
     "'$_mn_self' --menu-ui" 2> /dev/null; then
     printf '没有可用的客户端。在 tmux 会话里按 prefix + n 打开菜单。\n\n'
     # 纯文本降级，没有菜单可选中，所以不带样式转义。
-    while IFS='|' read -r s _wid wn _wi _pid eff _notice _activity msg; do
-      printf '%s %s  [%s]: %s  %s\n' "$(whistle_menu_state_icon "$eff")" \
+    while IFS='|' read -r s _wid wn _wi _pid eff _notice _activity agent msg; do
+      _dn_a=$(whistle_menu_agent_icon "$agent" "$_mn_pal")
+      [ -z "$_dn_a" ] || _dn_a="$_dn_a "
+      printf '%s%s %s  [%s]: %s  %s\n' "$_dn_a" "$(whistle_menu_state_icon "$eff")" \
         "$(whistle_state_label "$eff")" "$s" "$wn" "$msg"
     done << EOF
 $_items
@@ -572,10 +575,10 @@ cmd_menu_args() {
   [ -n "$_items" ] || return 0
 
   # 模型行的消息仍在末位；溢出行只有类型与隐藏数两列。
-  while IFS='|' read -r _kind _key _wid _pid _s _wn _eff _msg; do
+  while IFS='|' read -r _kind _key _wid _pid _s _wn _eff _agent _msg; do
     case "$_kind" in
     item)
-      printf '%s\n' "$(whistle_menu_item_label "$_eff" "$_s" "$_wn" "$_msg")"
+      printf '%s\n' "$(whistle_menu_item_label "$_eff" "$_agent" "$_s" "$_wn" "$_msg")"
       printf '%s\n' "$_key"
       printf '%s\n' "switch-client -t $_s ; select-window -t $_wid ; run-shell -b '$WHISTLE_SELF clear -t $_wid --select $_pid'"
       ;;

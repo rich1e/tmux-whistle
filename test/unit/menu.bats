@@ -48,6 +48,10 @@ setup() {
                 "$(whistle_menu_state_icon "$_s")" \
                 "$(whistle_menu_ansi_fg "$(whistle_menu_state_color "$_s")")"
         done
+        printf 'agent:claude|✶\n'
+        printf 'agent:codex|◈\n'
+        printf 'agent:opencode|◫\n'
+        printf 'agent:other|·\n'
     }
     # shellcheck disable=SC2329 # 由渲染器间接调用
     whistle_state_label() {
@@ -65,20 +69,20 @@ setup() {
 
 @test "menu model: 待处理优先，消息里的竖线完整保留在末列" {
     run whistle_menu_model << 'EOF'
-dayfold|@1|editor|1|%1|idle||idle|等待输入
-dayfold|@2|claude.exe|2|%2|done|done|running|完成|含竖线
+dayfold|@1|editor|1|%1|idle||idle|other|等待输入
+dayfold|@2|claude.exe|2|%2|done|done|running|claude|完成|含竖线
 EOF
     assert_eq "$status" 0
     assert_eq "$(printf '%s\n' "$output" | sed -n '1p')" \
-        'item|1|@2|%2|dayfold|claude.exe|done|完成|含竖线'
+        'item|1|@2|%2|dayfold|claude.exe|done|claude|完成|含竖线'
     assert_eq "$(printf '%s\n' "$output" | sed -n '2p')" \
-        'item|2|@1|%1|dayfold|editor|idle|等待输入'
+        'item|2|@1|%1|dayfold|editor|idle|other|等待输入'
 }
 
 @test "menu model: 27 项只输出 26 个可选项与一条溢出提示" {
     local input='' i
     for ((i = 1; i <= 27; i++)); do
-        input+="dayfold|@$i|w$i|$i|%$i|done|done||消息 $i"$'\n'
+        input+="dayfold|@$i|w$i|$i|%$i|done|done||other|消息 $i"$'\n'
     done
 
     run whistle_menu_model <<< "$input"
@@ -96,8 +100,8 @@ EOF
 
 @test "menu selection: 重排后按 pane id 跟随选中项" {
     run whistle_menu_reconcile_selection '%2' 2 << 'EOF'
-item|1|@2|%2|dayfold|w2|done|完成
-item|2|@1|%1|dayfold|w1|idle|等待
+item|1|@2|%2|dayfold|w2|done|other|完成
+item|2|@1|%1|dayfold|w1|idle|other|等待
 EOF
     assert_eq "$status" 0
     assert_eq "$output" '%2|1'
@@ -107,9 +111,9 @@ EOF
     # 一个窗口里两个 agent 时 window id 相同 —— 按 window id 跟随会永远命中
     # 第一条，第二条永远选不中。选中身份必须是 pane id。
     run whistle_menu_reconcile_selection '%8' 1 << 'EOF'
-item|1|@2|%2|dayfold|claude.exe|running|
-item|2|@2|%8|dayfold|claude.exe|idle|
-item|3|@3|%4|ideal|claude.exe|idle|
+item|1|@2|%2|dayfold|claude.exe|running|claude|
+item|2|@2|%8|dayfold|claude.exe|idle|claude|
+item|3|@3|%4|ideal|claude.exe|idle|claude|
 EOF
     assert_eq "$status" 0
     assert_eq "$output" '%8|2'
@@ -118,7 +122,7 @@ EOF
 @test "menu selection: 选中项被藏到第 27 项时退回第 26 个可见项" {
     local input='' model i
     for ((i = 1; i <= 27; i++)); do
-        input+="dayfold|@$i|w$i|$i|%$i|done|done||消息 $i"$'\n'
+        input+="dayfold|@$i|w$i|$i|%$i|done|done||other|消息 $i"$'\n'
     done
     model=$(whistle_menu_model <<< "$input")
 
@@ -129,9 +133,9 @@ EOF
 
 @test "menu selection: 选中 pane 消失且原索引越界时夹到最后一项" {
     run whistle_menu_reconcile_selection '%2' 9 << 'EOF'
-item|1|@1|%1|dayfold|w1|idle|一
-item|2|@3|%3|dayfold|w3|idle|三
-item|3|@4|%4|dayfold|w4|idle|四
+item|1|@1|%1|dayfold|w1|idle|other|一
+item|2|@3|%3|dayfold|w3|idle|other|三
+item|3|@4|%4|dayfold|w4|idle|other|四
 EOF
     assert_eq "$status" 0
     assert_eq "$output" '%4|3'
@@ -199,7 +203,7 @@ EOF
 @test "menu select-key: q 选择第 26 个可见项" {
     local input='' model i
     for ((i = 1; i <= 26; i++)); do
-        input+="dayfold|@$i|w$i|$i|%$i|done|done||消息 $i"$'\n'
+        input+="dayfold|@$i|w$i|$i|%$i|done|done||other|消息 $i"$'\n'
     done
     model=$(whistle_menu_model <<< "$input")
 
@@ -211,7 +215,7 @@ EOF
 @test "menu select-key: 不足 26 项时 q 不执行操作" {
     local input='' model i
     for ((i = 1; i <= 25; i++)); do
-        input+="dayfold|@$i|w$i|$i|%$i|done|done||消息 $i"$'\n'
+        input+="dayfold|@$i|w$i|$i|%$i|done|done||other|消息 $i"$'\n'
     done
     model=$(whistle_menu_model <<< "$input")
 
@@ -238,24 +242,42 @@ EOF
 
 @test "menu render: 帧包含标题、状态、窗口、消息与快捷键" {
     run whistle_menu_render '%1' 120 << 'EOF'
-item|1|@1|%1|dayfold|editor|done|做完了
-item|2|@2|%2|main|shell|running|继续执行
+item|1|@1|%1|dayfold|editor|done|claude|做完了
+item|2|@2|%2|main|shell|running|other|继续执行
 EOF
     assert_eq "$status" 0
     assert_contains "$output" 'tmux-whistle'
     assert_contains "$output" '(1)'
     assert_contains "$output" '(2)'
-    assert_contains "$output" '◆ 完成 [dayfold]: editor 做完了'
-    assert_contains "$output" '▶ 运行中 [main]: shell 继续执行'
+    assert_contains "$output" '✶ ◆ 完成 [dayfold]: editor 做完了'
+    assert_contains "$output" '· ▶ 运行中 [main]: shell 继续执行'
     assert_not_contains "$output" '#['
+}
+
+@test "menu agent: 调色板按 agent 类型取图标，未知类型回落空" {
+    local pal
+    pal=$(whistle_menu_palette)
+
+    run whistle_menu_agent_icon claude "$pal"
+    assert_eq "$status" 0
+    assert_eq "$output" '✶'
+
+    run whistle_menu_agent_icon opencode "$pal"
+    assert_eq "$output" '◫'
+
+    run whistle_menu_agent_icon other "$pal"
+    assert_eq "$output" '·'
+
+    run whistle_menu_agent_icon '' "$pal"
+    assert_eq "$output" ''
 }
 
 @test "menu render: 反显只施加在 selected pane 对应行" {
     local esc first second
     esc=$(printf '\033')
     run whistle_menu_render '%2' 120 << 'EOF'
-item|1|@1|%1|dayfold|editor|done|一
-item|2|@2|%2|dayfold|shell|idle|二
+item|1|@1|%1|dayfold|editor|done|other|一
+item|2|@2|%2|dayfold|shell|idle|other|二
 EOF
     assert_eq "$status" 0
     first=$(printf '%s\n' "$output" | sed -n '2p')
@@ -269,12 +291,12 @@ EOF
     local esc line plain
     esc=$(printf '\033')
     run whistle_menu_render '%1' 32 << 'EOF'
-item|1|@1|%1|dayfold|editor|done|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+item|1|@1|%1|dayfold|editor|done|other|abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 EOF
     assert_eq "$status" 0
     line=$(printf '%s\n' "$output" | sed -n '2p')
     plain=$(printf '%s\n' "$line" | sed -e "s/${esc}\\[[0-9;]*m//g")
-    assert_eq "$plain" '(1) ◆ 完成 [dayfold]: editor abc'
+    assert_eq "$plain" '(1) · ◆ 完成 [dayfold]: editor a'
     case "$line" in
     *"${esc}[0m") ;;
     *)
@@ -286,13 +308,13 @@ EOF
 
 @test "menu render: 中文与 emoji 保持完整，窄列不输出半个 UTF-8 字符" {
     run whistle_menu_render '%1' 120 << 'EOF'
-item|1|@1|%1|dayfold|编辑器|done|中文🙂🚀完成
+item|1|@1|%1|dayfold|编辑器|done|other|中文🙂🚀完成
 EOF
     assert_eq "$status" 0
     assert_contains "$output" '[dayfold]: 编辑器 中文🙂🚀完成'
 
     run whistle_menu_render '%1' 31 << 'EOF'
-item|1|@1|%1|dayfold|editor|done|🙂中文
+item|1|@1|%1|dayfold|editor|done||🙂中文
 EOF
     assert_eq "$status" 0
     assert_contains "$output" '🙂'
@@ -304,27 +326,29 @@ EOF
 @test "menu render: render_item 只画一行，选中与否只差反显" {
     local esc line
     esc=$(printf '\033')
-    line='item|2|@2|%2|dayfold|编辑器|done|做完了'
+    line='item|2|@2|%2|dayfold|编辑器|done|claude|做完了'
+    # UI 在进入事件循环前就把调色板导出到 _mu_pal；单行重绘直接查表。
+    _mu_pal=$(whistle_menu_palette)
 
     run whistle_menu_render_item "$line" 1 120
     assert_eq "$status" 0
     assert_contains "$output" "${esc}[7m"
-    assert_contains "$output" '(2) ◆ 完成 [dayfold]: 编辑器 做完了'
+    assert_contains "$output" '(2) ✶ ◆ 完成 [dayfold]: 编辑器 做完了'
 
     run whistle_menu_render_item "$line" 0 120
     assert_eq "$status" 0
     assert_not_contains "$output" "${esc}[7m"
-    assert_contains "$output" '(2) ◆ 完成'
+    assert_contains "$output" '(2) ✶ ◆ 完成'
 }
 
 @test "menu model: 最长一行的显示列数就是 popup 的内容宽度" {
     # popup 按内容定宽，所以「多宽」必须和渲染时用的宽度算法一致（同一套 awk）。
     local line width
-    line='(1) ◉ 空闲 [main]: w1'
+    line='(1) · ◉ 空闲 [main]: w1'
     width="$(printf '%s\n' "$line" | whistle_menu_clip '' 0 maxwidth)"
 
     run whistle_menu_model_width "$(whistle_menu_palette)" << EOF
-item|1|@1|%1|main|w1|idle|
+item|1|@1|%1|main|w1|idle|other|
 EOF
     assert_eq "$status" 0
     # 标题 "tmux-whistle" 也参与取最大值，但这一行更长。
@@ -345,7 +369,7 @@ EOF
 
 @test "menu render: overflow 只有不可选提示且没有快捷键" {
     run whistle_menu_render '%1' 120 << 'EOF'
-item|1|@1|%1|dayfold|editor|done|一
+item|1|@1|%1|dayfold|editor|done|other|一
 overflow|3
 EOF
     assert_eq "$status" 0
@@ -362,7 +386,7 @@ EOF
     esc=$(printf '\033')
     message=$(printf 'bad\033[7m#[fg=red]text')
     run whistle_menu_render '' 120 << EOF
-item|1|@1|%1|day#[blink]fold|editor|done|$message
+item|1|@1|%1|day#[blink]fold|editor|done|other|$message
 EOF
     assert_eq "$status" 0
     assert_contains "$output" 'bad'

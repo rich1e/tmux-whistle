@@ -196,6 +196,11 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_icon_error` | `⚠` | 错误符号 |
 | `@whistle_icon_running` | `▶` | 运行中符号（`@whistle_spin on` 时是动画帧，计数为 0 或 `spin off` 时用它） |
 | `@whistle_icon_idle` | `◉` | 空闲符号（汇总的 `◉N`、窗口徽章、菜单三处共用） |
+| `@whistle_agent_icons` | `on` | 菜单里是否画 agent 品牌图标（终端缺字形时设 `off` 回到旧样式） |
+| `@whistle_icon_agent_claude` | `✶` | Claude 行的图标 |
+| `@whistle_icon_agent_codex` | `◈` | Codex 行的图标 |
+| `@whistle_icon_agent_opencode` | `◫` | OpenCode 行的图标 |
+| `@whistle_icon_agent_other` | `·` | 认不出 agent 的行的占位图标（设空串则不画） |
 | `@whistle_agent_cmds` | `claude claude.exe codex codex.exe opencode` | 哪些前台进程算「agent」（按进程发现空闲时用） |
 | **动画** | | |
 | `@whistle_spin` | `on` | running 用星形帧轮转（`off` 退回静态图标） |
@@ -249,6 +254,22 @@ set -g @whistle_icon_pending ''
 ```
 
 图标要过一遍消毒（剔掉 `# { } |`），所以填这些字符不会破坏状态栏。**设成空串**与**不设置**是两回事：不设置用默认图标，设成空串就是真的不显示。
+
+```tmux
+# 菜单行首的 agent 图标：默认 ✶ / ◈ / ◫ —— 这三个都在 Maple Mono NF 自带字形里，
+# 与正文同一套度量，不会比文字大一截。
+# 若你的 Nerd Fonts ≥ 3.5.1、且终端回退渲染正常，可以换成品牌码位
+# （把 U+EC82 / U+EC81 对应的字符直接粘进配置）：
+#   @whistle_icon_agent_claude = U+EC82（cod-claude）
+#   @whistle_icon_agent_codex  = U+EC81（cod-openai）
+# 否则保持默认。缺字形时整列关掉：
+set -g @whistle_agent_icons off
+```
+
+> 品牌码位属于 PUA，只有终端回退到 Symbols Nerd Font 时才画得出来；部分终端会把
+> 回退字形画得比正文大一圈，挤乱行高。默认那套来自主字体，尺寸稳定。
+
+Agent 类型由 pane 的**前台进程名**判定（`claude*` / `codex*` / `opencode*`，去掉 `.exe` 后按前缀匹配），认不出的记 `other` 显示 `·` —— 不从 cwd 或屏幕文字里猜。
 
 **改颜色和图标不需要重载配置** —— 徽章是纯 format，重跑一次 `scripts/setup.sh`（或 `prefix + r`）即可。
 
@@ -445,7 +466,7 @@ session 里的细节"。
 
 | 操作 | 效果 |
 |---|---|
-| **`prefix + n`** | 弹出 agent 菜单。**按 agent 列出，一个 pane 一条**（不是按窗口）—— 所以菜单里的条目数就是 agent 数；同一窗口里有多个 agent 时，条目末尾带 `·格2` 表示它是该窗口里的第 2 格。每项的格式是 `图标 状态 [session]: 窗口 消息` —— session 名用 `[]` 裹住，和窗口名、agent 的话分开；每项都带状态图标（`◆` 完成 / `◔` 等待 / `⚠` 错误 / `▶` 运行中 / `◉` 空闲）；**待处理项与运行中/空闲的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，其余只是跳过去看看。菜单开着时状态会**自动刷新**（agent 跑完、通知到达都会立刻反映出来），列表重排后高亮仍跟着原来那个 agent；方向键选择、回车进入、`Esc` 关闭 |
+| **`prefix + n`** | 弹出 agent 菜单。**按 agent 列出，一个 pane 一条**（不是按窗口）—— 所以菜单里的条目数就是 agent 数；同一窗口里有多个 agent 时，条目末尾带 `·格2` 表示它是该窗口里的第 2 格。每项的格式是 `agent图标 状态图标 状态 [session]: 窗口 消息` —— agent 图标标出这一行是谁（Claude / Codex / OpenCode，`·` 表示认不出），session 名用 `[]` 裹住，和窗口名、agent 的话分开；每项都带状态图标（`◆` 完成 / `◔` 等待 / `⚠` 错误 / `▶` 运行中 / `◉` 空闲）；**待处理项与运行中/空闲的项都能点**，按编号跳过去；待处理项跳过去后顺带清除，其余只是跳过去看看。菜单开着时状态会**自动刷新**（agent 跑完、通知到达都会立刻反映出来），列表重排后高亮仍跟着原来那个 agent；方向键选择、回车进入、`Esc` 关闭 |
 | **直接切进那个窗口** | 徽章自动消失（已读 = 焦点进入，不需要额外确认） |
 | `prefix + n` 之外还想要列表 | `tmux-whistle list`（只看待处理，含消息与已存在时长） |
 | 都不想做 | `tmux-whistle clear -a` 全清 |

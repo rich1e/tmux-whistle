@@ -1317,7 +1317,7 @@ plan mode 下 `PreToolUse` 已经能把 `running` 点回来。
 下游 `read` 把窗口 id、 pane id、有效态、消息整体读串位 —— 菜单标签错乱，
 跳转与已读可能落到错误目标。session 名同理（tmux 不允许 session 名带 `.` `:`，但允许 `|`）。
 
-**原因**：9 列行格式靠 `|` 分隔，只有**末位**的消息列被允许含 `|`（POSIX `read` 把余下全给末变量），
+**原因**：按 `|` 分隔的行格式里，只有**末位**的消息列被允许含 `|`（POSIX `read` 把余下全给末变量），
 其余列从未对名字做转义或剔除。`cmd_menu` / `cmd_menu_args` / `whistle_aggregate` 都按这个约定读。
 
 **修复方向**：在**产出这一行的地方**（`whistle_agent_windows` 及其上游）对 session / 窗口名剔除或替换 `|`，

@@ -404,6 +404,33 @@ run_menu_popup_spy() {
   assert_contains "$output" '#[fg=#8a8a8a]◉#[default] 空闲'
 }
 
+@test "menu-args: agent 图标跟着配置走，@whistle_agent_icons off 时不画" {
+  # 品牌字形默认值不写死在测试里：把 option 显式设成一个可读的 ASCII 标记，
+  # 验证的是「pane 前台进程 → agent 类型 → 图标 → 标签前缀」这条链路。
+  command -v cc > /dev/null 2>&1 || skip "没有 C 编译器，无法伪造 pane_current_command"
+  local fakes label
+  fakes="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$fakes"
+  printf '#include <unistd.h>\nint main(void){ sleep(30); return 0; }\n' \
+    > "$BATS_TEST_TMPDIR/agent.c"
+  cc -O0 -o "$fakes/claude" "$BATS_TEST_TMPDIR/agent.c"
+  wt split-window -t w1 "$fakes/claude"
+  wt_wait_until 3000 \
+    "[ \"\$(wt list-panes -t w1 -F '#{pane_current_command}' | tail -1)\" = claude ]"
+  wt set -g @whistle_icon_agent_claude 'C!'
+
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  label=$(printf '%s\n' "$output" | sed -n 1p)
+  assert_contains "$label" 'C! '
+
+  wt set -g @whistle_agent_icons off
+  run "$CLI" --menu-args
+  assert_eq "$status" 0
+  label=$(printf '%s\n' "$output" | sed -n 1p)
+  assert_not_contains "$label" 'C!'
+}
+
 @test "menu-args: 待处理在前、running 在后，共用同一串键位且互不重叠" {
   wt new-window -d -n w2
   wt new-window -d -n w3
@@ -1462,7 +1489,7 @@ select-pane -t $p"
   assert_eq "$(opt @whistle_count_running)" '1'
 }
 
-@test "menu-args: 消息为空时 9 列仍能正确分行" {
+@test "menu-args: 消息为空时 10 列仍能正确分行" {
   local p
   p=$(pane_of)
   "$CLI" "done" -t "$p"

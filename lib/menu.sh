@@ -1,7 +1,7 @@
 #!/bin/sh
 # tmux-whistle 菜单共享模型与展示辅助函数。
 #
-# 模型只消费 whistle_agent_windows 的 9 列输出，不直接读取 tmux。
+# 模型只消费 whistle_agent_windows 的 10 列输出，不直接读取 tmux。
 # 交互菜单与 display-menu 共用同一份排序、键位与溢出结果。
 
 # whistle_menu_timing <标记>
@@ -123,6 +123,19 @@ whistle_menu_palette_load() {
   _MP_L_ERROR=$(whistle_state_label error)
   _MP_L_RUNNING=$(whistle_state_label running)
   _MP_L_IDLE=$(whistle_state_label idle)
+  # agent 图标：--menu-args 路径每项都要用，一次取齐（popup 路径走
+  # whistle_menu_palette，共用同一份 bulk 配置读取）。
+  if [ "$(whistle_conf '@whistle_agent_icons')" = off ]; then
+    _MP_A_CLAUDE=''
+    _MP_A_CODEX=''
+    _MP_A_OPENCODE=''
+    _MP_A_OTHER=''
+  else
+    _MP_A_CLAUDE=$(whistle_icon '@whistle_icon_agent_claude')
+    _MP_A_CODEX=$(whistle_icon '@whistle_icon_agent_codex')
+    _MP_A_OPENCODE=$(whistle_icon '@whistle_icon_agent_opencode')
+    _MP_A_OTHER=$(whistle_icon '@whistle_icon_agent_other')
+  fi
   _MP_READY=1
 }
 
@@ -162,16 +175,30 @@ _whistle_menu_palette_pick() {
   esac
 }
 
+# 把某个 agent 类型的图标取到 _ma_i（与 _whistle_menu_palette_pick 同一套路）
+_whistle_menu_agent_pick() {
+  case "${1:-}" in
+  claude) _ma_i=$_MP_A_CLAUDE ;;
+  codex) _ma_i=$_MP_A_CODEX ;;
+  opencode) _ma_i=$_MP_A_OPENCODE ;;
+  *) _ma_i=$_MP_A_OTHER ;;
+  esac
+}
+
 whistle_menu_item_label() {
   [ -n "${_MP_READY:-}" ] || whistle_menu_palette_load
   _whistle_menu_palette_pick "$1"
-  printf '#[fg=%s]%s#[default] %s [%s]: %s %s' \
-    "$_ml_c" "$_ml_i" "$_ml_l" "$2" "$3" "${4:-}"
+  _whistle_menu_agent_pick "$2"
+  _ml_a=''
+  [ -z "$_ma_i" ] || _ml_a="$_ma_i "
+  printf '%s#[fg=%s]%s#[default] %s [%s]: %s %s' \
+    "$_ml_a" "$_ml_c" "$_ml_i" "$_ml_l" "$3" "$4" "${5:-}"
 }
 
-# whistle_menu_model：把 whistle_agent_windows 的 9 列输入变成菜单共享模型。
+# whistle_menu_model：把 whistle_agent_windows 的 10 列输入变成菜单共享模型。
 #
-# 可选行：item|key|window_id|pane_id|session|window_name|eff|message
+# 输入行：session|window_id|window_name|window_index|pane_id|eff|notice|activity|agent|message
+# 可选行：item|key|window_id|pane_id|session|window_name|eff|agent|message
 # 溢出行：overflow|hidden_count
 # 待处理项在前，其余项在后；最多 26 个可选项，超出只汇总隐藏数。
 # 消息永远放在末列，消息里的 '|' 由 read 的末位变量完整保留。
@@ -181,26 +208,26 @@ whistle_menu_model() {
 
   _mu_i=0
   _mu_total=0
-  while IFS='|' read -r _mu_s _mu_wid _mu_wn _mu_wi _mu_pid _mu_eff _mu_notice _mu_activity _mu_msg; do
+  while IFS='|' read -r _mu_s _mu_wid _mu_wn _mu_wi _mu_pid _mu_eff _mu_notice _mu_activity _mu_agent _mu_msg; do
     whistle_is_notified "$_mu_eff" || continue
     _mu_i=$((_mu_i + 1))
     _mu_total=$((_mu_total + 1))
     [ "$_mu_i" -gt 26 ] && continue
-    printf 'item|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf 'item|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$(whistle_menu_key "$_mu_i")" "$_mu_wid" "$_mu_pid" \
-      "$_mu_s" "$_mu_wn" "$_mu_eff" "$_mu_msg"
+      "$_mu_s" "$_mu_wn" "$_mu_eff" "$_mu_agent" "$_mu_msg"
   done << EOF
 $_mu_items
 EOF
 
-  while IFS='|' read -r _mu_s _mu_wid _mu_wn _mu_wi _mu_pid _mu_eff _mu_notice _mu_activity _mu_msg; do
+  while IFS='|' read -r _mu_s _mu_wid _mu_wn _mu_wi _mu_pid _mu_eff _mu_notice _mu_activity _mu_agent _mu_msg; do
     whistle_is_notified "$_mu_eff" && continue
     _mu_i=$((_mu_i + 1))
     _mu_total=$((_mu_total + 1))
     [ "$_mu_i" -gt 26 ] && continue
-    printf 'item|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf 'item|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$(whistle_menu_key "$_mu_i")" "$_mu_wid" "$_mu_pid" \
-      "$_mu_s" "$_mu_wn" "$_mu_eff" "$_mu_msg"
+      "$_mu_s" "$_mu_wn" "$_mu_eff" "$_mu_agent" "$_mu_msg"
   done << EOF
 $_mu_items
 EOF
@@ -224,7 +251,7 @@ whistle_menu_reconcile_selection() {
   _mu_previous=${2:-1}
   _mu_count=0
 
-  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
+  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_agent _mu_msg; do
     [ "$_mu_kind" = item ] || continue
     _mu_count=$((_mu_count + 1))
     if [ "$_mu_pid" = "$_mu_selected" ]; then
@@ -243,7 +270,7 @@ EOF
   [ "$_mu_previous" -gt "$_mu_count" ] && _mu_previous=$_mu_count
 
   _mu_index=0
-  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
+  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_agent _mu_msg; do
     [ "$_mu_kind" = item ] || continue
     _mu_index=$((_mu_index + 1))
     if [ "$_mu_index" -eq "$_mu_previous" ]; then
@@ -259,7 +286,7 @@ EOF
 # 只匹配可见 item 的快捷键；overflow 没有键位，也不可能成为跳转目标。
 whistle_menu_select_key() {
   _mu_index=0
-  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
+  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_agent _mu_msg; do
     [ "$_mu_kind" = item ] || continue
     _mu_index=$((_mu_index + 1))
     [ "$_mu_key" = "${1:-}" ] || continue
@@ -529,20 +556,40 @@ whistle_menu_item_style() {
   printf '%s %s' "$_mis_icon" "$_mis_fg"
 }
 
-# whistle_menu_item_plain <键位> <图标> <状态> <session> <窗口> <消息> → 未截断的纯文本
+# whistle_menu_item_plain <键位> <agent 图标> <状态图标> <状态> <session> <窗口> <消息> → 未截断的纯文本
 #
+# agent 图标为空时不留占位空格：没有 agent 的历史行保持原样，不会多出两列缩进。
 # 截断交给 whistle_menu_clip。定宽时要的是**未截断**的宽度，所以拆出这一层。
 whistle_menu_item_plain() {
-  printf '(%s) %s %s [%s]: %s' "$1" "$2" "$(whistle_state_label "$3")" "$4" "$5"
-  [ -z "${6:-}" ] || printf ' %s' "$6"
+  _mip_a=''
+  [ -z "${2:-}" ] || _mip_a="$2 "
+  printf '(%s) %s%s %s [%s]: %s' "$1" "$_mip_a" "$3" \
+    "$(whistle_state_label "$4")" "$5" "$6"
+  [ -z "${7:-}" ] || printf ' %s' "$7"
 }
 
-# whistle_menu_item_text <键位> <图标> <状态> <session> <窗口> <消息> <列数> → 纯文本一行
+# whistle_menu_item_text <键位> <agent 图标> <状态图标> <状态> <session> <窗口> <消息> <列数> → 纯文本一行
 #
 # 整帧绘制与单行重绘共用这一处拼装，两边格式不会分叉。
 whistle_menu_item_text() {
   whistle_menu_clip \
-    "$(whistle_menu_item_plain "$1" "$2" "$3" "$4" "$5" "${6:-}")" "${7:-80}"
+    "$(whistle_menu_item_plain "$1" "$2" "$3" "$4" "$5" "${6:-}" "${7:-}")" "${8:-80}"
+}
+
+# whistle_menu_agent_icon <agent 类型> <调色板文本> → 图标（纯 shell，不 fork）
+#
+# 调色板里 agent 行的格式是 `agent:<类型>|<图标>`，与状态行共用同一份文本 ——
+# 这样 popup 只做一次 bulk 配置读取，agent 图标不会多一次 tmux 调用。
+whistle_menu_agent_icon() {
+  _mai_kind="agent:${1:-}"
+  while IFS='|' read -r _mai_k _mai_ic _mai_rest; do
+    [ "$_mai_k" = "$_mai_kind" ] || continue
+    printf '%s' "$_mai_ic"
+    return 0
+  done << EOF
+${2:-}
+EOF
+  printf '%s' ''
 }
 
 # whistle_menu_model_width <调色板> ← 菜单模型 → 最长一行的显示列数
@@ -554,13 +601,14 @@ whistle_menu_model_width() {
   _mmw_pal=${1:-}
   {
     printf 'tmux-whistle\n'
-    while IFS='|' read -r _mmw_kind _mmw_key _mmw_wid _mmw_pid _mmw_s _mmw_wn _mmw_eff _mmw_msg; do
+    while IFS='|' read -r _mmw_kind _mmw_key _mmw_wid _mmw_pid _mmw_s _mmw_wn _mmw_eff _mmw_agent _mmw_msg; do
       case "$_mmw_kind" in
       item)
         _mmw_style=$(whistle_menu_palette_pick "$_mmw_eff" "$_mmw_pal")
         _mmw_icon=${_mmw_style%% *}
-        whistle_menu_item_plain "$_mmw_key" "$_mmw_icon" "$_mmw_eff" \
-          "$_mmw_s" "$_mmw_wn" "$_mmw_msg"
+        _mmw_aicon=$(whistle_menu_agent_icon "$_mmw_agent" "$_mmw_pal")
+        whistle_menu_item_plain "$_mmw_key" "$_mmw_aicon" "$_mmw_icon" \
+          "$_mmw_eff" "$_mmw_s" "$_mmw_wn" "$_mmw_msg"
         printf '\n'
         ;;
       overflow)
@@ -594,19 +642,23 @@ whistle_menu_render_item() {
   _mri_line=${1:-}
   _mri_sel=${2:-0}
   _mri_cols=${3:-80}
-  IFS='|' read -r _mri_kind _mri_key _mri_wid _mri_pid _mri_s _mri_wn _mri_eff _mri_msg << EOF
+  IFS='|' read -r _mri_kind _mri_key _mri_wid _mri_pid _mri_s _mri_wn _mri_eff _mri_agent _mri_msg << EOF
 $_mri_line
 EOF
   [ "$_mri_kind" = item ] || return 0
   if [ -n "${_mu_pal:-}" ]; then
     _mri_style=$(whistle_menu_palette_pick "$_mri_eff" "$_mu_pal")
+    _mri_aicon=$(whistle_menu_agent_icon "$_mri_agent" "$_mu_pal")
   else
+    # 没有调色板（理论上只发生在被单独调用时）就不画 agent 图标，
+    # 也不为一行去 fork 一次 tmux —— 整帧路径一定会带上 _mu_pal。
     _mri_style=$(whistle_menu_item_style "$_mri_eff")
+    _mri_aicon=''
   fi
   _mri_icon=${_mri_style%% *}
   _mri_fg=${_mri_style#* }
-  _mri_plain=$(whistle_menu_item_text "$_mri_key" "$_mri_icon" "$_mri_eff" \
-    "$_mri_s" "$_mri_wn" "$_mri_msg" "$_mri_cols")
+  _mri_plain=$(whistle_menu_item_text "$_mri_key" "$_mri_aicon" "$_mri_icon" \
+    "$_mri_eff" "$_mri_s" "$_mri_wn" "$_mri_msg" "$_mri_cols")
   if [ "$_mri_sel" = 1 ]; then
     printf '\033[7m%s%s\033[0m' "$_mri_fg" "$_mri_plain"
   else
@@ -614,21 +666,28 @@ EOF
   fi
 }
 
-# whistle_menu_palette → 每行 "<状态>|<图标>|<SGR 前景>"，覆盖五个状态
+# whistle_menu_palette → 五态各一行 "<状态>|<图标>|<SGR 前景>"，
+#                  外加四行 "agent:<类型>|<图标>"
 #
-# 一次 tmux 调用取齐十项配置（见 core.sh 的 whistle_conf_bulk）：菜单打开时的
-# 首帧延迟几乎全在这些配置查询上，逐项查就是十次进程。
+# 一次 tmux 调用取齐十四项配置（见 core.sh 的 whistle_conf_bulk）：菜单打开时的
+# 首帧延迟几乎全在这些配置查询上，逐项查就是十几次进程。agent 图标与状态共用
+# 同一份调色板，popup 里不再为它多一次 tmux。
 whistle_menu_palette() {
   _mpal_raw=$(whistle_conf_bulk \
     @whistle_icon_running @whistle_color_running \
     @whistle_icon_idle @whistle_color_idle \
     @whistle_icon_done @whistle_color_done \
     @whistle_icon_wait @whistle_color_wait \
-    @whistle_icon_error @whistle_color_error)
+    @whistle_icon_error @whistle_color_error \
+    @whistle_agent_icons \
+    @whistle_icon_agent_claude @whistle_icon_agent_codex \
+    @whistle_icon_agent_opencode @whistle_icon_agent_other)
   _mpal_icon_running='' _mpal_icon_idle='' _mpal_icon_done=''
   _mpal_icon_wait='' _mpal_icon_error=''
   _mpal_color_running='' _mpal_color_idle='' _mpal_color_done=''
   _mpal_color_wait='' _mpal_color_error=''
+  _mpal_agent_icons='' _mpal_a_claude='' _mpal_a_codex=''
+  _mpal_a_opencode='' _mpal_a_other=''
   while IFS='|' read -r _mpal_opt _mpal_val; do
     case "$_mpal_opt" in
     @whistle_icon_running) _mpal_icon_running=$_mpal_val ;;
@@ -641,6 +700,11 @@ whistle_menu_palette() {
     @whistle_color_done) _mpal_color_done=$_mpal_val ;;
     @whistle_color_wait) _mpal_color_wait=$_mpal_val ;;
     @whistle_color_error) _mpal_color_error=$_mpal_val ;;
+    @whistle_agent_icons) _mpal_agent_icons=$_mpal_val ;;
+    @whistle_icon_agent_claude) _mpal_a_claude=$_mpal_val ;;
+    @whistle_icon_agent_codex) _mpal_a_codex=$_mpal_val ;;
+    @whistle_icon_agent_opencode) _mpal_a_opencode=$_mpal_val ;;
+    @whistle_icon_agent_other) _mpal_a_other=$_mpal_val ;;
     esac
   done << EOF
 $_mpal_raw
@@ -655,6 +719,14 @@ EOF
     "$(whistle_menu_ansi_fg "$_mpal_color_wait")"
   printf '%s|%s|%s\n' error "$_mpal_icon_error" \
     "$(whistle_menu_ansi_fg "$_mpal_color_error")"
+  # 总开关关掉时四个图标一并不画 —— 缺字形的终端靠它一键回到旧样式。
+  if [ "$_mpal_agent_icons" = off ]; then
+    _mpal_a_claude='' _mpal_a_codex='' _mpal_a_opencode='' _mpal_a_other=''
+  fi
+  printf 'agent:claude|%s\n' "$_mpal_a_claude"
+  printf 'agent:codex|%s\n' "$_mpal_a_codex"
+  printf 'agent:opencode|%s\n' "$_mpal_a_opencode"
+  printf 'agent:other|%s\n' "$_mpal_a_other"
 }
 
 # whistle_menu_render <selected pane id> <columns> ← 菜单模型
@@ -698,12 +770,24 @@ whistle_menu_render() {
       _mu_ic_error=$_mu_ic
       _mu_fg_error=$_mu_fg
       ;;
+    agent:claude)
+      _mu_a_claude=$_mu_ic
+      ;;
+    agent:codex)
+      _mu_a_codex=$_mu_ic
+      ;;
+    agent:opencode)
+      _mu_a_opencode=$_mu_ic
+      ;;
+    agent:other)
+      _mu_a_other=$_mu_ic
+      ;;
     esac
   done << EOF
 $_mu_pal
 EOF
 
-  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_msg; do
+  while IFS='|' read -r _mu_kind _mu_key _mu_wid _mu_pid _mu_s _mu_wn _mu_eff _mu_agent _mu_msg; do
     case "$_mu_kind" in
     item)
       case "$_mu_eff" in
@@ -732,8 +816,15 @@ EOF
         _mu_fg=$(whistle_menu_ansi_fg '')
         ;;
       esac
-      _mu_plain=$(whistle_menu_item_text "$_mu_key" "$_mu_icon" "$_mu_eff" \
-        "$_mu_s" "$_mu_wn" "$_mu_msg" "$_mu_columns")
+      case "$_mu_agent" in
+      claude) _mu_aicon=$_mu_a_claude ;;
+      codex) _mu_aicon=$_mu_a_codex ;;
+      opencode) _mu_aicon=$_mu_a_opencode ;;
+      other) _mu_aicon=$_mu_a_other ;;
+      *) _mu_aicon='' ;;
+      esac
+      _mu_plain=$(whistle_menu_item_text "$_mu_key" "$_mu_aicon" "$_mu_icon" \
+        "$_mu_eff" "$_mu_s" "$_mu_wn" "$_mu_msg" "$_mu_columns")
       if [ "$_mu_pid" = "$_mu_selected" ]; then
         printf '\033[7m%s%s\033[0m\n' "$_mu_fg" "$_mu_plain"
       else

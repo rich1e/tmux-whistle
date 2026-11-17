@@ -521,12 +521,13 @@ EOF
     assert_eq "$output" '0|1|1|0|0'
 }
 
-@test "count_states: 菜单那份 9 列布局也能数" {
+@test "count_states: 菜单那份 10 列布局也能数" {
     # 菜单用的推导输出有 5 列前导（session|wid|wname|widx|pane_id），
-    # 计数要按 pane id 那一列定位，不能写死列号。
+    # 后面是有效态|通知态|活动态|agent|消息。计数要按 pane id 那一列定位，
+    # 不能写死列号。
     run whistle_count_states <<'EOF'
-s|w1|wn|1|%1|running||running|在跑|
-s|w1|wn|1|%2|done|done||做完了
+s|w1|wn|1|%1|running||running|other|在跑
+s|w1|wn|1|%2|done|done||other|做完了
 EOF
     assert_eq "$output" '1|0|1|0|0'
 }
