@@ -96,6 +96,25 @@ setup() {
   assert_contains "$output" 'activity:idle'
 }
 
+# -- 表单（question 工具 / MCP elicitation / provider 选择）-------------------
+
+@test "oc: form.created 写 wait（第二种「等你回答」，只订 permission 会漏）" {
+  run whistle_oc_actions form.created
+  assert_eq "$output" 'notice:wait'
+}
+
+@test "oc: form.replied 只清通知，不动活动态（同一轮还在跑）" {
+  run whistle_oc_actions form.replied
+  assert_eq "$output" 'read-notice'
+}
+
+@test "oc: form.cancelled 只清通知，不写 idle（取消只是一个 tool error）" {
+  run whistle_oc_actions form.cancelled
+  assert_eq "$output" 'read-notice'
+  # 关键：取消 question 后模型通常继续跑同一轮，写 idle 会留一盏错的 ◉
+  assert_not_contains "$output" 'activity:'
+}
+
 # -- 后台 shell -------------------------------------------------------------
 
 @test "oc: shell.started(status=running) 进在飞集合" {

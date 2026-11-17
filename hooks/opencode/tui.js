@@ -28,6 +28,13 @@ const FALLBACK_MESSAGE = "OpenCode";
 // 订阅哪些事件。与 lib/opencode.sh 的 whistle_oc_actions 一一对应；
 // 这里多订 session.retry.scheduled 与 session.idle 是**故意的**：
 // 映射层不处理它们，但 debug 日志要留痕（否则「收到了但没处理」查不到）。
+//
+// ⚠️ 「等你回答」有**两条**通路，缺一条就会漏：
+//   permission.asked        权限确认（跑命令 / 改文件）
+//   form.created            交互式表单：question 工具、MCP elicitation、
+//                           provider 选择……**事件名没有 session. 前缀**，
+//                           sessionID 在 data.form.sessionID（不是顶层）。
+// 只订 permission.* 时，question 工具挂在那里等答案，状态栏会一直是 ▶。
 const EVENTS = [
   "session.execution.started",
   "session.execution.succeeded",
@@ -36,6 +43,9 @@ const EVENTS = [
   "session.tool.called",
   "permission.asked",
   "permission.replied",
+  "form.created",
+  "form.replied",
+  "form.cancelled",
   "session.shell.started",
   "session.shell.ended",
   "session.retry.scheduled",
@@ -194,9 +204,18 @@ export default {
     // 抽成函数是为了让「逐类型订阅」与「全量流兜底」两条路径共用同一套逻辑。
     const handle = (type, data) => {
       data = data ?? {};
-      const sessionID = data.sessionID;
+      // form.created 的 sessionID 嵌在 data.form 里（事件没有 session. 前缀，
+      // 是 v2 的对外契约）。只读顶层会把这条事件当「无 session」丢掉 ——
+      // 表现就是 question 工具等着回答、状态栏却一直是 ▶。
+      let sessionID = data.sessionID;
+      if (!sessionID && type === "form.created") sessionID = data.form?.sessionID;
       if (!sessionID) {
         trace(`drop type=${type} reason=no-sessionID`);
+        return;
+      }
+      // 全局表单（sessionID === "global"）不属于任何 pane，无法归属 —— 不猜。
+      if (sessionID === "global") {
+        trace(`drop type=${type} reason=global-form`);
         return;
       }
 
@@ -240,6 +259,16 @@ export default {
           // 取不到标题不影响状态。
         }
         payload.message = String(info?.title || info?.slug || FALLBACK_MESSAGE);
+      }
+      if (type === "form.created") {
+        // 表单文案：question 工具的 form.title 是固定的 "Questions"，
+        // 真正的问题正文在 fields[0].description（title 是表头）。两者都兜底。
+        // ⚠️ 保持**单行**：json_get 的 sed 降级路径不认换行，多行会把文案吃成空串。
+        const form = data.form ?? {};
+        const first = Array.isArray(form.fields) ? form.fields[0] : undefined;
+        payload.message = String(
+          first?.description || first?.title || form.title || FALLBACK_MESSAGE
+        );
       }
       if (type === "session.shell.started" || type === "session.shell.ended") {
         const shell = data.shell ?? {};

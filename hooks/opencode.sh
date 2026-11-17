@@ -204,6 +204,11 @@ fi
 # --clear-pane 一次调用干完「gone + 清子 agent 标记 + 重算」。
 if [ "${1:-}" = --tui-exit ]; then
   [ -n "${TMUX_PANE:-}" ] || exit 0
+  # 关 TUI 时还挂着的 wait 已经**无从回答**（表单/权限框随 TUI 一起消失）。
+  # 必须单独清掉：gone 的 rank 是 0，赢不过 wait 的 4，否则这个 pane 会永久
+  # 挂一盏 ◔ 并计进待处理 —— 而它现在已经是一个普通 shell 了。
+  # 只清 wait：done / error 是历史提醒（「这一轮做完了你还没看」），保留。
+  [ "$(_oc_opt '@whistle_notice')" = wait ] && _oc_cli --read-pane "$TMUX_PANE"
   _oc_cli --clear-pane "$TMUX_PANE"
   exit 0
 fi

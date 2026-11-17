@@ -123,6 +123,22 @@ whistle_oc_actions() {
     esac
     ;;
 
+  # 表单 = **另一种「等你回答」**：question 工具、MCP elicitation、
+  # provider 选择都走这里。只订 permission.* 的话，question 工具挂在那儿
+  # 等答案时状态栏会一直是 ▶（2026-11-17 的现场）。
+  # 只写通知通道：活动态仍是 running（这一轮没结束，agent 只是被挡住了）。
+  form.created)
+    printf 'notice:wait\n'
+    ;;
+
+  # 答了 / 取消了：只清通知，**绝不写活动态**。
+  # 与 permission.replied 的 reject 不同 —— question 取消只是把一个 tool error
+  # 还给模型，同一轮通常还在跑；写 idle 会留一盏错的 ◉，而下一个
+  # execution.started 要等下一轮才来。真结束的话终态事件自己会收尾。
+  form.replied | form.cancelled)
+    printf 'read-notice\n'
+    ;;
+
   # 后台 shell：只有 status=running 才算「在飞」。
   # ended 的载荷里也带 status（exited/timeout/killed），同样按 id 移除。
   session.shell.started)

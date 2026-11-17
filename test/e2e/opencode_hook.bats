@@ -215,6 +215,37 @@ notice() {
   [ -z "$(wt show -pqv -t "$TMUX_PANE" @whistle_msg)" ]
 }
 
+@test "oc-e2e: form.created 写 wait 且不动活动通道（question 工具的等待）" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  [ "$(activity)" = "running" ]
+  # 事件名没有 session. 前缀；载荷形状是 {form:{title,fields}}，hook 只看 message
+  echo '{"event":"form.created","sessionID":"s1","message":"用哪种方案？"}' | feed
+  [ "$(activity)" = "running" ]
+  [ "$(notice)" = "wait" ]
+  [ "$(wt show -pqv -t "$TMUX_PANE" @whistle_notice_msg)" = "用哪种方案？" ]
+}
+
+@test "oc-e2e: form.replied 清 wait 但保留 running" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"form.created","sessionID":"s1","message":"用哪种方案？"}' | feed
+  [ "$(notice)" = "wait" ]
+
+  echo '{"event":"form.replied","sessionID":"s1","message":"OpenCode"}' | feed
+  [ -z "$(notice)" ]
+  [ "$(activity)" = "running" ]
+}
+
+@test "oc-e2e: form.cancelled 只清 wait，不把仍在跑的一轮打成 idle" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"form.created","sessionID":"s1","message":"用哪种方案？"}' | feed
+  [ "$(notice)" = "wait" ]
+
+  echo '{"event":"form.cancelled","sessionID":"s1","message":"OpenCode"}' | feed
+  [ -z "$(notice)" ]
+  # 取消 question 只是把 tool error 还给模型，回合继续 —— 活动态必须还是 running
+  [ "$(activity)" = "running" ]
+}
+
 # -- 收尾 ------------------------------------------------------------------
 
 @test "oc-e2e: --tui-exit 写 gone（不是清空）" {
@@ -234,6 +265,18 @@ notice() {
   run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-exit
   [ "$status" -eq 0 ]
   [ "$(notice)" = "done" ]
+}
+
+@test "oc-e2e: --tui-exit 清掉挂着的 wait（TUI 走了就没人能回答它）" {
+  echo '{"event":"session.execution.started","sessionID":"s1"}' | feed
+  echo '{"event":"form.created","sessionID":"s1","message":"用哪种方案？"}' | feed
+  [ "$(notice)" = "wait" ]
+
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" "$HOOK" --tui-exit
+  [ "$status" -eq 0 ]
+  # gone(0) 赢不过 wait(4)：不主动清就会在这个 pane 上永久挂一盏 ◔
+  [ -z "$(notice)" ]
+  [ "$(activity)" = "gone" ]
 }
 
 @test "oc-e2e: --probe 在 debug 开时写一行自检（R3 的可观测出口）" {

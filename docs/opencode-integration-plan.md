@@ -141,6 +141,9 @@ if (!mine.has(event.data.sessionID)) return
 | `session.execution.interrupted` | `sessionID, reason` | **按 reason 分派**，见 §2.2 | 不能一律 `idle` |
 | `permission.asked` | `sessionID, action, resources[], source, message?` | 通知 `wait` | 对应 `permission_prompt`，**即时，无 60 秒延迟** |
 | `permission.replied` | `sessionID, requestID, reply` | **按 reply 分派**，见 §2.4 | `once/always` 继续跑；`reject` 结束当前 step |
+| `form.created` | `form{id, sessionID, title, fields[]}` | 通知 `wait` | **第二种「等你回答」**，见 §2.9。question 工具 / MCP elicitation / provider 选择 |
+| `form.replied` | `id, sessionID, answer` | 已读（清通知） | 答完继续跑，活动态不动 |
+| `form.cancelled` | `id, sessionID` | 已读（清通知） | **不写 `idle`**：取消只是把 tool error 还给模型，同一轮通常还在跑 |
 | `session.shell.started` | `sessionID, shell{id,status,command,pid}` | 后台在飞标记（起） | 只认 `shell.status=running` |
 | `session.shell.ended` | `sessionID, shell{...}, output` | 后台在飞标记（止） | 见 §2.5，注意四态 |
 | `session.retry.scheduled` | `sessionID, error, attempt, at` | **不映射**（见 §2.6） | 只是「要重试了」，不是终态 |
@@ -237,6 +240,31 @@ Claude 侧只有 `Stop` 输入里的 `background_tasks` 快照，**没有「后�
 `session.shell.started` / `session.shell.ended` 成对出现，`@whistle_sub` 的 TTL
 可以退化成防漏事件的兜底，而不是主路径。
 
+### 2.9 「等你回答」有两条通路，只接 `permission.*` 会漏
+
+| 通路 | 事件 | 场景 |
+|---|---|---|
+| 权限确认 | `permission.asked` / `permission.replied` | 跑命令、改文件、跨目录访问 |
+| 交互式表单 | `form.created` / `form.replied` / `form.cancelled` | `question` 工具（AskUserQuestion）、MCP elicitation、websearch provider 选择 |
+
+2026-11-17 的现场：用户跑 `opencode --auto`（权限自动通过，`permission.asked` 根本不产生），
+question 工具弹出来等答案时状态栏一直是 `▶` —— 因为 `form.created` 既没订阅、也没映射，
+被 `*` 分支静默吃掉；活动通道的 `running` 是这一轮开头就点亮的。
+
+三条容易踩的细节：
+
+- 事件名**没有** `session.` 前缀。`session.form.*` 是 REST 接口名（`session.form.list` /
+  `.reply` / `.cancel`），不是事件流里的 type。
+- `form.created` 的 `sessionID` 嵌在 `payload.form.sessionID`，**顶层没有**。`tui.js`
+  的「无 sessionID 就丢」guard 会把它整条丢掉。
+- `sessionID === "global"` 的全局表单不属于任何 pane，不能按 cwd 猜 —— 直接忽略。
+
+回答 / 取消只清通知通道，**绝不写活动态**：取消 question 只是把一个 tool error 还给模型，
+同一轮通常还在跑；写 `idle` 会留一盏错的 `◉`，而下一个 `execution.started` 要等下一轮。
+
+另外 `--tui-exit` 要顺手清掉挂着的 `wait`：表单随 TUI 一起消失，已经无从回答，而
+`gone`(rank 0) 赢不过 `wait`(rank 4)，不清就是永久残留（`done` / `error` 是历史提醒，保留）。
+
 ---
 
 ## 3. 组件设计
@@ -310,6 +338,7 @@ const EVENTS = [
   "session.execution.started", "session.execution.succeeded",
   "session.execution.failed", "session.execution.interrupted",
   "session.tool.called", "permission.asked", "permission.replied",
+  "form.created", "form.replied", "form.cancelled",   // 第二种「等你回答」见 §2.9
   "session.shell.started", "session.shell.ended",
   "session.retry.scheduled",   // 只写 debug 日志，不写状态
 ]

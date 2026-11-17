@@ -234,6 +234,17 @@ matcher 组；Codex 的信任状态按 `event/index` 记录，前插会让别人
 - `permission.replied` **必须按 `reply` 分派**：`once`/`always` 只清通知、活动态不动；
   `reject` 要把活动态收成 `idle` —— 拒绝会结束当前 step，之后**可能没有**
   `succeeded`/`failed` 来收尾，否则留一盏永不灭的 `▶`。
+- **「等你回答」有两条通路，只订 `permission.*` 会漏掉一半。** 权限确认走
+  `permission.asked`；**question 工具 / MCP elicitation / provider 选择走
+  `form.created` → `wait`**，回答/取消是 `form.replied` / `form.cancelled` → 只清通知。
+  2026-11-17 的现场：`opencode --auto` 下权限自动通过、`permission.asked` 从不发生，
+  question 工具等答案时状态栏一直是 `▶`。三个坑：事件名**没有** `session.` 前缀
+  （`session.form.*` 是 REST 接口名）；`form.created` 的 sessionID 在
+  `data.form.sessionID`（顶层没有，会被「无 sessionID 就丢」的 guard 吃掉）；
+  `sessionID === "global"` 的全局表单不属于任何 pane，直接忽略。
+  `form.cancelled` **不要写 `idle`** —— 取消只是把 tool error 还给模型，同一轮还在跑。
+- **`--tui-exit` 要清掉挂着的 `wait`**（只清 wait，`done`/`error` 是历史提醒，保留）：
+  表单随 TUI 一起消失、无从回答，而 `gone`(rank 0) 赢不过 `wait`(rank 4)，不清就是永久 `◔`。
 - 后台 shell 用「**在飞 id 集合**」（`@whistle_oc_shell`，存 pane option 不落盘），
   不用计数器：重复的 `started` 天然幂等，`ended` 按 id 精确移除。集合非空时不写 `done`。
 - **订阅必须逐条 `try/catch`，失败的类型走 `data.listen` 兜底。** 一条 `data.on()` 抛

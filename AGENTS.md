@@ -72,6 +72,7 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - **TUI 启动要写 `idle`**（`--tui-start`）。上一轮的 `gone`（rank 0）不会自己恢复成 idle，因为推导层只把**空**状态推成 idle。
 - **事件必须串行**（`tui.js` 的 promise 链，不 detach）。并发 spawn 会乱序：实测 `wait` 被后到的 `done` 盖掉。cleanup 要先 `await queue` 再写 `gone`。
 - `interrupted` 按 `reason` 分派（`superseded` 不动活动通道、`shutdown` 写 `gone`）；`permission.replied` 按 `reply` 分派（`reject` 要收成 idle）。
+- **「等你回答」两条通路**：`permission.asked` 是权限确认；**question 工具 / MCP elicitation 走 `form.created`** → 同样 `wait`，回答/取消（`form.replied` / `form.cancelled`）只清通知。事件名无 `session.` 前缀，sessionID 在 `data.form.sessionID`；`form.cancelled` 不写 `idle`（同一轮还在跑）。
 - 后台 shell 用**在飞 id 集合**（`@whistle_oc_shell`）而非计数器；集合非空时不写 `done`。
 - **订阅要逐条 `try/catch` + `data.listen` 兜底。** 一条 `data.on()` 抛异常会断掉整个循环，后面全收不到；而探针在循环之前，`doctor` 照样报绿。
 - **`tabs.list()` 别假设是字符串数组。** `new Set(list)` 遇上 `{sessionID}` 对象会让 `has()` 永远为假 → 所有事件被静默过滤。支持两种形状，取不到 id 时 **fail-open**。
