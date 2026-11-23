@@ -52,13 +52,19 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 
 ## Codex 接入（第二个推送源）
 
-- `hooks/codex.sh` 映射：`SessionStart→idle`、`UserPromptSubmit→running`、
+- `hooks/codex.sh` 映射：`SessionStart(startup/resume/clear)→idle`、`SessionStart(fork)→不写`、
+  `UserPromptSubmit→running`、
   `PermissionRequest→wait`、`PostToolUse→仅清 wait`、`SubagentStart/Stop→子 agent 标记`、
   `Stop→idle+done`、`Interrupt→idle`、`SessionEnd→gone`。
 - **Codex hook 只有 `PostToolUse` 异步**。它只清 wait、不写活动态；其余生命周期事件同步，
   防止 `SessionStart → UserPromptSubmit → Stop` 的写入乱序留下永久 `▶`。
-- **不要在 `SessionStart` 写 running**：新开 / 恢复 / fork 都停在提示符前，只有
-  `UserPromptSubmit` 代表真开始干活；`compact` 是一轮中间，必须原样不动。
+- **不要在 `SessionStart` 写 running**：新开 / 恢复停在提示符前，只有
+  `UserPromptSubmit` 代表真开始干活；`compact` 是一轮中间，`fork` 可能是后台摘要，
+  两者都必须原样不动。
+- **内部 Codex fork 必须整段静默**：episodic-memory 用固定英文 marker 发起临时摘要
+  turn，和父会话共用 `TMUX_PANE`。`UserPromptSubmit` 命中 marker 后把 `session_id`
+  写进 pane option `@whistle_cx_quiet`，后续 `Stop` / `SessionEnd` 等事件全部跳过，
+  否则会覆盖父会话 activity、清掉未读通知并产生系统通知。
 - **`SubagentStop` 只清 `@whistle_sub`，绝不写活动态**。子 agent 结束时主 agent 通常还在跑。
 - `lib/install-codex-hooks.sh` 合并 `~/.codex/hooks.json` 时**追加**条目，不能前插：
   Codex 把信任绑定在 `event/index` 上，前插会让用户已有的 ping-island 等条目失去信任。

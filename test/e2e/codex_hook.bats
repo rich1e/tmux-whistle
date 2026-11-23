@@ -37,9 +37,27 @@ pane_notice() { optp @whistle_notice "$TMUX_PANE"; }
 pane_notice_msg() { optp @whistle_notice_msg "$TMUX_PANE"; }
 pane_notice_body() { optp @whistle_notice_body "$TMUX_PANE"; }
 pane_sub() { optp @whistle_sub "$TMUX_PANE"; }
+pane_cx_quiet() { optp @whistle_cx_quiet "$TMUX_PANE"; }
 
 seed_notice() {
   TMUX_PANE="$TMUX_PANE" "$WHISTLE_ROOT/bin/tmux-whistle" "$1" "${2:-}" > /dev/null
+}
+
+feed_os_spy() {
+  local bindir="$BATS_TEST_TMPDIR/os-bin"
+  local calls="$BATS_TEST_TMPDIR/os-calls"
+  mkdir -p "$bindir"
+  cat > "$bindir/terminal-notifier" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$WHISTLE_OS_SPY"
+exit 0
+EOF
+  chmod +x "$bindir/terminal-notifier"
+
+  run env TMUX_PANE="$TMUX_PANE" PATH="$bindir:$PATH" \
+    WHISTLE_OS_SPY="$calls" "$HOOK"
+  assert_eq "$status" 0
+  assert_eq "$output" ''
 }
 
 # -- SessionStart / UserPromptSubmit ---------------------------------------
@@ -65,6 +83,35 @@ EOF
   assert_eq "$(pane_act)" 'idle'
 }
 
+@test "codex: SessionStart fork 不覆盖父会话的活动态与未读通知" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"parent","prompt":"父会话在跑"}
+EOF
+  seed_notice 'done' '父会话待读'
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice_msg)" '父会话待读'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"fork","session_id":"summary-1"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '父会话待读'
+}
+
+@test "codex: 用户 fork 的首个真实 UserPromptSubmit 仍点亮 running" {
+  feed <<'EOF'
+{"hook_event_name":"SessionStart","source":"fork","session_id":"user-fork"}
+EOF
+  assert_eq "$(pane_act)" ''
+
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"user-fork","prompt":"继续修改代码"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_cx_quiet)" ''
+}
+
 @test "codex: SessionStart compact 不打断正在跑的回合" {
   feed <<'EOF'
 {"hook_event_name":"UserPromptSubmit","prompt":"开始干活"}
@@ -86,6 +133,89 @@ EOF
 EOF
   assert_eq "$(pane_act)" 'running'
   assert_eq "$(pane_notice)" ''
+}
+
+@test "codex: 内部摘要会话的 Stop 不顶掉父通知、不发系统通知" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"parent","prompt":"父会话在跑"}
+EOF
+  seed_notice 'done' '父会话待读'
+  wt set -g @whistle_os on
+
+  feed_os_spy <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"summary-1",
+ "prompt":"Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant.\nYou are running in an ephemeral Codex fork."}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '父会话待读'
+  assert_eq "$(pane_cx_quiet)" 'summary-1'
+
+  feed_os_spy <<'EOF'
+{"hook_event_name":"Stop","session_id":"summary-1",
+ "last_assistant_message":"<summary>内部摘要完成</summary>"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '父会话待读'
+  [ ! -e "$BATS_TEST_TMPDIR/os-calls" ]
+}
+
+@test "codex: 内部摘要会话的 SessionEnd 不把父会话写成 gone" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"parent","prompt":"父会话在跑"}
+EOF
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"summary-1",
+ "prompt":"Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant.\nYou are running in an ephemeral Codex fork."}
+EOF
+  assert_eq "$(pane_act)" 'running'
+
+  feed <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"other","session_id":"summary-1"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_cx_quiet)" ''
+}
+
+@test "codex: quiet id 不影响同一 pane 里的其它 Codex session" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"summary-1",
+ "prompt":"Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant.\nYou are running in an ephemeral Codex fork."}
+EOF
+
+  feed <<'EOF'
+{"hook_event_name":"Stop","session_id":"real-1",
+ "last_assistant_message":"真实会话完成"}
+EOF
+  assert_eq "$(pane_notice)" 'done'
+  assert_eq "$(pane_notice_msg)" '真实会话完成'
+}
+
+@test "codex: 连续内部摘要 fork 结束后 quiet id 不残留" {
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"parent","prompt":"父会话在跑"}
+EOF
+
+  for i in 1 2 3; do
+    feed <<EOF
+{"hook_event_name":"SessionStart","source":"fork","session_id":"summary-$i"}
+EOF
+    feed <<EOF
+{"hook_event_name":"UserPromptSubmit","session_id":"summary-$i",
+ "prompt":"Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant.\n摘要 $i"}
+EOF
+    feed <<EOF
+{"hook_event_name":"Stop","session_id":"summary-$i","last_assistant_message":"<summary>$i</summary>"}
+EOF
+    feed <<EOF
+{"hook_event_name":"SessionEnd","reason":"other","session_id":"summary-$i"}
+EOF
+  done
+
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" ''
+  assert_eq "$(pane_cx_quiet)" ''
 }
 
 # -- PermissionRequest / PostToolUse --------------------------------------

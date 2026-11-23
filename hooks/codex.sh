@@ -35,6 +35,11 @@ WHISTLE_CLI="$WHISTLE_ROOT/bin/tmux-whistle"
 
 # POSIX sh 没有局部变量：本文件所有临时变量统一使用 _cx_ 前缀。
 
+# episodic-memory 用这个稳定前缀标记“给历史会话生成摘要”的临时 Codex
+# fork。它不是用户回合，不能进入 pane 状态机，也不能发完成通知。
+_CX_INTERNAL_PROMPT_MARKER='Context: This summary will be shown in a list to help users and Claude choose which conversations are relevant'
+_CX_QUIET_OPT='@whistle_cx_quiet'
+
 # -- tmux 定位 --------------------------------------------------------------
 #
 # 优先级与 hooks/claude-code.sh 保持一致。hook 进程在 Codex 进程树里，
@@ -147,7 +152,8 @@ whistle_cx_log() {
   [ -n "$_cx_dir" ] || _cx_dir='/'
   [ -d "$_cx_dir" ] && [ -w "$_cx_dir" ] || return 0
 
-  _cx_line="$(date '+%Y-%m-%d %H:%M:%S') [$$] agent=codex hook_event_name=$_cx_evt TMUX_PANE=${TMUX_PANE:-}"
+  _cx_log_sid=$(whistle_cx_json_get "$_cx_json" session_id)
+  _cx_line="$(date '+%Y-%m-%d %H:%M:%S') [$$] agent=codex hook_event_name=$_cx_evt TMUX_PANE=${TMUX_PANE:-} session_id=${_cx_log_sid:-}"
   [ -n "$_cx_key" ] && _cx_line="$_cx_line $_cx_key=$_cx_val"
   { printf '%s\n' "$_cx_line" >> "$_cx_lf"; } 2> /dev/null
   return 0
@@ -169,6 +175,54 @@ _cx_clear_wait() {
   _cx_cli --read-pane "$TMUX_PANE"
 }
 
+# -- 内部 Codex 会话隔离 ----------------------------------------------------
+#
+# 后台摘要等 ephemeral fork 与真实交互共用同一个 TMUX_PANE，但拥有独立的
+# session_id。记录这些 id 后，Stop / SessionEnd 等后续事件可直接跳过，避免
+# 覆盖父会话状态或产生系统通知。
+
+_cx_quiet_ids() {
+  [ -n "${TMUX_PANE:-}" ] || return 0
+  _cx_tmux show -pqv -t "$TMUX_PANE" "$_CX_QUIET_OPT" 2> /dev/null || true
+}
+
+_cx_quiet_has() {
+  _cx_qh_sid="${1:-}"
+  [ -n "$_cx_qh_sid" ] || return 1
+  for _cx_qh_id in $(_cx_quiet_ids); do
+    [ "$_cx_qh_id" = "$_cx_qh_sid" ] && return 0
+  done
+  return 1
+}
+
+_cx_quiet_add() {
+  _cx_qa_sid="${1:-}"
+  [ -n "$_cx_qa_sid" ] || return 1
+  _cx_qa_ids=$(_cx_quiet_ids)
+  for _cx_qa_id in $_cx_qa_ids; do
+    [ "$_cx_qa_id" = "$_cx_qa_sid" ] && return 0
+  done
+  _cx_tmux set -p -t "$TMUX_PANE" "$_CX_QUIET_OPT" \
+    "${_cx_qa_ids:+$_cx_qa_ids }$_cx_qa_sid" > /dev/null 2>&1 || true
+}
+
+_cx_quiet_remove() {
+  _cx_qr_sid="${1:-}"
+  [ -n "$_cx_qr_sid" ] || return 0
+  _cx_qr_ids=''
+  for _cx_qr_id in $(_cx_quiet_ids); do
+    [ "$_cx_qr_id" = "$_cx_qr_sid" ] && continue
+    _cx_qr_ids="${_cx_qr_ids:+$_cx_qr_ids }$_cx_qr_id"
+  done
+  if [ -n "$_cx_qr_ids" ]; then
+    _cx_tmux set -p -t "$TMUX_PANE" "$_CX_QUIET_OPT" "$_cx_qr_ids" \
+      > /dev/null 2>&1 || true
+  else
+    _cx_tmux set -p -t "$TMUX_PANE" -u "$_CX_QUIET_OPT" \
+      > /dev/null 2>&1 || true
+  fi
+}
+
 _cx_first_line() {
   printf '%s' "${1:-}" | head -n 1
 }
@@ -182,9 +236,17 @@ if [ -z "${TMUX_PANE:-}" ] && [ -z "${WHISTLE_TMUX_SOCKET:-}" ]; then
 fi
 
 _cx_event=$(whistle_cx_json_get "$_cx_input" hook_event_name)
+_cx_sid=$(whistle_cx_json_get "$_cx_input" session_id)
 whistle_cx_log "$_cx_event" "$_cx_input"
 
 [ -x "$WHISTLE_CLI" ] || exit 0
+
+# 内部会话的后续事件不参与 pane 状态机。SessionEnd 同时回收 id，失败/中断
+# 留下的陈旧 id 最多只影响它自己的 session_id，不会静默其它真实会话。
+if _cx_quiet_has "$_cx_sid"; then
+  [ "$_cx_event" = SessionEnd ] && _cx_quiet_remove "$_cx_sid"
+  exit 0
+fi
 
 case "$_cx_event" in
 SessionStart)
@@ -192,10 +254,24 @@ SessionStart)
   _cx_source=$(whistle_cx_json_get "$_cx_input" source)
   [ "$_cx_source" = compact ] && exit 0
 
+  # fork 既可能是用户主动分支，也可能是后台 ephemeral 摘要。SessionStart
+  # 本身不足以判断，先不动父会话状态；真实用户回合会由 UserPromptSubmit
+  # 正常点亮 running，内部摘要则会命中下面的标记。
+  [ "$_cx_source" = fork ] && exit 0
+
   # 恢复/新开会话都只是停在提示符前等着，不能报 running。
   _cx_cli --agent-idle "$TMUX_PANE"
   ;;
 UserPromptSubmit)
+  _cx_prompt=$(whistle_cx_json_get "$_cx_input" prompt)
+  case "$_cx_prompt" in
+  "$_CX_INTERNAL_PROMPT_MARKER"*)
+    # 先记 session_id 再退出；Stop / SessionEnd 只凭 id 判断，不解析摘要正文。
+    _cx_quiet_add "$_cx_sid"
+    exit 0
+    ;;
+  esac
+
   # 真正的用户输入才算开始干活，并顺手把上一轮未读通知标为已读。
   _cx_cli --prompt-start "$TMUX_PANE"
   ;;

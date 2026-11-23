@@ -62,6 +62,11 @@ Codex 的 hook 进程也在 pane 进程树里，`TMUX_PANE` 可信，但事件�
 - `Stop` 输入没有 `background_tasks`；主回合结束时照常写 `idle + done`。若子 agent
   还在跑，`@whistle_sub` 让推导层合成 `running` —— 通知 rank 更高，用户先看到 `◆`，
   读掉后回到 `▶`，`SubagentStop` 清标记后再回 `idle`。
+- **Codex 的 `SessionStart(source=fork)` 不写 pane 状态。** fork 可能是用户主动分支，
+  也可能是 episodic-memory 的后台摘要；两者共用 `TMUX_PANE`，只看 SessionStart 分不开。
+  后台摘要的 `UserPromptSubmit` 带固定 marker，命中后把 `session_id` 记入
+  `@whistle_cx_quiet`；该会话后续 `Stop` / `SessionEnd` 等事件全部跳过，不能覆盖父会话
+  activity、清掉未读通知或触发系统通知。
 - 配置在 `~/.codex/hooks.json`。安装器必须**追加**条目：Codex 的 trust key 带
   `event/index`，前插会让用户已有的第三方 hook（如 ping-island）失去信任。
 - 新 hook 由 Codex 按哈希要求人工审核；安装器只能提示用户输入 `/hooks`。
@@ -88,6 +93,7 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
 | pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
 | pane | `@whistle_sub` | 子 agent 标记，存的是**过期时间戳**（epoch 秒），空 = 无 |
+| pane | `@whistle_cx_quiet` | Codex 内部会话 `session_id` 列表，空格分隔；这些会话不进入状态机 |
 | pane | `@whistle_os_seq` `@whistle_os_group` | 桌面通知的序号与最近一条 group，供已读精确撤回 |
 | pane | `@whistle_eff` | 派生：该 pane 的有效态（供 pane 徽章 format 读） |
 | window | `@whistle_win` `@whistle_win_msg` `@whistle_win_count` `@whistle_win_pane` | 派生，由 `whistle_recompute_window` 重算 |
@@ -311,11 +317,12 @@ matcher 组；Codex 的信任状态按 `event/index` 记录，前插会让别人
 异步的清除可能被杀在半路，留下一个永远灭不掉的 `▶`。其余 hook 都是 `async: true`，
 只有这一个例外，`our_entry()` 里按事件名判断。
 
-**`running` 只能由 `UserPromptSubmit` 点亮，`SessionStart` 报的是 `idle`**：
+**`running` 只能由真实 `UserPromptSubmit` 点亮，`SessionStart` 报的是 `idle`**：
 `SessionStart` 不代表 agent 在干活 —— `--continue` / `--resume` 恢复出来的、以及刚敲
 `claude` 起的新会话，都只是在提示符前**等着**。早先把它映射成 `running`，配上
 resurrect 的 `@continuum-restore` 就是「恢复 3 个会话 → 状态栏亮 `▶3`，一个都没在跑」。
-现在映射成 `idle`（`source=compact` 除外 —— 那是轮中压缩，agent 还在干活，原样不动）。
+现在 `startup/resume/clear` 映射成 `idle`；`source=compact`（轮中压缩）和
+`source=fork`（可能是后台摘要）都原样不动。
 
 **带 `<task-notification>` 的 `UserPromptSubmit` 不算「已读」**：后台任务结束时
 Claude Code 把通知包成 user 角色消息喂回会话，于是 hook 也会收到一次

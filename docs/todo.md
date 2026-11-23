@@ -22,6 +22,7 @@
 
 ## 已修复
 
+- [x] **TODO-33** episodic-memory 的后台 Codex 摘要 fork 覆盖父会话状态并连续发系统通知
 - [x] **TODO-32** 多 session 下桌面通知变空白（空 msg / 同 group 替换竞态 / 子 session 串台 / body 从不进通知）
 - [x] **TODO-31** 测试播种与菜单标签的低效：`seed_pending_windows` 用 N 次 `"$CLI" done`（26 项 37 秒），`--menu-args` 每项两次 subshell 取颜色/图标（41 项 2.8 秒）—— 前者改成一次 tmux 链写 + 一次 list-windows 取映射（37s → 4.45s，8.3x），后者加菜单调色板一次取齐（`cli.bats` 317s → 183s，−42%）
 - [x] **TODO-30** 单次状态写入固定 80 次 tmux fork（读配置占 58 次），把测试套件拖到十几分钟 —— 压到 25 次，CPU 1.7x / wall 2.2x。**注意不是 O(窗口数)**，是每次写入的固定成本；详见 `CLAUDE.md`「状态写入的成本」
@@ -1642,3 +1643,39 @@ TUI 内多个 tab）时最容易复现。
 不写活动态）、`test/integration/deliver.bats`（唯一 group、撤回记录、正文第二行、
 单行长文不硬接）、`test/integration/cli.bats`（`--body` 作为第五参下传）、
 `test/integration/hooks.bats`（已读撤记录下来的 group）。
+
+---
+
+## TODO-33 · episodic-memory 的后台 Codex 摘要 fork 连续发系统通知
+
+✅ 已修复（2026-11-23，`hooks/codex.sh`）
+
+**现象**：dayfold 的 Claude 会话启动后，几十秒内连续出现 10 条
+`tmux · dayfold / claude.exe` 系统通知。与此同时父会话仍在运行，但 pane 最终被写成
+`@whistle=gone`；已有未读通知也会被清掉。
+
+**证据**：episodic-memory 日志在 `10:57:39` 开始为 10 个 Codex rollout 生成摘要。
+Codex Hook 日志随后出现 10 组
+`SessionStart(source=fork) → UserPromptSubmit → Stop → SessionEnd`，全部继承
+`TMUX_PANE=%2`。每个 `Stop` 都走 `--turn-end done`，而 `@whistle_os=on` 且
+terminal-notifier 已授权，因此每条摘要都发一次系统通知。
+
+**原因**：episodic-memory 通过 Codex app-server 的 `thread/fork(ephemeral=true)` 总结
+历史会话。临时 fork 与父会话共用 `TMUX_PANE`，但旧 hook 把所有生命周期事件都写进同一
+pane：fork 启动写 `idle`，摘要 prompt 清未读通知并写 `running`，Stop 写 `done`，
+SessionEnd 写 `gone`。
+
+**修法**：
+
+1. `SessionStart(source=fork)` 不再写 pane 状态；真实用户 fork 的第一条
+   `UserPromptSubmit` 会正常点亮 `running`。
+2. `UserPromptSubmit` 命中 episodic-memory 稳定摘要 marker 时，把 `session_id` 记入
+   `@whistle_cx_quiet`，不写活动态、不清父通知。
+3. 同一 `session_id` 的 `PermissionRequest` / `PostToolUse` / `Stop` / `SessionEnd` 等
+   后续事件全部跳过；`SessionEnd` 顺带回收 quiet id。
+
+**回归用例**：`test/e2e/codex_hook.bats`
+
+- `SessionStart fork 不覆盖父会话的活动态与未读通知`
+- `内部摘要会话的 Stop 不顶掉父通知、不发系统通知`
+- `内部摘要会话的 SessionEnd 不把父会话写成 gone`

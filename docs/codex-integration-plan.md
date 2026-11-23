@@ -21,16 +21,22 @@ Codex 的 `notify` 只在 `agent-turn-complete` 时调用外部程序，能覆�
 
 | Codex hook | whistle 写入 | 说明 |
 |---|---|---|
-| `SessionStart`（`startup` / `resume` / `clear` / `fork`） | 活动通道 `idle` | 会话活着，但停在提示符前等人 |
+| `SessionStart`（`startup` / `resume` / `clear`） | 活动通道 `idle` | 会话活着，但停在提示符前等人 |
 | `SessionStart`（`compact`） | 不写 | 轮中压缩，不能把正在转的 `▶` 掐掉 |
-| `UserPromptSubmit` | 活动通道 `running` + 清通知 | 真正的用户输入才开始干活 |
+| `SessionStart`（`fork`） | 不写 | 可能是用户分支，也可能是后台摘要；不能覆盖父会话状态 |
+| `UserPromptSubmit` | 活动通道 `running` + 清通知 | 真正的用户输入才开始干活；episodic-memory 摘要 marker 例外 |
 | `PermissionRequest` | 通知通道 `wait` | 即时；优先用 `tool_input.description`，退回 `tool_input.command` / `tool_name` |
 | `PostToolUse` | 只清 `wait` | 工具已真正运行，说明授权已解决；不改活动态 |
 | `SubagentStart` | `--sub-agent-start` | 只写 `@whistle_sub`，活动态由推导层合成 |
 | `SubagentStop` | `--sub-agent-stop` | **只清标记**，主 agent 通常还在跑 |
-| `Stop` | 活动 `idle` + 通知 `done` | `last_assistant_message` 首行进徽章，全文进 body |
+| `Stop` | 活动 `idle` + 通知 `done` | `last_assistant_message` 首行进徽章，全文进 body；内部会话跳过 |
 | `Interrupt` | 活动 `idle` + 清 wait | 用户打断后不会有 `Stop`，必须在这里收尾 |
-| `SessionEnd` | `--clear-pane`（活动 `gone`） | 保留未读通知；进程可能还没退出，所以不能清空 |
+| `SessionEnd` | `--clear-pane`（活动 `gone`） | 保留未读通知；内部会话跳过并回收 quiet id |
+
+`SessionStart(source=fork)` 本身无法区分用户 fork 与后台 ephemeral fork，所以不动状态。
+episodic-memory 的摘要 prompt 以固定 marker 开头；hook 命中后把该 `session_id` 写入
+pane option `@whistle_cx_quiet`，后续同一 session 的所有事件都跳过。这样后台摘要不会
+覆盖父会话 activity、清掉未读通知、写 `gone` 或发送桌面通知。
 
 刻意不订阅：
 
@@ -52,6 +58,12 @@ Codex hooks 默认同步；设置 `async: true` 后在后台运行。本接入�
 
 ```text
 SessionStart(idle) → UserPromptSubmit(running) → Stop(idle + done)
+```
+
+后台摘要的预期链路：
+
+```text
+SessionStart(fork, 不写) → UserPromptSubmit(marker, 记 quiet id) → Stop/SessionEnd(跳过)
 ```
 
 `SessionEnd` / `Interrupt` 在 Codex 侧还有 1~3 秒超时限制，安装器给它们 2 秒，
@@ -83,6 +95,8 @@ SessionStart(idle) → UserPromptSubmit(running) → Stop(idle + done)
   「至少还有一个在跑」。过期兜底见 `@whistle_sub_ttl`。
 - Codex 的 `SessionEnd` 可能延迟到会话空闲 30 分钟后才触发；正常退出或关闭会话时会运行。
 - Codex API 错误没有稳定的一等失败事件，不自动写 `error`。
+- 内部摘要识别依赖 episodic-memory 的稳定 prompt marker；对方改名后需要同步更新
+  `hooks/codex.sh` 的 `_CX_INTERNAL_PROMPT_MARKER`。
 
 ## 6. 验证
 
