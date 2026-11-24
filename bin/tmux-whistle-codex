@@ -1,0 +1,83 @@
+#!/bin/sh
+# Pane 本地 Codex 启动器。
+#
+# Codex managed daemon 会按 CODEX_HOME 复用，daemon 环境是第一个 TUI 的启动
+# 快照。多个 TUI 复用 daemon 后，Hook 继承的 TMUX_PANE 会指向错误 pane。
+# 本启动器把当前 pane 固化成显式 PaneBinding，并用 --no-daemon 禁止共享 daemon。
+
+set -u
+
+_cw_die() {
+  printf 'tmux-whistle-codex: %s\n' "$*" >&2
+  exit 1
+}
+
+if [ -n "${CODEX_BIN:-}" ]; then
+  _cw_codex="$CODEX_BIN"
+else
+  _cw_codex=$(command -v codex 2> /dev/null || true)
+fi
+[ -n "$_cw_codex" ] && [ -x "$_cw_codex" ] \
+  || _cw_die '找不到可执行的 codex（可用 CODEX_BIN 指定）'
+
+# tmux 外不建立绑定，也不改变 Codex 参数。
+if [ -z "${TMUX_PANE:-}" ]; then
+  exec "$_cw_codex" "$@"
+fi
+
+_cw_tmux() {
+  if [ -n "${WHISTLE_TMUX_SOCKET:-}" ]; then
+    tmux -S "$WHISTLE_TMUX_SOCKET" "$@"
+  elif [ -n "${TMUX:-}" ]; then
+    tmux -S "${TMUX%%,*}" "$@"
+  elif [ -n "${TMUX_SOCKET:-}" ]; then
+    tmux -S "$TMUX_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
+_cw_pane=$(_cw_tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2> /dev/null) \
+  || _cw_pane=''
+[ "$_cw_pane" = "$TMUX_PANE" ] \
+  || _cw_die "找不到目标 pane [$TMUX_PANE]"
+
+_cw_socket=$(_cw_tmux display-message -p -t "$_cw_pane" '#{socket_path}' 2> /dev/null) \
+  || _cw_socket=''
+case "$_cw_socket" in
+/*) ;;
+*) _cw_die "拿不到 tmux socket 绝对路径 [$TMUX_PANE]" ;;
+esac
+
+_cw_hooks="${CODEX_HOOKS:-${CODEX_HOME:-$HOME/.codex}/hooks.json}"
+if ! grep -q 'tmux-whistle' "$_cw_hooks" 2> /dev/null; then
+  if [ "${WHISTLE_CODEX_ALLOW_NO_HOOKS:-0}" != 1 ]; then
+    _cw_die "当前 Codex home 未安装 tmux-whistle Hook：${_cw_hooks}（先跑 tmux-whistle install-codex-hooks）"
+  fi
+fi
+
+_cw_client="${_cw_pane}:$$:$(date +%s)"
+WHISTLE_CODEX_BINDING=v1
+WHISTLE_CODEX_CLIENT="$_cw_client"
+WHISTLE_CODEX_PANE="$_cw_pane"
+WHISTLE_TMUX_SOCKET="$_cw_socket"
+export WHISTLE_CODEX_BINDING WHISTLE_CODEX_CLIENT WHISTLE_CODEX_PANE WHISTLE_TMUX_SOCKET
+
+_cw_tmux set -p -t "$_cw_pane" @whistle_codex_binding "$_cw_client" \
+  > /dev/null 2>&1 || true
+
+# Codex 当前版本可能到首个 prompt 才触发 SessionStart。启动器既然已经建立了
+# 可信绑定，就先按“停在提示符前”写 idle，让状态栏立即出现；后续 Hook 会覆盖。
+_cw_cli=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/tmux-whistle
+[ -x "$_cw_cli" ] || _cw_cli=$(command -v tmux-whistle 2> /dev/null || true)
+if [ -n "$_cw_cli" ] && [ -x "$_cw_cli" ]; then
+  "$_cw_cli" --agent-idle "$_cw_pane" > /dev/null 2>&1 || true
+fi
+
+_cw_has_no_daemon=0
+for _cw_arg; do
+  [ "$_cw_arg" = --no-daemon ] && _cw_has_no_daemon=1
+done
+[ "$_cw_has_no_daemon" = 1 ] || set -- --no-daemon "$@"
+
+exec "$_cw_codex" "$@"

@@ -10,7 +10,7 @@ export PATH := $(HOME)/.local/bin:$(PATH)
 
 LIB_SH   := $(wildcard lib/*.sh)
 HOOK_SH  := $(wildcard hooks/*.sh)
-BIN_SH   := bin/tmux-whistle install.sh scripts/check-version.sh
+BIN_SH   := bin/tmux-whistle bin/tmux-whistle-codex install.sh scripts/check-version.sh
 POSIX_SH := $(LIB_SH) $(HOOK_SH) $(BIN_SH)
 
 # 测试辅助脚本是 bash，交给 shfmt。

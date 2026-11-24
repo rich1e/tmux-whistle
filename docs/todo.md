@@ -22,6 +22,9 @@
 
 ## 已修复
 
+- [x] **TODO-36** strict 模式下未绑定 Codex 被进程推导成 idle
+- [x] **TODO-35** raw Codex 启停后状态栏缓存计数与菜单 live 列表数量不一致
+- [x] **TODO-34** 多个 Codex TUI 共用 managed daemon 时 pane 归因错误
 - [x] **TODO-33** episodic-memory 的后台 Codex 摘要 fork 覆盖父会话状态并连续发系统通知
 - [x] **TODO-32** 多 session 下桌面通知变空白（空 msg / 同 group 替换竞态 / 子 session 串台 / body 从不进通知）
 - [x] **TODO-31** 测试播种与菜单标签的低效：`seed_pending_windows` 用 N 次 `"$CLI" done`（26 项 37 秒），`--menu-args` 每项两次 subshell 取颜色/图标（41 项 2.8 秒）—— 前者改成一次 tmux 链写 + 一次 list-windows 取映射（37s → 4.45s，8.3x），后者加菜单调色板一次取齐（`cli.bats` 317s → 183s，−42%）
@@ -1679,3 +1682,82 @@ SessionEnd 写 `gone`。
 - `SessionStart fork 不覆盖父会话的活动态与未读通知`
 - `内部摘要会话的 Stop 不顶掉父通知、不发系统通知`
 - `内部摘要会话的 SessionEnd 不把父会话写成 gone`
+
+---
+
+## TODO-34 · 多个 Codex TUI 共用 managed daemon 时 pane 归因错误
+
+✅ 已修复（2026-11-23）
+
+**现象**：两个 Codex TUI 分别位于 `%1`、`%9`，但所有 Hook 事件都写入 `%1`；
+`%9` 在菜单里始终只显示进程推导出的 `idle`。
+
+**原因**：Codex managed app-server daemon 按 `CODEX_HOME` 复用，daemon 环境来自
+第一个启动它的 TUI。后续 TUI 的 Hook 在 daemon 中执行，继承的是旧的
+`TMUX_PANE`。Hook 输入没有 pane/client id，无法从事件本身恢复归属。
+
+**修法**：
+
+1. 新增 `tmux-whistle-codex` / `tmux-whistle codex`，在 pane 内写入
+   `WHISTLE_CODEX_BINDING=v1` / pane / socket / client id，并强制 `--no-daemon`。
+2. `hooks/codex.sh` 默认 strict，只接受 PaneBinding；缺失或无效时 fail closed。
+3. `@whistle_codex_binding` 供 doctor 判断 TUI 是否经过启动器。
+4. `@whistle_cx_running` / `@whistle_cx_idle` 聚合同 pane 多 session。
+5. `@whistle_sub` 对 Codex 改为 `agent_id:expiry` 集合，支持并发 subagent。
+6. doctor 检测多 Codex TUI 未绑定、`daemon_auto_start` 和 Hook 安装状态。
+7. strict 迁移时清理旧 raw Codex 留下的无 binding `running` / `idle` 假状态。
+
+**回归用例**：`test/e2e/codex_hook.bats` 的 PaneBinding、strict/legacy、双 pane、
+同 pane 多 session、多 subagent 用例；`test/integration/codex_launcher.bats`；
+`test/integration/doctor.bats` 的多 TUI 检查；`test/integration/install.bats`
+的启动器软链安装/卸载。
+
+---
+
+## TODO-35 · 状态栏缓存计数与菜单 live 列表数量不一致
+
+✅ 已修复（2026-11-23）
+
+**现象**：strict 模式下 raw Codex 启停后，状态栏可能仍显示旧的 `▶N` / `◉N`，
+打开 `prefix + n` 后菜单却按当前 pane 进程显示另一组数量。
+
+**原因**：菜单每次实时扫描 pane；状态栏读 `@whistle_count_*` 缓存。没有 Hook
+写入时，缓存不会因普通进程启停自动重算；running 归零后 spin 自愈节拍也停止。
+
+**修法**：
+
+1. `cmd_menu` 打开前执行 `whistle_recompute_global` 并刷新 client；
+   `cmd_menu_args` 同样先重算，保证菜单、测试与实际状态栏使用同一份计数。
+2. 菜单打开与插件重载入口在重算前清理 `@whistle_src=hook|migration`
+   但前台进程已不是 agent 的 `running` / `idle` 状态，通知通道保留。
+
+**回归用例**：`test/integration/cli.bats` 的「打开菜单前先重算状态栏计数」
+与「清理前台进程已退出的 hook idle 状态」；`test/unit/core.bats` 的
+「前台已不是 agent 时清理 hook/migration 活动态」。
+
+---
+
+## TODO-36 · strict 模式下未绑定 Codex 被进程推导成 idle
+
+✅ 已修复（2026-11-23）
+
+**现象**：raw Codex 位于 `%9`、`@whistle` 为空且正在处理任务时，状态栏仍把它
+计成 `◉`。打开菜单重算后计数不会消失，因为问题不在缓存，而在推导层。
+
+**原因**：strict 模式会丢弃未绑定 Codex 的 Hook 写入，但
+`whistle_resolve_idle_panes` 仍无条件把「前台进程名为 codex 且活动态为空」
+推导成 `idle`。此外，升级迁移曾把无 binding 的旧 `running` 降成 `idle`，
+该 `idle` 之后不会被再次清理，也会永久保留。
+
+**修法**：
+
+1. `whistle_resolve_idle_panes` 增加 Codex pane 模式参数；strict 模式下
+   未上报的 Codex 保持未知，不再按进程猜 idle。
+2. Hook 明确上报的 `idle` 不受影响，legacy / auto 也保留原来的进程推导。
+3. strict 迁移清理范围从 `running` 扩到 `running|idle`、来源从 `hook` 扩到
+   `hook|migration`，并清成 `gone`；同时重算所属窗口，避免窗口徽章残留 `◉`。
+
+**回归用例**：`test/unit/core.bats` 的
+「strict 模式不把未上报的 Codex 猜成 idle」与
+「strict 清掉无 binding 的旧 Codex running / idle 状态」；
+`test/integration/state.bats` 的「清理 strict 旧 Codex idle 时同步更新窗口态」。

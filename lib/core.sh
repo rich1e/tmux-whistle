@@ -240,7 +240,9 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_detect off
 @whistle_detect_interval 15
 @whistle_detect_idle 180
-@whistle_sub_ttl 1800'
+@whistle_sub_ttl 1800
+@whistle_codex_pane_mode strict
+@whistle_cx_session_ttl 43200'
 
 # whistle_conf_default <option 名> → 默认表里的值（不查 tmux）
 whistle_conf_default() {
@@ -601,7 +603,7 @@ whistle_count_states() {
   '
 }
 
-# whistle_resolve_idle_panes <agent 命令名清单> <状态列号> [前导列数]
+# whistle_resolve_idle_panes <agent 命令名清单> <状态列号> [前导列数] [Codex pane 模式]
 #
 # stdin  = list-panes 的输出（字段用 | 分隔），每行一个 pane
 #          **最后一列是前台进程名**（`#{pane_current_command}`）
@@ -626,6 +628,10 @@ whistle_count_states() {
 # 「哪些进程算 agent」由用户自己配（@whistle_agent_cmds）。判据是 tmux 自己的
 # 事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
 #
+# strict 模式下未上报的 Codex 不做 idle 推导：Hook 已 fail closed，进程名只能
+# 证明 TUI 还活着，不能区分正在干活还是停在提示符；猜成 idle 会把 running 显示
+# 成空闲。Hook 明确写入的 idle 不受影响。
+#
 # 纯函数：agent 清单由调用方传进来 —— 读 tmux option 是 tmux 调用，不能进纯
 # 函数（L1 单测要能脱离 tmux 跑）。同理，now 由调用方用环境变量 WHISTLE_NOW
 # 注入（不注入则取当前时间；date 不是 tmux 调用，但注入后 L1 单测才可复现）。
@@ -639,14 +645,15 @@ whistle_count_states() {
 # （含分隔符）全塞进最后一个变量 —— 留着这一列，消息列就会变成
 # 「消息|进程名」，而 @whistle_win_msg 与菜单标签会把它原样显示出去。
 #
-# ⚠️ **子 agent 标记列（$sc+4）是可选的**：给了就用（没给就是没有子 agent）。
-# 它存的是**过期时间戳**，0 表示永不过期。过期不需要写回 —— 推导层按时间戳
-# 判断即可，这样漏报「子 agent 结束」时标记会自己过期回落，
+# ⚠️ **子 agent 标记列（$sc+4）是可选的**：Claude 存单个过期时间戳，
+# Codex 存 "agent_id:expiry" 集合；0 表示永不过期。过期不需要写回 ——
+# 推导层按时间戳判断即可，这样漏报「子 agent 结束」时标记会自己过期回落，
 # 而不会永久亮着 ▶。
 whistle_resolve_idle_panes() {
   _rip_cmds="${1:-}"
   _rip_sc="${2:-}"
   _rip_lead="${3:-0}"
+  _rip_mode="${4:-}"
 
   [ "$_rip_sc" -gt 0 ] 2> /dev/null || return 1
 
@@ -658,7 +665,7 @@ whistle_resolve_idle_panes() {
   #
   # 去掉整列是无损的：按 '|' 切开再按 '|' 拼回去，消息里的 '|' 原样还在。
   awk -F'|' -v OFS='|' -v cmds="$_rip_cmds" -v sc="$_rip_sc" \
-    -v lead="$_rip_lead" -v now="$_rip_now" '
+    -v lead="$_rip_lead" -v now="$_rip_now" -v pane_mode="$_rip_mode" '
     # ⚠️ 这个 rank 表必须与 whistle_rank 逐项一致（awk 里没法调 shell 函数）。
     function rank(s) {
       if (s == "error") return 5
@@ -667,6 +674,10 @@ whistle_resolve_idle_panes() {
       if (s == "running") return 2
       if (s == "idle") return 1
       return 0
+    }
+    function is_codex(s) {
+      s = tolower(s)
+      return s == "codex" || s == "codex.exe"
     }
     BEGIN {
       n = split(cmds, a, " ")
@@ -679,19 +690,38 @@ whistle_resolve_idle_panes() {
     {
       # 命令列永远是最后一列
       cmd = $NF
-      # 子 agent 标记列（可选）：过期时间戳，0 = 永不过期。
-      # 只认纯数字 —— 消息里带 | 时列数会飘，宁可漏判也不能把消息当时间戳。
-      subexp = ""
-      if (NF >= sc + 5 && $(sc + 4) ~ /^[0-9]+$/) subexp = $(sc + 4)
+      # 子 agent 标记列（可选）：
+      #   - Claude 旧格式：单个纯数字过期时间戳，0 = 永不过期
+      #   - Codex 新格式：空格分隔的 "agent_id:expiry" 集合
+      subraw = ""
+      sub_alive = 0
+      if (NF >= sc + 5) subraw = $(sc + 4)
+      if (subraw ~ /^[0-9]+$/) {
+        sub_alive = (subraw + 0 == 0 || now + 0 < subraw + 0)
+      } else if (subraw != "") {
+        nsub = split(subraw, subs, " ")
+        for (si = 1; si <= nsub; si++) {
+          if (subs[si] !~ /:/) continue
+          split(subs[si], sv, ":")
+          aexp = sv[2] + 0
+          if (aexp == 0 || now + 0 < aexp) {
+            sub_alive = 1
+            break
+          }
+        }
+      }
       notice = $(sc + 1)
       amsg = $(sc + 2)
       nmsg = $(sc + 3)
       act = $sc
 
-      # 活动态推导：没上报过、但前台跑着 agent → idle
-      if (act == "" && (cmd in list)) act = "idle"
+      # 活动态推导：没上报过、但前台跑着 agent → idle。
+      # strict 模式的 Codex 例外：没有 Hook 上报时状态未知，不猜 idle。
+      if (act == "" && (cmd in list) && !(pane_mode == "strict" && is_codex(cmd))) {
+        act = "idle"
+      }
       # 子 agent 还在跑 → 活动态强制 running（哪怕主回合已经结束）
-      if (subexp != "" && (subexp + 0 == 0 || now + 0 < subexp + 0)) act = "running"
+      if (sub_alive) act = "running"
 
       # 有效态 = rank 高者（与 whistle_effective_state 一致）
       ra = rank(act)
@@ -876,22 +906,200 @@ whistle_notice_set() {
   printf '%s' "$_ns_pane"
 }
 
-# whistle_sub_set <start|stop> [pane]
+# -- pane 内 Codex session / subagent 集合 ----------------------------------
 #
-# 子 agent 标记：@whistle_sub 存**过期时间戳**（epoch 秒），0 = 永不过期。
+# 每个条目是 "<id>:<expiry>"。expiry=0 表示永不过期；集合用空格分隔。
+# session id / agent id 的实际格式不含冒号与空格。
+
+whistle_cx_set_prune() {
+  _cxp_set="${1:-}"
+  _cxp_now="${2:-$(whistle_now)}"
+  _cxp_out=''
+
+  for _cxp_it in $_cxp_set; do
+    case "$_cxp_it" in
+    *:*) _cxp_exp=${_cxp_it##*:} ;;
+    *) continue ;;
+    esac
+    case "$_cxp_exp" in
+    '' | *[!0-9]*) continue ;;
+    esac
+    if [ "$_cxp_exp" -ne 0 ] && [ "$_cxp_now" -ge "$_cxp_exp" ]; then
+      continue
+    fi
+    _cxp_out="${_cxp_out:+$_cxp_out }$_cxp_it"
+  done
+  printf '%s' "$_cxp_out"
+}
+
+whistle_cx_set_del() {
+  _cxd_set="${1:-}"
+  _cxd_id="${2:-}"
+  _cxd_out=''
+  [ -n "$_cxd_id" ] || {
+    printf '%s' "$_cxd_set"
+    return 0
+  }
+  for _cxd_it in $_cxd_set; do
+    _cxd_sid=${_cxd_it%%:*}
+    [ "$_cxd_sid" = "$_cxd_id" ] && continue
+    _cxd_out="${_cxd_out:+$_cxd_out }$_cxd_it"
+  done
+  printf '%s' "$_cxd_out"
+}
+
+whistle_cx_set_add() {
+  _cxa_set="${1:-}"
+  _cxa_id="${2:-}"
+  _cxa_until="${3:-0}"
+  [ -n "$_cxa_id" ] || {
+    printf '%s' "$_cxa_set"
+    return 0
+  }
+  _cxa_set=$(whistle_cx_set_del "$_cxa_set" "$_cxa_id")
+  printf '%s' "${_cxa_set:+$_cxa_set }$_cxa_id:$_cxa_until"
+}
+
+whistle_cx_set_has() {
+  case "${1:-}" in
+  '' | ' ') return 1 ;;
+  *) return 0 ;;
+  esac
+}
+
+# whistle_cx_activity_apply <pane> <running|idle|end> <session_id>
 #
-# start：写 @whistle_sub = now + @whistle_sub_ttl。
+# 更新 pane 内的 session 集合，并把推导后的活动态写到 stdout：
+#   running > idle > 空
+whistle_cx_activity_apply() {
+  _caa_pane=$(whistle_resolve_pane "${1:-}")
+  _caa_action="${2:-}"
+  _caa_sid="${3:-}"
+  [ -n "$_caa_pane" ] || return 1
+  [ -n "$_caa_sid" ] || return 1
+
+  _caa_run=$(whistle_tmux show -pqv -t "$_caa_pane" @whistle_cx_running 2> /dev/null) || _caa_run=''
+  _caa_idle=$(whistle_tmux show -pqv -t "$_caa_pane" @whistle_cx_idle 2> /dev/null) || _caa_idle=''
+  _caa_now=$(whistle_now)
+  _caa_run=$(whistle_cx_set_prune "$_caa_run" "$_caa_now")
+  _caa_idle=$(whistle_cx_set_prune "$_caa_idle" "$_caa_now")
+
+  _caa_ttl=$(whistle_conf '@whistle_cx_session_ttl')
+  case "$_caa_ttl" in
+  '' | *[!0-9]*) _caa_ttl=43200 ;;
+  esac
+  if [ "$_caa_ttl" -eq 0 ]; then
+    _caa_until=0
+  else
+    _caa_until=$((_caa_now + _caa_ttl))
+  fi
+
+  case "$_caa_action" in
+  running)
+    _caa_idle=$(whistle_cx_set_del "$_caa_idle" "$_caa_sid")
+    _caa_run=$(whistle_cx_set_add "$_caa_run" "$_caa_sid" "$_caa_until")
+    ;;
+  idle)
+    _caa_run=$(whistle_cx_set_del "$_caa_run" "$_caa_sid")
+    _caa_idle=$(whistle_cx_set_add "$_caa_idle" "$_caa_sid" "$_caa_until")
+    ;;
+  end)
+    _caa_run=$(whistle_cx_set_del "$_caa_run" "$_caa_sid")
+    _caa_idle=$(whistle_cx_set_del "$_caa_idle" "$_caa_sid")
+    ;;
+  *) return 1 ;;
+  esac
+
+  whistle_tmux set -p -t "$_caa_pane" @whistle_cx_running "$_caa_run" \
+    \; set -p -t "$_caa_pane" @whistle_cx_idle "$_caa_idle" || return 1
+
+  if whistle_cx_set_has "$_caa_run"; then
+    printf 'running'
+  elif whistle_cx_set_has "$_caa_idle"; then
+    printf 'idle'
+  else
+    printf ''
+  fi
+}
+
+# 升级到 strict 后，旧 raw Codex 的 Stop/SessionEnd 会被 fail-closed 忽略；
+# 升级前留下的 @whistle=running/idle 没有写入者能清掉。这里只清「Codex 前台 +
+# hook/migration 来源 + 无 PaneBinding + 无 running session 集合」的旧活动态。
+# 不能降成 idle：进程名无法区分 Codex 正在干活还是停在提示符，会留下永久假 ◉。
+whistle_codex_stale_legacy_panes() {
+  _csl_mode="${1:-}"
+  [ "$_csl_mode" = strict ] || return 0
+  awk -F'|' '
+    $1 ~ /^%[0-9]+$/ &&
+    $2 ~ /^codex(\.exe)?$/ &&
+    ($3 == "running" || $3 == "idle") &&
+    ($4 == "hook" || $4 == "migration") &&
+    $5 == "" &&
+    $6 == "" { print $1 }
+  '
+}
+
+whistle_codex_clear_stale_legacy() {
+  [ "$(whistle_conf '@whistle_codex_pane_mode')" = strict ] || return 0
+  _csc_rows=$(whistle_tmux list-panes -a \
+    -F '#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_src}|#{@whistle_codex_binding}|#{@whistle_cx_running}|#{@whistle_sub}' \
+    2> /dev/null) || return 0
+  _csc_panes=$(printf '%s\n' "$_csc_rows" | whistle_codex_stale_legacy_panes strict)
+  for _csc_pane in $_csc_panes; do
+    whistle_state_gone "$_csc_pane" > /dev/null || continue
+    whistle_sub_set stop "$_csc_pane" > /dev/null || true
+    _csc_win=$(whistle_pane_window "$_csc_pane")
+    [ -n "$_csc_win" ] && whistle_recompute_window "$_csc_win"
+  done
+}
+
+# 前台进程已经退回 shell，但 Hook 写入的 running/idle 还在 —— 这是 agent
+# SessionEnd 丢失或 strict 迁移后的残留。通知通道保留，活动通道降为 gone。
+whistle_stale_activity_panes() {
+  _sap_cmds="${1:-}"
+  awk -F'|' -v cmds="$_sap_cmds" '
+    BEGIN {
+      n = split(cmds, a, " ")
+      for (i = 1; i <= n; i++) if (a[i] != "") agent[a[i]] = 1
+    }
+    $1 ~ /^%[0-9]+$/ &&
+    ($2 == "running" || $2 == "idle") &&
+    ($3 == "hook" || $3 == "migration") &&
+    !($6 in agent) { print $1 }
+  '
+}
+
+whistle_clear_stale_activity() {
+  _csa_rows=$(whistle_tmux list-panes -a \
+    -F '#{pane_id}|#{@whistle}|#{@whistle_src}|#{@whistle_notice}|#{@whistle_sub}|#{pane_current_command}' \
+    2> /dev/null) || return 0
+  _csa_panes=$(printf '%s\n' "$_csa_rows" \
+    | whistle_stale_activity_panes "$(whistle_conf '@whistle_agent_cmds')")
+  for _csa_pane in $_csa_panes; do
+    whistle_state_gone "$_csa_pane" > /dev/null || continue
+    whistle_sub_set stop "$_csa_pane" > /dev/null || true
+  done
+}
+
+# whistle_sub_set <start|stop> [pane] [agent_id]
+#
+# 子 agent 标记：
+#   - Claude 旧协议：@whistle_sub 存单个过期时间戳，0 = 永不过期
+#   - Codex：@whistle_sub 存空格分隔的 "agent_id:expiry" 集合
+#
+# start：无 id 时写 now + @whistle_sub_ttl；有 id 时更新集合中的对应项。
 #   活动态由**推导层**合成（标记有效 → 活动态强制 running），
 #   这里不写 @whistle —— 写了就分不清「主回合在跑」和「只是子 agent 在跑」，
 #   子 agent 结束（stop）时那份 running 会留下来变 permanent。
 #
-# stop：清 @whistle_sub。活动态是否回落到 idle 由合成规则处理
+# stop：无 id 时清空；有 id 时只摘对应 agent。活动态是否回落到 idle 由合成规则处理
 #   （@whistle 是什么就显示什么）。
 #
 # 过期不需要写回：推导层按时间戳判断，标记会自己过期回落。
 whistle_sub_set() {
   _ss_act="${1:-}"
   _ss_pane=$(whistle_resolve_pane "${2:-}")
+  _ss_id="${3:-}"
 
   if [ -z "$_ss_pane" ]; then
     printf 'tmux-whistle: 找不到目标 pane（在 tmux 外运行时请用 -t <pane>）\n' >&2
@@ -909,10 +1117,29 @@ whistle_sub_set() {
     else
       _ss_until=$(($(whistle_now) + _ss_ttl))
     fi
-    whistle_tmux set -p -t "$_ss_pane" @whistle_sub "$_ss_until" || return 1
+    if [ -n "$_ss_id" ]; then
+      _ss_set=$(whistle_tmux show -pqv -t "$_ss_pane" @whistle_sub 2> /dev/null) || _ss_set=''
+      case "$_ss_set" in
+      '' | *:*) ;;
+      *[!0-9]*) ;;
+      *) _ss_set="legacy:$_ss_set" ;;
+      esac
+      _ss_set=$(whistle_cx_set_prune "$_ss_set")
+      _ss_set=$(whistle_cx_set_add "$_ss_set" "$_ss_id" "$_ss_until")
+    else
+      _ss_set="$_ss_until"
+    fi
+    whistle_tmux set -p -t "$_ss_pane" @whistle_sub "$_ss_set" || return 1
     ;;
   stop)
-    whistle_tmux set -p -t "$_ss_pane" @whistle_sub '' || return 1
+    if [ -n "$_ss_id" ]; then
+      _ss_set=$(whistle_tmux show -pqv -t "$_ss_pane" @whistle_sub 2> /dev/null) || _ss_set=''
+      _ss_set=$(whistle_cx_set_prune "$_ss_set")
+      _ss_set=$(whistle_cx_set_del "$_ss_set" "$_ss_id")
+      whistle_tmux set -p -t "$_ss_pane" @whistle_sub "$_ss_set" || return 1
+    else
+      whistle_tmux set -p -t "$_ss_pane" @whistle_sub '' || return 1
+    fi
     ;;
   *)
     printf 'tmux-whistle: 未知的子 agent 标记动作 [%s]（可选：start stop）\n' "$_ss_act" >&2
@@ -1022,7 +1249,10 @@ whistle_state_gone() {
   whistle_tmux set -p -t "$_sg_pane" @whistle "$WHISTLE_GONE_STATE" \
     \; set -p -t "$_sg_pane" -u @whistle_msg \
     \; set -p -t "$_sg_pane" -u @whistle_at \
-    \; set -p -t "$_sg_pane" -u @whistle_body || return 1
+    \; set -p -t "$_sg_pane" -u @whistle_src \
+    \; set -p -t "$_sg_pane" -u @whistle_body \
+    \; set -p -t "$_sg_pane" @whistle_cx_running '' \
+    \; set -p -t "$_sg_pane" @whistle_cx_idle '' || return 1
 
   printf '%s' "$_sg_pane"
 }
@@ -1151,7 +1381,8 @@ whistle_recompute_window() {
   # 推导层：没上报过、但前台跑着 agent 的 pane 算 idle；子 agent 在跑则强制 running。
   # 这层推导在纯函数之前做，下游（聚合、计数、菜单）全都白拿同一个口径。
   _lines=$(printf '%s\n' "$_lines" \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0)
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0 \
+      "$(whistle_conf '@whistle_codex_pane_mode')")
 
   _agg=$(printf '%s' "$_lines" | whistle_aggregate)
   # 拆 6 列：<有效态>|<消息>|<待处理数>|<胜出 pane>|<通知态>|<通知消息>
@@ -1190,6 +1421,8 @@ whistle_recompute_window() {
 }
 
 whistle_recompute_global() {
+  whistle_codex_clear_stale_legacy
+
   # 必须带 pane_id：whistle_aggregate 会跳过不以 '%' 开头的行，
   # 只传 @whistle 的话每一行都被丢掉，计数恒为 0。
   #
@@ -1197,7 +1430,8 @@ whistle_recompute_global() {
   _cg_rows=$(whistle_tmux list-panes -a \
     -F '#{pane_id}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' 2> /dev/null)
   _cg_rows=$(printf '%s\n' "$_cg_rows" \
-    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0)
+    | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 2 0 \
+      "$(whistle_conf '@whistle_codex_pane_mode')")
 
   _n=$(printf '%s\n' "$_cg_rows" | whistle_aggregate | cut -d'|' -f3)
   _c=$(printf '%s\n' "$_cg_rows" | whistle_count_states)
@@ -1294,6 +1528,7 @@ whistle_agent_windows() {
     -F '#{session_name}|#{window_id}|#{window_name}|#{window_index}|#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_notice}|#{@whistle_msg}|#{@whistle_notice_msg}|#{@whistle_sub}|#{pane_current_command}' \
     2> /dev/null \
     | whistle_resolve_idle_panes "$(whistle_conf '@whistle_agent_cmds')" 7 6 \
+      "$(whistle_conf '@whistle_codex_pane_mode')" \
     | awk -F'|' -v gone="$WHISTLE_GONE_STATE" '
     {
       # 窗口内位置：**每一行都数**（包括下一行就被过滤掉的 pane），

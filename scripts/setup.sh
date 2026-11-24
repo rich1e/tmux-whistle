@@ -52,6 +52,7 @@ whistle_status_right_patch
 # 才自己退出。于是「代码改了、测试也过了，prefix + r 却看不出变化」
 # （2026-11-11 实际踩到）。停掉之后下面这次重算会用新代码重起一份。
 whistle_spin_stop
+whistle_clear_stale_activity
 whistle_recompute_global
 
 # prefix r 之后主题已重刷，把上次残留的边框染色清掉（KP-6）

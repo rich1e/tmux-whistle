@@ -1,12 +1,13 @@
 #!/bin/sh
 # tmux-whistle 本地安装 / 卸载。
 #
-# 五件事：
+# 六件事：
 #   1. 把仓库符号链接进 $TMUX_PLUGIN_MANAGER_PATH/tmux-whistle
 #   2. 把 CLI 链接进 ~/.local/bin（hook 与 shell 都要能找到它）
-#   3. 往 tmux.conf.local 追加一段带 marker 的配置块
-#   4. 软链 OpenCode TUI 插件
-#   5. 安装 Claude Code 与 Codex hooks
+#   3. 把 pane 本地 Codex 启动器链接进 ~/.local/bin
+#   4. 往 tmux.conf.local 追加一段带 marker 的配置块
+#   5. 软链 OpenCode TUI 插件
+#   6. 安装 Claude Code 与 Codex hooks
 #
 # 只改自己那段 marker 块，绝不碰别的配置。重复执行安全。
 #
@@ -51,7 +52,7 @@ while [ $# -gt 0 ]; do
     shift
     ;;
   -h | --help)
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
@@ -145,6 +146,7 @@ if [ "$UNINSTALL" = 1 ]; then
   say 'tmux-whistle 卸载'
   remove_block "$TMUX_CONF_LOCAL"
   [ -L "$BIN_DIR/tmux-whistle" ] && run command rm -f "$BIN_DIR/tmux-whistle"
+  [ -L "$BIN_DIR/tmux-whistle-codex" ] && run command rm -f "$BIN_DIR/tmux-whistle-codex"
   [ -L "$PLUGIN_DIR" ] && run command rm -f "$PLUGIN_DIR"
   # OpenCode 插件也是软链，形态与上面两条一致（指向目录）。
   # 漏了这一条 → 卸载后插件仍被加载、仍往 tmux 写状态。
@@ -162,6 +164,7 @@ _in_version=$("$ROOT/bin/tmux-whistle" --version)
 say "$_in_version 安装"
 [ -x "$ROOT/hooks/claude-code.sh" ] || run chmod +x "$ROOT/hooks/claude-code.sh"
 [ -x "$ROOT/hooks/codex.sh" ] || run chmod +x "$ROOT/hooks/codex.sh"
+[ -x "$ROOT/bin/tmux-whistle-codex" ] || run chmod +x "$ROOT/bin/tmux-whistle-codex"
 [ -x "$ROOT/tmux-whistle.tmux" ] || run chmod +x "$ROOT/tmux-whistle.tmux"
 [ -x "$ROOT/scripts/setup.sh" ] || run chmod +x "$ROOT/scripts/setup.sh"
 [ -x "$ROOT/lib/detect.sh" ] || run chmod +x "$ROOT/lib/detect.sh"
@@ -180,6 +183,8 @@ say "  插件目录 -> $PLUGIN_DIR"
 # 2. CLI 进 PATH
 run ln -sfn "$ROOT/bin/tmux-whistle" "$BIN_DIR/tmux-whistle"
 say "  CLI        -> $BIN_DIR/tmux-whistle"
+run ln -sfn "$ROOT/bin/tmux-whistle-codex" "$BIN_DIR/tmux-whistle-codex"
+say "  Codex 启动器 -> $BIN_DIR/tmux-whistle-codex"
 case ":$PATH:" in
 *":$BIN_DIR:"*) ;;
 *) say "  注意：$BIN_DIR 不在 PATH 里，Claude Code hook 用的是绝对路径所以仍可用，
@@ -243,25 +248,26 @@ say ''
 say '完成。接下来：'
 say '  1. tmux source-file ~/.config/tmux/tmux.conf    （或 prefix + r）'
 say '  2. tmux-whistle doctor'
+say '  3. 在 tmux 内启动 Codex 请用 tmux-whistle-codex（独立 pane 绑定 + --no-daemon）'
 if command -v terminal-notifier > /dev/null 2>&1; then
   _in_tn_ver=$(terminal-notifier -version 2> /dev/null)
   _in_tn_major=$(printf '%s\n' "$_in_tn_ver" | sed -n 's/^terminal-notifier \([0-9][0-9]*\)\..*$/\1/p')
   case "$_in_tn_major" in
   [3-9] | [1-9][0-9]*)
-    say '  3. macOS 桌面通知：先检查 terminal-notifier 授权与提醒设置：'
+    say '  4. macOS 桌面通知：先检查 terminal-notifier 授权与提醒设置：'
     say '     terminal-notifier -diagnose'
     ;;
   *)
-    say "  3. terminal-notifier 版本较旧或无法识别（${_in_tn_ver:-未知}），建议升级到 3.1+；当前版本不支持 -diagnose。"
+    say "  4. terminal-notifier 版本较旧或无法识别（${_in_tn_ver:-未知}），建议升级到 3.1+；当前版本不支持 -diagnose。"
     ;;
   esac
 elif command -v osascript > /dev/null 2>&1; then
-  say '  3. macOS 上先跑一次 osascript 测试通知，并在系统设置里给 Script Editor 授权：'
+  say '  4. macOS 上先跑一次 osascript 测试通知，并在系统设置里给 Script Editor 授权：'
   say '     osascript -e '"'"'display notification "test"'"'"''
 elif command -v notify-send > /dev/null 2>&1; then
-  say '  3. 桌面通知使用 notify-send；请按当前桌面环境检查通知权限。'
+  say '  4. 桌面通知使用 notify-send；请按当前桌面环境检查通知权限。'
 else
-  say '  3. 未检测到桌面通知后端（terminal-notifier / osascript / notify-send）；桌面通知将不可用。'
+  say '  4. 未检测到桌面通知后端（terminal-notifier / osascript / notify-send）；桌面通知将不可用。'
 fi
 [ "$DRY" = 1 ] && say ''
 [ "$DRY" = 1 ] && say '（dry-run：以上改动均未真正落盘）'

@@ -22,11 +22,12 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 
 ## 结构
 
-- `bin/tmux-whistle` — CLI 入口，**版本号唯一真源在文件顶部**（`WHISTLE_VERSION` / `BUILD_DATE` / `BUILD_NUMBER`）。用户子命令：`done|wait|error|running|idle|run|clear|list|menu|jump|on|off|doctor|install-hooks|install-codex-hooks`；`--activity` / `--notice` / `--sub-agent-*` / `--menu-*` 等是 hook 与测试用的内部入口。
+- `bin/tmux-whistle` — CLI 入口，**版本号唯一真源在文件顶部**（`WHISTLE_VERSION` / `BUILD_DATE` / `BUILD_NUMBER`）。用户子命令：`done|wait|error|running|idle|run|clear|list|menu|jump|codex|on|off|doctor|install-hooks|install-codex-hooks`；`--activity` / `--notice` / `--sub-agent-*` / `--menu-*` 等是 hook 与测试用的内部入口。
+- `bin/tmux-whistle-codex` — pane 本地 Codex 启动器。它建立 `PaneBinding` 后强制 `codex --no-daemon`，是多个 Codex TUI 正确上报的前提。
 - `lib/core.sh` — **唯一状态写入点**。`lib/status-line.sh` 生成 tmux format 徽章（零 fork），`lib/deliver.sh` 负责六渠道投递，`lib/menu.sh` 是自绘 popup（`prefix + n`），`lib/spin.sh` 是独立的动画推进器进程。
 - **三个 agent 接入源**：
   - Claude Code — `hooks/claude-code.sh`（hook 进程在 pane 进程树里，继承 `TMUX_PANE`）。`lib/install-hooks.sh` 合并 `~/.claude/settings.json`（只动带 marker 的条目）。
-  - Codex — `hooks/codex.sh`（hook 进程同样在 pane 进程树里）。`lib/install-codex-hooks.sh` 合并 `~/.codex/hooks.json`（只动带 marker 的条目，且**只追加**，避免 Codex 的 trust index 漂移）。`lib/install-agent-hooks.sh` 是 Claude + Codex 的聚合入口。
+  - Codex — `hooks/codex.sh`。**managed daemon 被多个 TUI 复用后 `TMUX_PANE` 是 daemon 启动快照，不可信**；必须由 `tmux-whistle-codex` 建立 PaneBinding 并以 `--no-daemon` 启动。设计见 `docs/codex-pane-attribution-design.md`。`lib/install-codex-hooks.sh` 合并 `~/.codex/hooks.json`（只动带 marker 的条目，且**只追加**，避免 Codex 的 trust index 漂移）。`lib/install-agent-hooks.sh` 是 Claude + Codex 的聚合入口。
   - OpenCode — `hooks/opencode/tui.js`（TUI 插件，只有它的 `TMUX_PANE` 可信）+ `hooks/opencode.sh`（薄壳）+ `lib/opencode.sh`（纯函数映射，可被 L1 source）。**事件里没有 pane 信息**（99 个 V2 事件一个都没有），且 `opencode serve --service` 是 PPID=1 的共享守护、环境是启动快照 —— 所以绝不能按 cwd 猜 pane。
 - 入口链路：`tmux-whistle.tmux`（tpm 当**可执行文件**跑）→ `.tmux-whistle.conf` → `scripts/setup.sh`。这三个 `.sh`/`.tmux` 必须是可执行文件。
 - **OpenCode 插件必须以目录形态软链**（`~/.config/opencode/plugins/tmux-whistle` → `hooks/opencode`，链接名**不带 `.js`**）。单文件会被当成 server part 加载进 `TMUX_PANE` 不可信的进程；`plugins` 配置里的单文件路径会被官方**静默跳过**。`tui.js` 这个文件名是契约，改名就不再被认成 TUI part。
@@ -56,6 +57,12 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
   `UserPromptSubmit→running`、
   `PermissionRequest→wait`、`PostToolUse→仅清 wait`、`SubagentStart/Stop→子 agent 标记`、
   `Stop→idle+done`、`Interrupt→idle`、`SessionEnd→gone`。
+- **默认 `@whistle_codex_pane_mode=strict`**：只接受启动器注入的 PaneBinding；缺失或无效时 Hook 静默不写状态。迁移期可显式设为 `auto` 或 `legacy`，但多 TUI 会写错 pane，doctor 会报红。
+- **strict 下 Codex 不按进程猜 idle**：没有 Hook 上报时，进程名只能证明 TUI 还活着，不能区分 running / idle；`whistle_resolve_idle_panes` 必须跳过未上报的 Codex。旧的 `hook|migration` `running` / `idle` 也由全局重算清成 `gone`，不能降成 `idle`。
+- **启动器建立绑定后立即写 `idle`**：当前 Codex 可能到首个 prompt 才发 `SessionStart`；少了这一步，strict 模式会让刚打开的 TUI 在状态栏里完全不可见。
+- **菜单打开前先重算全局计数**：菜单列表是 live pane 推导，状态栏读缓存计数；`cmd_menu` / `cmd_menu_args` 必须先 `whistle_recompute_global`，否则无 hook 的 raw Codex 启停会让两边数量不一致。
+- **前台进程已退回 shell 时清掉 hook/migration 活动态**：`running` / `idle` 只代表临时活动；菜单打开与插件重载入口会在重算前把 `@whistle_src=hook|migration` 且不再是 agent 的活动态降为 `gone`，通知通道保留。
+- **同一 pane 多 session 要聚合**：活动态由 `@whistle_cx_running` / `@whistle_cx_idle` 集合推导，任一 session running 就不能被另一个 Stop 降成 idle；SessionEnd 只移除自己的 session。
 - **Codex hook 只有 `PostToolUse` 异步**。它只清 wait、不写活动态；其余生命周期事件同步，
   防止 `SessionStart → UserPromptSubmit → Stop` 的写入乱序留下永久 `▶`。
 - **不要在 `SessionStart` 写 running**：新开 / 恢复停在提示符前，只有
@@ -65,7 +72,7 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
   turn，和父会话共用 `TMUX_PANE`。`UserPromptSubmit` 命中 marker 后把 `session_id`
   写进 pane option `@whistle_cx_quiet`，后续 `Stop` / `SessionEnd` 等事件全部跳过，
   否则会覆盖父会话 activity、清掉未读通知并产生系统通知。
-- **`SubagentStop` 只清 `@whistle_sub`，绝不写活动态**。子 agent 结束时主 agent 通常还在跑。
+- **`SubagentStop` 只移除自己的 id，绝不写活动态**。Codex 的 `@whistle_sub` 是 `agent_id:expiry` 集合，最后一个子 agent 结束才回落。
 - `lib/install-codex-hooks.sh` 合并 `~/.codex/hooks.json` 时**追加**条目，不能前插：
   Codex 把信任绑定在 `event/index` 上，前插会让用户已有的 ping-island 等条目失去信任。
 - 新装或改命令后，用户必须在 Codex 里输入 `/hooks` 审核并信任；安装器不修改信任状态。
@@ -109,7 +116,7 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - helper 的 `opt` 读全局 option（`show -gqv`），`optw` 读全局 **window** option（`show -gwv`）；用错会静默读空、测试假绿。读某个窗口自己的 option 用 `wt show -wv -t "$w" <name>`。
 - hook 走 `run-shell -b` 是异步的，断言前用 `wt_wait_until` 轮询，不要 sleep。
 - `bin/tmux-whistle` 的 `cmd_menu` 与 `cmd_menu_args` 是两份几乎相同的循环（后者供测试断言 argv）；**改一边不改另一边 = 假绿**。
-- **完整 `make check` 约 10 分钟**（648 项）。其中约 216 秒是「一个用例一个 tmux server」的固定开销（0.47s/项），写入路径已优化过，再快只能动隔离架构 —— 不建议。日常用 `make test-unit`（10s）或 `bats -f '<用例名>' <文件>` 跑局部。
+- **完整 `make check` 约 10 分钟**（714 项）。其中约 216 秒是「一个用例一个 tmux server」的固定开销（0.47s/项），写入路径已优化过，再快只能动隔离架构 —— 不建议。日常用 `make test-unit`（10s）或 `bats -f '<用例名>' <文件>` 跑局部。
 - `menu_popup.bats` 用 `expect` 附着伪终端；非交互环境若 `TERM=dumb`，用
   `TERM=xterm-256color make check`，否则 9 条 popup 用例会假红。
 

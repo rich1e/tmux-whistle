@@ -223,6 +223,33 @@ run_menu_popup_spy() {
   assert_contains "$cmd" 'clear -t @'
 }
 
+@test "menu-args: 打开菜单前先重算状态栏计数" {
+  local p
+  p=$(wt display -p -t w1 '#{pane_id}')
+  wt set -p -t "$p" @whistle idle
+  wt set -g @whistle_count_idle 99
+
+  run "$CLI" --menu-args
+
+  assert_eq "$status" 0
+  assert_contains "$output" '空闲'
+  assert_eq "$(opt '@whistle_count_idle')" '1'
+}
+
+@test "menu-args: 清理前台进程已退出的 hook idle 状态" {
+  local p
+  p=$(wt display -p -t w1 '#{pane_id}')
+  wt set -p -t "$p" @whistle idle
+  wt set -p -t "$p" @whistle_src hook
+
+  run "$CLI" --menu-args
+
+  assert_eq "$status" 0
+  assert_eq "$output" ''
+  assert_eq "$(optp @whistle "$p")" 'gone'
+  assert_eq "$(opt '@whistle_count_idle')" '0'
+}
+
 @test "menu-args: session 名用 [] 裹住，与窗口名、消息分开" {
   # 菜单一行里挤着三样东西：session 名、窗口名、agent 的话。
   # 早先是 `完成 main:w1 做完了` —— session 名和内容糊在一起，

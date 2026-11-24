@@ -55,8 +55,9 @@ set -g @plugin 'rich1e/tmux-whistle'
 # ① 装 Claude Code / Codex hooks —— 不装的话 agent 干完不会自动亮徽章
 ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle install-hooks
 
-# ② 把 CLI 链进 PATH —— 不装的话 tmux-whistle 命令找不到
+# ② 把 CLI 与 Codex 启动器链进 PATH
 ln -sfn ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle ~/.local/bin/tmux-whistle
+ln -sfn ~/.config/tmux/plugins/tmux-whistle/bin/tmux-whistle-codex ~/.local/bin/tmux-whistle-codex
 ```
 
 ### 方式二：手动安装（不用 tpm）
@@ -70,7 +71,7 @@ cd tmux-whistle
 `install.sh` 做五件事：
 
 1. 把仓库软链到 `~/.local/share/tmux-whistle`
-2. 把 CLI 软链到 `~/.local/bin/tmux-whistle`（hook 与命令行都要能找到它）
+2. 把 CLI 与 `tmux-whistle-codex` 软链到 `~/.local/bin`（hook 与命令行都要能找到它）
 3. 往 `~/.config/tmux/tmux.conf.local` 追加一段带 marker 的配置块（改前备份原文件）
 4. 软链 OpenCode TUI 插件目录
 5. 幂等地把 Claude Code hooks 合并进 `~/.claude/settings.json`，把 Codex hooks 合并进
@@ -208,6 +209,8 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_spin_interval` | `0.5` | 每帧间隔（秒） |
 | `@whistle_recompute_every` | `60` | 推进器每 N 帧触发一次全局重算（配 0.5 秒 ≈ 30 秒）；用来让过期的后台 agent 标记自行回落 |
 | `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
+| `@whistle_codex_pane_mode` | `strict` | Codex pane 归因：`strict` / `auto` / `legacy`。`strict` 只接受 `tmux-whistle-codex` 的 PaneBinding |
+| `@whistle_cx_session_ttl` | `43200` | Codex pane 内 session 集合的过期秒数 |
 | **调试与兜底检测** | | |
 | `@whistle_debug` | `off` | 同时写投递日志与 hook 事件日志（路径见下） |
 | `@whistle_detect` | `off` | 关键词兜底检测（见下） |
@@ -500,6 +503,19 @@ hooks 装好后自动工作：
 ping-island 等条目。安装后启动 Codex，**先输入 `/hooks` 审核并信任**新增的
 `tmux-whistle` 条目；Codex 的信任绑定到 hook 哈希，命令变化后还要再审核一次。
 
+**多个 Codex TUI 必须在各自 pane 中使用：**
+
+```sh
+tmux-whistle-codex
+# 或
+tmux-whistle codex
+```
+
+Codex managed daemon 会按 `CODEX_HOME` 复用，daemon 的 `TMUX_PANE` 是第一个 TUI
+的启动快照。直接运行多个 `codex` 会让所有 Hook 都写到第一个 pane。启动器会设置
+`WHISTLE_CODEX_*` PaneBinding 并加 `--no-daemon`，确保每个 TUI 独立归因。
+默认 `@whistle_codex_pane_mode=strict`；没有可信绑定时不会写错 pane。
+
 | Codex 事件 | 状态栏 |
 |---|---|
 | 启动 / 恢复 / 开新会话 | `◉` 空闲（停在提示符前等你） |
@@ -580,6 +596,7 @@ tmux-whistle error   "构建失败"     # 标记出错
 tmux-whistle running               # 开始干活（亮 ▶，不计入 ⚑）
 tmux-whistle idle "等你输入"        # 进程在但闲着（亮 ◉，不计入 ⚑）
 
+tmux-whistle codex                 # pane 本地启动 Codex（PaneBinding + --no-daemon）
 tmux-whistle run -- npm test       # 包一个命令：按退出码落 ◆ / ⚠，带耗时
 tmux-whistle run '测试' -- npm test # 自定义标签
 

@@ -29,7 +29,7 @@ bats test/integration/badge.bats
 bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 ```
 
-改代码 → `make fmt` → `make check` → 提交。当前 648 项测试（143 单测 + 384 集成 + 121 e2e）。
+改代码 → `make fmt` → `make check` → 提交。当前 714 项测试（157 单测 + 414 集成 + 143 e2e）。
 
 ## 架构：分层与唯一写入点
 
@@ -53,7 +53,7 @@ L1 存储     tmux user option（tmux server 内存，不落盘、不跨 tmux �
 
 **三个接入源的区别（不要照抄 Claude 那套）**
 
-Codex 的 hook 进程也在 pane 进程树里，`TMUX_PANE` 可信，但事件集不同：
+Codex 的事件集不同；**`TMUX_PANE` 只在单 TUI / `--no-daemon` 下可信**：
 
 - 权限等待是 `PermissionRequest`，子 agent 是 `SubagentStart` / `SubagentStop`；
   **没有** `Notification` / `StopFailure`。
@@ -67,6 +67,20 @@ Codex 的 hook 进程也在 pane 进程树里，`TMUX_PANE` 可信，但事件�
   后台摘要的 `UserPromptSubmit` 带固定 marker，命中后把 `session_id` 记入
   `@whistle_cx_quiet`；该会话后续 `Stop` / `SessionEnd` 等事件全部跳过，不能覆盖父会话
   activity、清掉未读通知或触发系统通知。
+- **Codex managed daemon 的 `TMUX_PANE` 不可信。** daemon 按 `CODEX_HOME` 复用，
+  环境来自第一个启动它的 TUI；后续 TUI 的 Hook 事件仍带着旧 pane。当前
+  `hooks/codex.sh` 默认 strict，只接受 `tmux-whistle-codex` 注入的 PaneBinding；
+  禁止用 active pane、cwd 或窗口标题猜归属。完整设计见
+  [docs/codex-pane-attribution-design.md](docs/codex-pane-attribution-design.md)。
+  `tmux-whistle-codex` 建立绑定后必须立即写一次 `idle`：当前 Codex 可能到首个
+  prompt 才触发 `SessionStart`，strict 模式又不能按进程猜状态；不写就会让刚打开的
+  TUI 在状态栏里完全不可见。
+  `whistle_recompute_global` 会清理升级前 raw Codex 留下的
+  `@whistle=running|idle + @whistle_src=hook|migration + 无 binding` 假状态，
+  清成 `gone` 而不是降成 `idle`，避免 fail-closed 之后永远亮着 `▶` / `◉`。
+- 前台进程已经退回 shell 时，菜单打开与插件重载入口会在重算前把
+  `@whistle_src=hook|migration` 的 `running` / `idle` 降为 `gone`；
+  通知通道原样保留。
 - 配置在 `~/.codex/hooks.json`。安装器必须**追加**条目：Codex 的 trust key 带
   `event/index`，前插会让用户已有的第三方 hook（如 ping-island）失去信任。
 - 新 hook 由 Codex 按哈希要求人工审核；安装器只能提示用户输入 `/hooks`。
@@ -92,8 +106,10 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 |---|---|---|
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
 | pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
-| pane | `@whistle_sub` | 子 agent 标记，存的是**过期时间戳**（epoch 秒），空 = 无 |
+| pane | `@whistle_sub` | 子 agent 标记。Claude 用单个过期时间戳；Codex 用 `agent_id:expiry` 集合 |
 | pane | `@whistle_cx_quiet` | Codex 内部会话 `session_id` 列表，空格分隔；这些会话不进入状态机 |
+| pane | `@whistle_cx_running` `@whistle_cx_idle` | Codex pane 内 session 集合，条目为 `session_id:expiry` |
+| pane | `@whistle_codex_binding` | `tmux-whistle-codex` 写入的 client id；doctor 据此判断启动器是否生效 |
 | pane | `@whistle_os_seq` `@whistle_os_group` | 桌面通知的序号与最近一条 group，供已读精确撤回 |
 | pane | `@whistle_eff` | 派生：该 pane 的有效态（供 pane 徽章 format 读） |
 | window | `@whistle_win` `@whistle_win_msg` `@whistle_win_count` `@whistle_win_pane` | 派生，由 `whistle_recompute_window` 重算 |
@@ -370,6 +386,9 @@ agent 显示成「空闲」，**全程零报错**。新增任何一种「要告�
 `@whistle_agent_cmds` 里那些进程」的 pane 推导成 idle。推导发生在纯函数之前，
 窗口徽章、全局计数、菜单三处因此口径一致。
 判据是 tmux 自己的事实（这个 pane 的前台跑着谁），不是从屏幕文字里猜提示符。
+**strict 模式的 Codex 是例外**：未绑定 TUI 的 Hook 会被 fail closed，此时进程名
+只能证明 TUI 还活着，不能证明它空闲；按进程猜 idle 会让正在干活的 Codex 显示 `◉`。
+Hook 明确上报的 idle 仍照常保留。
 
 **`@whistle_sub` 存的是过期时间戳，不是布尔**：`PreToolUse`(Agent/Task) 写
 `now + @whistle_sub_ttl`，`SubagentStop` / `Notification(agent_completed)` 清空。

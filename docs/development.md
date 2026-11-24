@@ -57,7 +57,7 @@ bats --print-output-on-failure test/unit        # 失败时打印输出
 ```
 
 `make check` 是唯一需要记住的命令 —— 它已经把该跑的跑完了（**完整一遍约 10 分钟**，
-648 项；拆解见下文[「跑一次 make check 要多久」](#跑一次-make-check-要多久)）。五道关卡依次过，
+714 项；拆解见下文[「跑一次 make check 要多久」](#跑一次-make-check-要多久)）。五道关卡依次过，
 任一关红了就就地停住；全绿才允许提交：
 
 ```mermaid
@@ -107,7 +107,8 @@ make check-version
 ```
 .
 ├── bin/
-│   └── tmux-whistle            # CLI，用户入口：解析参数后调 core/deliver
+│   ├── tmux-whistle            # CLI，用户入口：解析参数后调 core/deliver
+│   └── tmux-whistle-codex      # pane 本地 Codex 启动器：PaneBinding + --no-daemon
 ├── lib/
 │   ├── core.sh                 # 状态机，唯一状态写入点；含三个不碰 tmux 的纯函数
 │   ├── status-line.sh          # 徽章 format 生成、幂等注入、读侧 hooks 注册

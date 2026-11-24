@@ -303,6 +303,50 @@ PY
   assert_contains "$output" 'config.toml 里还有 inline [hooks]'
 }
 
+# -- Codex pane attribution --------------------------------------------------
+
+install_fake_codex_features() {
+  cat > "$FAKE_BIN/codex" << 'EOF'
+#!/bin/sh
+if [ "${1:-}" = features ] && [ "${2:-}" = list ]; then
+  printf 'daemon_auto_start                        stable             true\n'
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$FAKE_BIN/codex"
+}
+
+@test "doctor: 多 Codex TUI 共用 daemon 且无 binding 时报错" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  local c="$BATS_TEST_TMPDIR/codex-config.toml"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh"
+  : > "$c"
+  install_fake_codex_features
+
+  run env PATH="$FAKE_BIN:$PATH" CODEX_HOOKS="$h" CODEX_CONFIG="$c" \
+    WHISTLE_DOCTOR_CODEX_PANES=2 WHISTLE_DOCTOR_CODEX_BOUND=0 "$CLI" doctor
+
+  assert_eq "$status" 1
+  assert_contains "$output" '未绑定到 pane'
+  assert_contains "$output" 'tmux-whistle-codex'
+  assert_contains "$output" 'daemon_auto_start=true'
+}
+
+@test "doctor: 多 Codex TUI 全部绑定后不再报错" {
+  local h="$BATS_TEST_TMPDIR/codex-hooks.json"
+  local c="$BATS_TEST_TMPDIR/codex-config.toml"
+  write_codex_hooks "$h" "$WHISTLE_ROOT/hooks/codex.sh"
+  : > "$c"
+  install_fake_codex_features
+
+  run env PATH="$FAKE_BIN:$PATH" CODEX_HOOKS="$h" CODEX_CONFIG="$c" \
+    WHISTLE_DOCTOR_CODEX_PANES=2 WHISTLE_DOCTOR_CODEX_BOUND=2 "$CLI" doctor
+
+  assert_contains "$output" '全部 Codex TUI 已经由 pane 本地启动器绑定（2/2）'
+  assert_not_contains "$output" '未绑定到 pane'
+}
+
 # -- OpenCode：逐事件列出订阅 --------------------------------------------------
 #
 # 只说「订阅 11 个事件」看不出订了哪 11 个，也看不出「声明了 12 条、

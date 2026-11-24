@@ -93,6 +93,7 @@ $WHISTLE_PROG $WHISTLE_VERSION_FULL — tmux 内跨 session 的 agent 状态通�
   $WHISTLE_PROG menu                 打开 agent 菜单（等同 prefix + n）
   $WHISTLE_PROG jump <窗口|序号|sess:win>
                                      跳到指定窗口并清除
+  $WHISTLE_PROG codex [参数...]      在 tmux pane 内以独立 daemon 启动 Codex
   $WHISTLE_PROG on | off             总开关
   $WHISTLE_PROG doctor               环境自检
   $WHISTLE_PROG version | --version  显示完整版本（阶段 + 构建日期 + 流水号）
@@ -129,6 +130,8 @@ Agent hooks 集成：
                                      / lines_3 / squares_9 / togglers_4；写错回落到 claude
   @whistle_spin_interval 0.5         每帧间隔（秒）
   @whistle_sub_ttl 1800              子 agent 标记的存活秒数（0 = 永不过期）
+  @whistle_codex_pane_mode strict    Codex pane 归因：strict / auto / legacy
+  @whistle_cx_session_ttl 43200      Codex pane 内 session 集合的过期秒数
   @whistle_agent_cmds "claude claude.exe codex codex.exe opencode"
                                     哪些前台进程算 agent（按进程发现空闲用）
 EOF
@@ -474,6 +477,12 @@ EOF
 # -- 菜单 / 跳转 -----------------------------------------------------------
 
 cmd_menu() {
+  # 菜单按 live pane 列表生成，状态栏读缓存计数。打开前先重算并刷新，
+  # 避免 raw Codex 启停但没有 hook 写入时两边长期不一致。
+  whistle_clear_stale_activity
+  whistle_recompute_global
+  whistle_refresh_all
+
   # 可选参数：--max-width N（主窗口宽度上限；绑定里传 #{window_width}）。
   _mn_max_width=''
   while [ $# -gt 0 ]; do
@@ -566,6 +575,9 @@ EOF
 # 调试/测试用：逐行打印菜单的 argv（每个参数一行）。
 # 用于在不依赖 attached client 的情况下验证参数构造。
 cmd_menu_args() {
+  whistle_clear_stale_activity
+  whistle_recompute_global
+
   # 先把五态颜色/图标/标签取齐（一次），再进循环 —— label 在 `$(...)` 子 shell 里
   # 执行，会继承父 shell 的变量，所以这里加载一次就够了；否则每项都重新加载，
   # 41 项时 --menu-args 会慢到 2~3 秒。
@@ -711,7 +723,7 @@ cmd_notice() {
 # 投递按活动态走（不是有效态）—— 子 agent 结束不该把用户没读的通知重播一遍。
 cmd_sub_agent() {
   _sa_act="$1"
-  _sa_pane=$(whistle_sub_set "$_sa_act" "${2:-}") || exit 1
+  _sa_pane=$(whistle_sub_set "$_sa_act" "${2:-}" "${WHISTLE_CX_SUB_AGENT_ID:-}") || exit 1
   case "$_sa_act" in
   start) whistle_finish "$_sa_pane" running ;;
   *) whistle_finish "$_sa_pane" idle ;;
@@ -727,14 +739,24 @@ cmd_sub_agent() {
 
 cmd_agent_idle() {
   _ai_pane=$(whistle_resolve_pane "${1:-}") || exit 1
-  whistle_sub_set stop "$_ai_pane" > /dev/null || exit 1
-  whistle_activity_set idle "$_ai_pane" hook '' '' > /dev/null || exit 1
-  whistle_finish "$_ai_pane" idle
+  [ -n "${WHISTLE_CX_SESSION_ID:-}" ] || whistle_sub_set stop "$_ai_pane" > /dev/null || exit 1
+  if [ -n "${WHISTLE_CX_SESSION_ID:-}" ]; then
+    _ai_act=$(whistle_cx_activity_apply "$_ai_pane" idle "$WHISTLE_CX_SESSION_ID") || exit 1
+  else
+    _ai_act=idle
+  fi
+  whistle_activity_set "${_ai_act:-idle}" "$_ai_pane" hook '' '' > /dev/null || exit 1
+  whistle_finish "$_ai_pane" "${_ai_act:-idle}"
 }
 
 cmd_prompt_start() {
   _ps_pane=$(whistle_resolve_pane "${1:-}") || exit 1
-  whistle_activity_set running "$_ps_pane" hook '' '' > /dev/null || exit 1
+  if [ -n "${WHISTLE_CX_SESSION_ID:-}" ]; then
+    _ps_act=$(whistle_cx_activity_apply "$_ps_pane" running "$WHISTLE_CX_SESSION_ID") || exit 1
+  else
+    _ps_act=running
+  fi
+  whistle_activity_set "${_ps_act:-running}" "$_ps_pane" hook '' '' > /dev/null || exit 1
 
   _ps_notice=$(whistle_tmux show -pqv -t "$_ps_pane" @whistle_notice 2> /dev/null) || _ps_notice=''
   _ps_cleared=0
@@ -743,7 +765,7 @@ cmd_prompt_start() {
     _ps_cleared=1
   fi
 
-  whistle_finish "$_ps_pane" running || exit 1
+  whistle_finish "$_ps_pane" "${_ps_act:-running}" || exit 1
 
   if [ "$_ps_cleared" = 1 ]; then
     _ps_win=$(whistle_pane_window "$_ps_pane")
@@ -792,15 +814,25 @@ cmd_turn_end() {
   done
 
   _te_pane=$(whistle_resolve_pane "$_te_pane") || exit 1
-  whistle_activity_set idle "$_te_pane" hook '' '' > /dev/null || exit 1
+  if [ -n "${WHISTLE_CX_SESSION_ID:-}" ]; then
+    _te_act=$(whistle_cx_activity_apply "$_te_pane" idle "$WHISTLE_CX_SESSION_ID") || exit 1
+  else
+    _te_act=idle
+  fi
+  whistle_activity_set "${_te_act:-idle}" "$_te_pane" hook '' '' > /dev/null || exit 1
   whistle_notice_set "$_te_state" "$_te_msg" "$_te_body" "$_te_pane" > /dev/null || exit 1
   whistle_finish "$_te_pane" "$_te_state"
 }
 
 cmd_turn_interrupt() {
   _ti_pane=$(whistle_resolve_pane "${1:-}") || exit 1
-  whistle_activity_set idle "$_ti_pane" hook '' '' > /dev/null || exit 1
-  whistle_sub_set stop "$_ti_pane" > /dev/null || exit 1
+  if [ -n "${WHISTLE_CX_SESSION_ID:-}" ]; then
+    _ti_act=$(whistle_cx_activity_apply "$_ti_pane" idle "$WHISTLE_CX_SESSION_ID") || exit 1
+  else
+    _ti_act=idle
+  fi
+  whistle_activity_set "${_ti_act:-idle}" "$_ti_pane" hook '' '' > /dev/null || exit 1
+  [ -n "${WHISTLE_CX_SESSION_ID:-}" ] || whistle_sub_set stop "$_ti_pane" > /dev/null || exit 1
 
   _ti_notice=$(whistle_tmux show -pqv -t "$_ti_pane" @whistle_notice 2> /dev/null) || _ti_notice=''
   _ti_cleared=0
@@ -809,7 +841,7 @@ cmd_turn_interrupt() {
     _ti_cleared=1
   fi
 
-  whistle_finish "$_ti_pane" idle || exit 1
+  whistle_finish "$_ti_pane" "${_ti_act:-idle}" || exit 1
 
   if [ "$_ti_cleared" = 1 ]; then
     _ti_win=$(whistle_pane_window "$_ti_pane")
@@ -874,6 +906,23 @@ cmd_forget_agent() {
     ;;
   esac
   whistle_refresh_sessions "$_win"
+}
+
+cmd_codex_session_end() {
+  _cse_pane=$(whistle_resolve_pane "${1:-}") || exit 1
+  if [ -z "${WHISTLE_CX_SESSION_ID:-}" ]; then
+    cmd_forget_agent "$_cse_pane"
+    return 0
+  fi
+
+  _cse_act=$(whistle_cx_activity_apply "$_cse_pane" end "$WHISTLE_CX_SESSION_ID") || exit 1
+  if [ -z "$_cse_act" ]; then
+    cmd_forget_agent "$_cse_pane"
+    return 0
+  fi
+
+  whistle_activity_set "$_cse_act" "$_cse_pane" hook '' '' > /dev/null || exit 1
+  whistle_finish "$_cse_pane" "$_cse_act"
 }
 
 cmd_print_status_line() {
@@ -1385,6 +1434,63 @@ PY
     fi
   fi
 
+  printf '\nCodex pane attribution\n'
+  _dg_cx_mode=$(whistle_conf '@whistle_codex_pane_mode')
+  printf '  - pane mode: %s\n' "${_dg_cx_mode:-auto}"
+  printf '  - CODEX_HOME: %s\n' "${CODEX_HOME:-${HOME}/.codex}"
+
+  _dg_codex_panes="${WHISTLE_DOCTOR_CODEX_PANES:-}"
+  _dg_codex_bound="${WHISTLE_DOCTOR_CODEX_BOUND:-}"
+  if [ -z "$_dg_codex_panes" ] || [ -z "$_dg_codex_bound" ]; then
+    _dg_codex_panes=0
+    _dg_codex_bound=0
+    _dg_codex_rows=$(whistle_tmux list-panes -a \
+      -F '#{pane_current_command}|#{@whistle_codex_binding}' 2> /dev/null)
+    while IFS='|' read -r _dg_cmd _dg_bind; do
+      case "$_dg_cmd" in
+      codex | codex.exe) _dg_codex_panes=$((_dg_codex_panes + 1)) ;;
+      *) continue ;;
+      esac
+      [ -n "$_dg_bind" ] || continue
+      _dg_pid=${_dg_bind#*:}
+      _dg_pid=${_dg_pid%%:*}
+      case "$_dg_pid" in
+      '' | *[!0-9]*) continue ;;
+      esac
+      kill -0 "$_dg_pid" 2> /dev/null || continue
+      _dg_proc=$(ps -p "$_dg_pid" -o command= 2> /dev/null || true)
+      case "$_dg_proc" in
+      *codex*) _dg_codex_bound=$((_dg_codex_bound + 1)) ;;
+      esac
+    done << EOF
+$_dg_codex_rows
+EOF
+  fi
+  case "$_dg_codex_panes" in '' | *[!0-9]*) _dg_codex_panes=0 ;; esac
+  case "$_dg_codex_bound" in '' | *[!0-9]*) _dg_codex_bound=0 ;; esac
+
+  if [ "$_dg_codex_panes" -eq 0 ]; then
+    _ok_line '当前没有运行中的 Codex TUI'
+  elif [ "$_dg_codex_bound" -ge "$_dg_codex_panes" ]; then
+    _ok_line "全部 Codex TUI 已经由 pane 本地启动器绑定（${_dg_codex_bound}/${_dg_codex_panes}）"
+  else
+    _dg_daemon='unknown'
+    if command -v codex > /dev/null 2>&1; then
+      _dg_daemon=$(codex features list 2> /dev/null \
+        | awk '$1 == "daemon_auto_start" { print $3; exit }')
+    fi
+    _dg_unbound=$((_dg_codex_panes - _dg_codex_bound))
+    if [ "$_dg_cx_mode" = strict ] || [ "$_dg_codex_panes" -gt 1 ]; then
+      _bad_line "有 ${_dg_unbound} 个 Codex TUI 未绑定到 pane；共享 daemon 会把状态写错 pane"
+      printf '    → 重新启动：tmux-whistle-codex\n'
+      printf '    → 或显式切回旧行为：set -g @whistle_codex_pane_mode legacy\n'
+      [ "$_dg_daemon" = true ] && printf '    → daemon_auto_start=true，多个 TUI 会复用同一个 daemon 环境\n'
+    else
+      _warn_line "当前 Codex TUI 未经过 pane 本地启动器（daemon_auto_start=${_dg_daemon}）"
+      printf '    → 多 pane 场景请使用 tmux-whistle-codex\n'
+    fi
+  fi
+
   printf '\n失效的旧绑定\n'
   # list-keys 的输出是多空格对齐的（"bind-key    -T prefix C-m     ..."），
   # 所以模式必须容忍任意空白，不能用单个空格。
@@ -1450,6 +1556,10 @@ jump)
   shift
   cmd_jump "$@"
   ;;
+codex)
+  shift
+  exec "$WHISTLE_BIN_DIR/tmux-whistle-codex" "$@"
+  ;;
 on | off)
   # 必须先用 $1 再 shift —— 先 shift 会把子命令本身吃掉
   cmd_toggle "$1"
@@ -1484,6 +1594,10 @@ install-codex-hooks)
 --clear-pane)
   shift
   cmd_forget_agent "${1:-}"
+  ;;
+--codex-session-end)
+  shift
+  cmd_codex_session_end "${1:-}"
   ;;
 --activity)
   shift

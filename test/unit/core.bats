@@ -386,6 +386,19 @@ EOF
 %2|done|done||通知消息'
 }
 
+@test "resolve_idle_panes: strict 模式不把未上报的 Codex 猜成 idle" {
+  # strict 模式会丢弃未绑定 Codex 的 Hook 事件；此时进程名只能证明
+  # TUI 还活着，不能证明它空闲。猜成 idle 会让正在干活的 Codex 显示 ◉。
+  run whistle_resolve_idle_panes 'claude codex' 2 0 strict <<'EOF'
+%1|||活动消息|通知消息|codex
+%2|||活动消息|通知消息|claude
+%3|idle||活动消息|通知消息|codex
+EOF
+  assert_eq "$output" '%1||||通知消息
+%2|idle||idle|通知消息
+%3|idle||idle|通知消息'
+}
+
 @test "resolve_idle_panes: 有上报状态的不动（哪怕前台也是 agent）" {
   # gone 尤其不能被认回 idle：那是「agent 已退出」的标记。
   run whistle_resolve_idle_panes 'claude claude.exe' 2 <<'EOF'
@@ -471,6 +484,78 @@ EOF
 %1||done|活动消息|通知消息|claude.exe
 EOF
   assert_eq "$output" '%1|done|done|idle|通知消息'
+}
+
+@test "resolve_idle_panes: Codex subagent 集合里只要有一个未过期就保持 running" {
+  WHISTLE_NOW=1700000000 run whistle_resolve_idle_panes 'codex' 2 <<'EOF'
+%1||done|活动消息|通知消息|a:1699999999 b:1700000001|codex
+EOF
+  assert_eq "$output" '%1|done|done|running|通知消息'
+
+  WHISTLE_NOW=1700000000 run whistle_resolve_idle_panes 'codex' 2 <<'EOF'
+%1||done|活动消息|通知消息|a:1699999999 b:1700000000|codex
+EOF
+  assert_eq "$output" '%1|done|done|idle|通知消息'
+}
+
+# -- Codex session / subagent 集合 -----------------------------------------
+
+@test "cx set: prune 丢掉过期项并保留永不过期项" {
+  run whistle_cx_set_prune 'a:1 b:9999999999 c:0 bad x:2' 2
+  assert_eq "$output" 'b:9999999999 c:0'
+}
+
+@test "cx set: add 幂等更新同一 id，不产生重复项" {
+  local set
+  set=$(whistle_cx_set_add 'a:1 b:2' a 3)
+  set=$(whistle_cx_set_add "$set" a 4)
+  assert_eq "$set" 'b:2 a:4'
+}
+
+@test "cx set: del 只摘精确 id" {
+  run whistle_cx_set_del 'a:1 b:2' a
+  assert_eq "$output" 'b:2'
+  run whistle_cx_set_del "$output" nope
+  assert_eq "$output" 'b:2'
+}
+
+@test "cx stale: strict 清掉无 binding 的旧 Codex running / idle 状态" {
+  run whistle_codex_stale_legacy_panes strict <<'EOF'
+%1|codex|running|hook|||
+%2|codex|running|hook||s1:9999999999|
+%3|codex|running|manual|||
+%4|zsh|running|hook|||
+%5|codex|idle|hook|||
+%6|codex|idle|migration|||
+%7|codex|running|migration|||
+%8|codex|idle|manual|||
+EOF
+  assert_eq "$output" '%1
+%5
+%6
+%7'
+}
+
+@test "cx stale: 非 strict 模式不清理旧状态" {
+  run whistle_codex_stale_legacy_panes auto <<'EOF'
+%1|codex|running|hook|||
+EOF
+  assert_eq "$output" ''
+}
+
+@test "stale activity: 前台已不是 agent 时清理 hook/migration 活动态" {
+  run whistle_stale_activity_panes 'claude claude.exe codex codex.exe opencode' <<'EOF'
+%1|idle|migration|||zsh
+%2|running|hook|||zsh
+%3|idle|manual|||zsh
+%4|idle|hook|||claude.exe
+%5|running|hook|||codex
+%6|idle|hook|done||zsh
+%7|gone|hook|||zsh
+EOF
+  assert_eq "$output" '%1
+%2
+%6'
 }
 
 # -- whistle_count_states ---------------------------------------------------

@@ -182,3 +182,29 @@ EOF
   # 卸载漏了这一条 → 插件仍被加载、仍往 tmux 写状态
   [ ! -L "$link" ]
 }
+
+@test "install: Codex pane 本地启动器安装为独立软链" {
+  run_install_dry
+
+  assert_eq "$status" 0
+  assert_contains "$output" 'tmux-whistle-codex'
+  assert_contains "$output" "bin/tmux-whistle-codex"
+}
+
+@test "install: --uninstall 会删掉 Codex 启动器链接" {
+  local link="$INSTALL_HOME/bin/tmux-whistle-codex"
+  mkdir -p "$INSTALL_HOME/bin"
+  ln -s "$WHISTLE_ROOT/bin/tmux-whistle-codex" "$link"
+  [ -L "$link" ]
+
+  run env \
+    HOME="$INSTALL_HOME" \
+    WHISTLE_HOME="$INSTALL_HOME/data/tmux-whistle" \
+    WHISTLE_BIN_DIR="$INSTALL_HOME/bin" \
+    TMUX_CONF_LOCAL="$INSTALL_HOME/tmux.conf.local" \
+    PATH="$INSTALL_FAKE_BIN:$INSTALL_TOOLS_BIN" \
+    "$WHISTLE_ROOT/install.sh" --uninstall
+
+  assert_eq "$status" 0
+  [ ! -L "$link" ]
+}

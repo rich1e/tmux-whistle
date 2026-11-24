@@ -27,11 +27,11 @@ Codex 的 `notify` 只在 `agent-turn-complete` 时调用外部程序，能覆�
 | `UserPromptSubmit` | 活动通道 `running` + 清通知 | 真正的用户输入才开始干活；episodic-memory 摘要 marker 例外 |
 | `PermissionRequest` | 通知通道 `wait` | 即时；优先用 `tool_input.description`，退回 `tool_input.command` / `tool_name` |
 | `PostToolUse` | 只清 `wait` | 工具已真正运行，说明授权已解决；不改活动态 |
-| `SubagentStart` | `--sub-agent-start` | 只写 `@whistle_sub`，活动态由推导层合成 |
-| `SubagentStop` | `--sub-agent-stop` | **只清标记**，主 agent 通常还在跑 |
+| `SubagentStart` | `--sub-agent-start` | 把 `agent_id:expiry` 加入 `@whistle_sub` 集合，活动态由推导层合成 |
+| `SubagentStop` | `--sub-agent-stop` | **只移除自己的 agent id**，主 agent 通常还在跑 |
 | `Stop` | 活动 `idle` + 通知 `done` | `last_assistant_message` 首行进徽章，全文进 body；内部会话跳过 |
 | `Interrupt` | 活动 `idle` + 清 wait | 用户打断后不会有 `Stop`，必须在这里收尾 |
-| `SessionEnd` | `--clear-pane`（活动 `gone`） | 保留未读通知；内部会话跳过并回收 quiet id |
+| `SessionEnd` | `--codex-session-end`（活动 `gone`） | 只移除自己的 session；最后一个退出才写 gone |
 
 `SessionStart(source=fork)` 本身无法区分用户 fork 与后台 ephemeral fork，所以不动状态。
 episodic-memory 的摘要 prompt 以固定 marker 开头；hook 命中后把该 `session_id` 写入
@@ -91,10 +91,13 @@ SessionStart(fork, 不写) → UserPromptSubmit(marker, 记 quiet id) → Stop/S
 - Codex 不在 tmux 里时没有 `TMUX_PANE`，hook 静默退出。
 - 权限被拒绝且没有后续 `PostToolUse` / `Stop` / `Interrupt` 时，`wait` 可能留到下一次
   用户输入或退出事件。
-- 子 agent 标记仍是单值 + TTL，不支持精确计数；多个子 agent 并发时只能表达
-  「至少还有一个在跑」。过期兜底见 `@whistle_sub_ttl`。
+- Codex 子 agent 已改为 `agent_id:expiry` 集合；Claude 仍沿用单值时间戳。
+  两者都有 TTL 兜底，但都不保存每个 agent 的名称或状态明细。
 - Codex 的 `SessionEnd` 可能延迟到会话空闲 30 分钟后才触发；正常退出或关闭会话时会运行。
 - Codex API 错误没有稳定的一等失败事件，不自动写 `error`。
+- **多个 Codex TUI 共用 managed daemon 时 pane 归因错误**：已由
+  `tmux-whistle-codex` + PaneBinding + strict mode 修复。设计见
+  [codex-pane-attribution-design.md](codex-pane-attribution-design.md)。
 - 内部摘要识别依赖 episodic-memory 的稳定 prompt marker；对方改名后需要同步更新
   `hooks/codex.sh` 的 `_CX_INTERNAL_PROMPT_MARKER`。
 

@@ -358,6 +358,35 @@ pane_of() {
   assert_eq "$(opt '@whistle_count_done')" '1'
 }
 
+@test "recompute_global: 清理 strict 旧 Codex idle 时同步更新窗口态" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t "$p" '#{window_id}')
+  wt set -p -t "$p" @whistle idle \
+    \; set -p -t "$p" @whistle_src migration
+  wt set -w -t "$w" @whistle_win idle
+
+  # 真实 Codex 进程名无法用系统命令稳定伪造；只替换第一处进程扫描，
+  # 状态写入、窗口重算与全局重算仍全部走真实 tmux。
+  whistle_tmux() {
+    if [ "${1:-}" = list-panes ] && [ "${2:-}" = -a ] && [ "${3:-}" = -F ]; then
+      case "${4:-}" in
+      *@whistle_codex_binding*)
+        printf '%s|codex|idle|migration|||\n' "$p"
+        return 0
+        ;;
+      esac
+    fi
+    tmux -S "$WHISTLE_TMUX_SOCKET" "$@"
+  }
+
+  whistle_recompute_global
+
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" 'gone'
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" ''
+  assert_eq "$(opt '@whistle_count_idle')" '0'
+}
+
 @test "recompute_window: 没上报过但前台跑着 agent 的窗口，聚合态是 idle" {
   local cmd w
   cmd=$(wt display -p -t w1 '#{pane_current_command}')
@@ -697,4 +726,11 @@ pane_of() {
 @test "conf: 子 agent 标记的 TTL 默认 1800 秒（用户可配）" {
   run whistle_conf '@whistle_sub_ttl'
   assert_eq "$output" '1800'
+}
+
+@test "conf: Codex pane mode 与 session TTL 有安全默认值" {
+  run whistle_conf '@whistle_codex_pane_mode'
+  assert_eq "$output" 'strict'
+  run whistle_conf '@whistle_cx_session_ttl'
+  assert_eq "$output" '43200'
 }

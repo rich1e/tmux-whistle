@@ -17,6 +17,7 @@ setup() {
   export TMUX_PANE
   TMUX_PANE=$(wt display -p -t w1 '#{pane_id}')
   export WHISTLE_TMUX_SOCKET
+  wt set -g @whistle_codex_pane_mode legacy
 }
 
 teardown() {
@@ -31,7 +32,17 @@ feed() {
   assert_eq "$output" ''
 }
 
+feed_bound() {
+  local target="$TMUX_PANE"
+  run env TMUX_PANE='%999999' WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    WHISTLE_CODEX_BINDING=v1 WHISTLE_CODEX_PANE="$target" \
+    WHISTLE_CODEX_CLIENT='test-client' "$HOOK"
+  assert_eq "$status" 0
+  assert_eq "$output" ''
+}
+
 pane_act() { optp @whistle "$TMUX_PANE"; }
+pane_act_at() { optp @whistle "$1"; }
 pane_eff() { optp @whistle_eff "$TMUX_PANE"; }
 pane_notice() { optp @whistle_notice "$TMUX_PANE"; }
 pane_notice_msg() { optp @whistle_notice_msg "$TMUX_PANE"; }
@@ -61,6 +72,138 @@ EOF
 }
 
 # -- SessionStart / UserPromptSubmit ---------------------------------------
+
+@test "codex: PaneBinding 优先于 daemon 里陈旧的 TMUX_PANE" {
+  local target="$TMUX_PANE"
+  feed_bound <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"bound-1","prompt":"在正确的 pane 里运行"}
+EOF
+  assert_eq "$(pane_act_at "$target")" 'running'
+  assert_eq "$(optp @whistle '%999999')" ''
+}
+
+@test "codex: 两个 pane 的 Codex session 独立上报" {
+  local p1="$TMUX_PANE"
+  local p2
+  p2=$(wt split-window -d -P -F '#{pane_id}' -t w1)
+
+  run env TMUX_PANE='%999999' WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    WHISTLE_CODEX_BINDING=v1 WHISTLE_CODEX_PANE="$p1" \
+    WHISTLE_CODEX_CLIENT='client-1' "$HOOK" <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"pane-1","prompt":"pane 1"}
+EOF
+  run env TMUX_PANE='%999999' WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    WHISTLE_CODEX_BINDING=v1 WHISTLE_CODEX_PANE="$p2" \
+    WHISTLE_CODEX_CLIENT='client-2' "$HOOK" <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"pane-2","prompt":"pane 2"}
+EOF
+  assert_eq "$(pane_act_at "$p1")" 'running'
+  assert_eq "$(pane_act_at "$p2")" 'running'
+
+  run env TMUX_PANE='%999999' WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    WHISTLE_CODEX_BINDING=v1 WHISTLE_CODEX_PANE="$p1" \
+    WHISTLE_CODEX_CLIENT='client-1' "$HOOK" <<'EOF'
+{"hook_event_name":"Stop","session_id":"pane-1","last_assistant_message":"pane 1 done"}
+EOF
+  assert_eq "$(pane_act_at "$p1")" 'idle'
+  assert_eq "$(optp @whistle_notice "$p1")" 'done'
+  assert_eq "$(pane_act_at "$p2")" 'running'
+  assert_eq "$(optp @whistle_notice "$p2")" ''
+}
+
+@test "codex: strict 模式缺少 PaneBinding 时不写任何状态" {
+  wt set -g -u @whistle_codex_pane_mode
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"unbound-1","prompt":"不应写入"}
+EOF
+  assert_eq "$(pane_act)" ''
+}
+
+@test "codex: 无效 PaneBinding fail closed，不回退到 TMUX_PANE" {
+  run env TMUX_PANE="$TMUX_PANE" WHISTLE_TMUX_SOCKET="$WHISTLE_TMUX_SOCKET" \
+    WHISTLE_CODEX_BINDING=v1 WHISTLE_CODEX_PANE='%999999' \
+    WHISTLE_CODEX_CLIENT='broken-client' "$HOOK" <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"broken-1","prompt":"不应写入"}
+EOF
+  assert_eq "$status" 0
+  assert_eq "$output" ''
+  assert_eq "$(pane_act)" ''
+}
+
+@test "codex: legacy 模式允许无 binding 的旧启动方式" {
+  wt set -g @whistle_codex_pane_mode legacy
+  feed <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"legacy-1","prompt":"旧模式"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+}
+
+@test "codex: 同 pane 多 session 时单个 Stop 不覆盖仍在运行的 session" {
+  feed_bound <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"任务一"}
+EOF
+  feed_bound <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"s2","prompt":"任务二"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+
+  feed_bound <<'EOF'
+{"hook_event_name":"Stop","session_id":"s1","last_assistant_message":"任务一完成"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+  assert_eq "$(pane_notice)" 'done'
+
+  "$WHISTLE_ROOT/bin/tmux-whistle" --read-pane "$TMUX_PANE" > /dev/null
+  assert_eq "$(pane_notice)" ''
+  assert_eq "$(pane_act)" 'running'
+
+  feed_bound <<'EOF'
+{"hook_event_name":"Stop","session_id":"s2","last_assistant_message":"任务二完成"}
+EOF
+  assert_eq "$(pane_act)" 'idle'
+  assert_eq "$(pane_notice)" 'done'
+}
+
+@test "codex: 同 pane 多 session 时 SessionEnd 不写 gone 直到最后一个结束" {
+  feed_bound <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"任务一"}
+EOF
+  feed_bound <<'EOF'
+{"hook_event_name":"UserPromptSubmit","session_id":"s2","prompt":"任务二"}
+EOF
+
+  feed_bound <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"other","session_id":"s1"}
+EOF
+  assert_eq "$(pane_act)" 'running'
+
+  feed_bound <<'EOF'
+{"hook_event_name":"SessionEnd","reason":"other","session_id":"s2"}
+EOF
+  assert_eq "$(pane_act)" 'gone'
+  assert_eq "$(optp @whistle_cx_running "$TMUX_PANE")" ''
+  assert_eq "$(optp @whistle_cx_idle "$TMUX_PANE")" ''
+}
+
+@test "codex: 并发 subagent 停一个后仍保持 running" {
+  feed_bound <<'EOF'
+{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"worker"}
+EOF
+  feed_bound <<'EOF'
+{"hook_event_name":"SubagentStart","agent_id":"a2","agent_type":"worker"}
+EOF
+  assert_eq "$(pane_eff)" 'running'
+
+  feed_bound <<'EOF'
+{"hook_event_name":"SubagentStop","agent_id":"a1","agent_type":"worker"}
+EOF
+  assert_eq "$(pane_eff)" 'running'
+
+  feed_bound <<'EOF'
+{"hook_event_name":"SubagentStop","agent_id":"a2","agent_type":"worker"}
+EOF
+  assert_eq "$(pane_eff)" ''
+}
 
 @test "codex: SessionStart startup → idle；stdout 为空" {
   feed <<'EOF'
