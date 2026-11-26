@@ -26,6 +26,11 @@ pane_of() {
   wt display -p -t w1 '#{pane_id}'
 }
 
+# 新窗口的 shell 起来之前 `pane_current_command` 是空的，推导层数不到它。
+pane_cmd_ready() {
+  [ -n "$(wt display -p -t w2 '#{pane_current_command}')" ]
+}
+
 # -- 活动通道 ---------------------------------------------------------------
 
 @test "activity_set: 写活动通道的五个 option" {
@@ -348,7 +353,7 @@ pane_of() {
   wt new-window -d -n w2
   # 新窗口的 shell 起来之前 `pane_current_command` 是空的，推导层数不到它 ——
   # 不等这一步，这条用例约 1/5 概率偶发 count_idle=1（基线 5bfa52f 上实测）。
-  wt_wait_until 3000 '[ -n "$(wt display -p -t w2 "#{pane_current_command}")" ]'
+  wt_wait_until 3000 pane_cmd_ready
   local p2
   p2=$(wt display -p -t w2 '#{pane_id}')
   whistle_state_set "done" 'a' "$p2"

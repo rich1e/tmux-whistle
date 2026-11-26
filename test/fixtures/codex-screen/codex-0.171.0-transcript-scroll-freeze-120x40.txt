@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.171.0)
+     $FIXTURE_ROOT/work
+
+  To get started, describe a task or try one of these commands:
+
+  /init - create an AGENTS.md file with instructions for Codex
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+
+⚠ Model metadata for `deepseek-v4-1-flash` not found. Defaulting to fallback metadata; this can degrade performance and
+  cause issues.
+
+
+› Reply with exactly OK. Do not run tools.
+
+
+• OK
+
+  Worked for 1s • 17:15
+
+
+› Run exactly this shell command and wait for approval if required: printf permission-fixture > $FIXTURE_TMP/
+  permission-fixture.txt
+
+
+• We need respond? User asks run exactly this shell command. Need use exec. Filesystem read-only, writing /tmp maybe
+  outside root, requires escalation. We must run, and wait approval. Tool call with require_escalated and justification.
+  Command exactly? "printf permission-fixture > $FIXTURE_OUT". We need use zsh? exec uses
+  shell. Request escalated. No prefix rule because redirection. Let's call.
+
+✗ You canceled the request to run printf permission-fixture > $FIXTURE_OUT
+                                                 ↓ Back to bottom · esc
+
+› Ask Codex to do anything
+
+  deepseek-v4-1-flash max · $FIXTURE_ROOT/work · Reply with exactly OK
+  enter/esc latest · ? shortcuts                                                               ⚠ 1 warning · f2 to view

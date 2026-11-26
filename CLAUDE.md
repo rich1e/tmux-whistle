@@ -37,7 +37,7 @@ bats -f 'menu-args' test/integration/cli.bats   # 按用例名正则过滤
 L4 生产者   hooks/claude-code.sh   Claude Code hook 推送（主路径，async:true）
             hooks/codex.sh          Codex hook 推送（第二个接入源）
             hooks/opencode/tui.js  OpenCode TUI 插件 → hooks/opencode.sh（第三个接入源）
-            lib/detect.sh          关键词兜底轮询（默认关，会误报）
+            lib/detect.sh          读屏降级轮询（默认开）→ lib/detect-rules.sh 分类
                         │ 调 bin/tmux-whistle
                         ▼
 L3 状态机   lib/core.sh            ★ 唯一状态写入点
@@ -97,6 +97,60 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
   链接名不带 `.js`）：单文件会被当成 server part，`plugins` 配置里的单文件路径会被官方
   静默跳过。`tui.js` 这个**文件名是契约**，改名就不被认成 TUI part。
 
+**读屏降级通道（`lib/detect.sh` + `lib/detect-rules.sh`）**
+
+用户直接跑 `codex`（不经 `tmux-whistle-codex`）时，Hook 归因是 fail-closed 的，
+状态栏上那个 pane 完全看不见。读屏通道补的就是这一段：它不解决归属问题，而是
+**只用 tmux 自己的事实**回答「这个 pane 现在长什么样」——`capture-pane -p -J -t <pane>`
+是**按 pane** 取的，归属天然正确，且默认 `capture-pane` 能取到 alternate screen
+（实测 vim 场景：`alternate_on=1` 时默认抓法命中，加 `-a` 反而不命中）。
+
+- **D1 三个槽位、两条通道不变**：屏幕写 `@whistle_live`，hook 写 `@whistle`，
+  永不互相覆盖。`@whistle_live` **不进** `WHISTLE_DEFAULTS`（那是用户可配表）。
+- **D2 优先级**：`@whistle` 有值 → 用它；否则 `@whistle_live` 有值 → 用它；
+  否则前台是 agent → `idle`。推导层把它读作 `$(sc+5)`，并要求 `NF >= sc+6` ——
+  命令列永远在最后，列数不够就说明是旧格式或这一行根本没有 live 列。
+- **D3 仲裁**：只跳过 `@whistle_src` 为 `hook` / `migration` 的 pane。早先是
+  「src 非空就跳过」，把 deliver 之类的旁路写入也一起挡掉了。
+
+其余几条容易踩的：
+
+- **规则按 agent 分派**（`whistle_classify_screen codex|claude`），顺序固定
+  `freeze → wait → running → idle`，首次命中即返回。权限对话框页面同时会显示
+  `• Running <command>`，所以 wait 必须压在 running 之上；滚动冻结时底部仍有
+  `› Ask Codex…`，所以 freeze 必须压在 idle 之上。
+- **只扫 agent pane**：`whistle_detect_eligible` = 认识的 agent + argv 里没有
+  `exec` 子命令（`codex exec` / `claude -p` 是非交互的，没有输入框）+
+  在 `@whistle_agent_cmds` 名单里。**「前台进程叫什么」按 argv[0] 的 basename 认，
+  不按 `#{pane_current_command}`** —— 软链 / 包装器下后者是**目标二进制**的名字
+  （实测：`/bin/sleep` 软链成 `codex`，comm 仍是 `sleep`）。
+- **防抖**（`whistle_detect_apply`）：`→ running` 立即生效，其余切换要连续两次。
+  看到与**已生效**状态一致的分类时必须清掉 pending 计数，否则 running/idle
+  交替闪烁会把计数攒够，防抖形同虚设。
+- **节奏**：有 agent 在跑时 1 秒一轮，没有则回到 `@whistle_detect_interval`。
+- **`running → idle` 补一条 done**（`whistle_detect_done_fire`）：三道闸 = 开关 on /
+  running 持续 ≥ `@whistle_detect_done_min` / `@whistle_notice` 为空。只写通知通道。
+- **状态目录按 socket 隔离**（`/tmp/tmux-whistle-<uid>-<cksum(socket)>`）。
+  按 uid 命名会让真 server 与测试的隔离 server 共用一个 pidfile，互相把对方的
+  守护挡在门外，其中一边的状态永远不更新而界面上看不出原因。
+- **tmux option 是内存态、状态文件在 /tmp**：两者对不上时以 tmux 为准
+  （`whistle_detect_forget`）。留着 `.last` 会让 server 重启后的第一次写入被当成
+  「没有变化」，那一列永远不亮。
+- `@whistle_detect` 关掉时守护**退出前**清掉所有 `@whistle_live`；`scripts/setup.sh`
+  在加载时也会清一次（守护可能早就不在了，而 option 不会自己消失）。
+
+**两个必须记住的解析/字符陷阱**
+
+- ⚠️ **macOS 的 `/bin/sh` 是 bash 3.2，它的解析器不接受 `$(` 直接跟着 `case`**：
+  连 `$(case a in a) : ;; esac)` 都报 `syntax error near unexpected token ';;'`。
+  症状是整份脚本跑不起来，而报错指在 `case` 那一行。写完必须 `sh -n <file>` 一次。
+  要「扫一遍按条件筛」，用 `list-panes -f '#{@opt}'` 之类的过滤代替。
+- ⚠️ **awk 里判多字节字符只能用 `index()`**。macOS 的 one-true-awk 在
+  `en_US.UTF-8` 下：`substr($0,1,3) == "❯"` 对**任意**三字节字符都成立
+  （`"─"` 与 `"❯"` 的 `strcoll` 相等），`[❯›]` 这种方括号会按字节拆成
+  `{E2,9D,AF,80,BA}` 一撮。NBSP（提示符后面那个不是普通空格，是 U+00A0）
+  只能用**字符串字面量** `"\302\240"` 交给 `gsub`，正则字面量里的八进制转义不生效。
+
 **状态存储约定**
 
 状态分成**两条正交通道**：活动通道（这个 pane 里有没有 agent 在干活）与通知通道
@@ -106,6 +160,7 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 |---|---|---|
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
 | pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
+| pane | `@whistle_live` | **读屏降级通道**。只能是 `running` / `idle` / 空；由 `lib/detect.sh` 写，**只在 `@whistle` 为空时**被推导层采用 |
 | pane | `@whistle_sub` | 子 agent 标记。Claude 用单个过期时间戳；Codex 用 `agent_id:expiry` 集合 |
 | pane | `@whistle_cx_quiet` | Codex 内部会话 `session_id` 列表，空格分隔；这些会话不进入状态机 |
 | pane | `@whistle_cx_running` `@whistle_cx_idle` | Codex pane 内 session 集合，条目为 `session_id:expiry` |

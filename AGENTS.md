@@ -94,6 +94,24 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 - 桌面通知的 group **每条唯一**（`@whistle_os_group` 记最近一条）。固定 group 下「先删旧再加新」与已读 `-remove` 会撞出空横幅。
 - 排查顺序看三段证据：`tui-probe`（加载了没）→ `subs=N`（订阅几条）→ `js-trace`（事件到没到、为什么丢）。`doctor` 已展示 `subs`，`subs=0` 会报红。
 
+## 读屏降级通道（`lib/detect.sh` + `lib/detect-rules.sh`）
+
+hook 归因 fail-closed 时（用户直接跑 `codex`），状态栏上那个 pane 只能靠读屏补。
+
+- 屏幕写 `@whistle_live`，hook 写 `@whistle`，**永不互相覆盖**。推导层的优先级是
+  `@whistle` > `@whistle_live` > 前台进程名。绝不把屏幕结论写进 `@whistle`。
+- 只跳过 `@whistle_src` 为 `hook` / `migration` 的 pane（别退回「src 非空就跳过」）。
+- 「前台进程叫什么」按 **argv[0] 的 basename** 认：软链/包装器下
+  `#{pane_current_command}` 是目标二进制的名字。
+- 防抖：`→ running` 立即生效，其余要连续两次；看到与已生效状态一致的分类要清掉
+  pending 计数。有 agent 时 1 秒一轮，否则回 `@whistle_detect_interval`。
+- `running → idle` 补一条 done：开关 on + 持续 ≥ `@whistle_detect_done_min` +
+  `@whistle_notice` 为空，三条缺一不发，且只写通知通道。
+- ⚠️ macOS 的 `/bin/sh` 是 **bash 3.2**，解析器**不接受 `$(` 直接跟 `case`**
+  （报 `syntax error near unexpected token ';;'`）。改完跑 `sh -n`。
+- ⚠️ awk 判多字节只能用 `index()`：`"─" == "❯"` 在这个 locale 下为真，
+  `[❯›]` 会按字节拆开；NBSP 只能写成字符串字面量 `"\302\240"` 再交给 `gsub`。
+
 ## 性能：写入热路径
 
 一次状态写入的固定成本是**进程数**，不是窗口数（早先误判成 O(窗口数)）。80 次 tmux fork → 25 次：

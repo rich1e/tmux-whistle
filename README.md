@@ -17,7 +17,7 @@ B 的状态栏立刻告诉你 —— 不用来回切窗口看。
 - **完成与等待分得开**：`done`（做完了）、`wait`（等你批准）、`error`（回合被 API 错误中断）、`running`（在跑）、`idle`（进程在但闲着）五态各自独立上报，这是「有输出变了」「猜提示符」这类做法原理上分辨不了的
 - **跨 session 且粘性**：通知出现在你正看着的那个 session，一直保留到你切进去处理完
 - **六个独立信号**：窗口徽章、全局计数 `⚑N`、边框变色、边框状态行、瞬时提示、桌面通知，各管各的，可单独关闭
-- **主流 agent 装上即用**：Claude Code、Codex、OpenCode 各有专用适配器；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有关键词兜底检测（可选，默认关）
+- **主流 agent 装上即用**：Claude Code、Codex、OpenCode 各有专用适配器；别的 agent 直接在脚本里调 `tmux-whistle done` 就行；另有读屏降级通道（默认开），直接跑 `codex` 也能判状态
 - **零运行时依赖**：只用 tmux 自身能力，兼容 oh-my-tmux 与 tpm / tpack
 
 详见 [使用](#使用)、[配置](#配置)、[兼容性](#兼容性)。
@@ -211,23 +211,23 @@ osascript -e 'display notification "tmux-whistle 测试"'
 | `@whistle_sub_ttl` | `1800` | 「pane 里有后台/子 agent 在跑」这个标记的存活秒数；`0` = 永不过期 |
 | `@whistle_codex_pane_mode` | `strict` | Codex pane 归因：`strict` / `auto` / `legacy`。`strict` 只接受 `tmux-whistle-codex` 的 PaneBinding |
 | `@whistle_cx_session_ttl` | `43200` | Codex pane 内 session 集合的过期秒数 |
-| **调试与兜底检测** | | |
+| **调试与读屏降级** | | |
 | `@whistle_debug` | `off` | 同时写投递日志与 hook 事件日志（路径见下） |
-| `@whistle_detect` | `off` | 关键词兜底检测（见下） |
-| `@whistle_detect_interval` | `15` | 兜底检测的轮询间隔（秒） |
-| `@whistle_detect_idle` | `180` | 输出静默多少秒判为完成 |
-| `@whistle_detect_wait-re` | 见下 | 等待关键词的扩展正则（ERE） |
-| `@whistle_detect_done-re` | 见下 | 完成关键词的扩展正则（ERE），还要满足静默时长 |
+| `@whistle_detect` | `on` | 读屏降级通道（见下） |
+| `@whistle_detect_interval` | `15` | **没有 agent 在跑时**的轮询间隔（秒）；有 agent 时自动按 1 秒扫 |
+| `@whistle_detect_done` | `on` | `running → idle` 时补一条「检测到回合结束」通知 |
+| `@whistle_detect_done_min` | `5` | running 持续不足这么多秒就不补通知（防 TUI 重绘误报） |
+| `@whistle_detect_wait-re` | 空 | 可选的**额外**等待正则（ERE），非空时才叠加到分类结果上 |
 
 调试日志分两份：投递层写 `${TMPDIR:-/tmp}/tmux-whistle.log`，hook 接入层写
 `${TMPDIR:-/tmp}/tmux-whistle-hooks.log`；可分别用环境变量 `WHISTLE_LOG` 与
 `WHISTLE_HOOK_LOG` 覆盖路径。
 
-兜底检测的两个正则未设置时使用以下默认值，也可以照这个形式自定义：
+`@whistle_detect_wait-re` 留空即可 —— 等待 / 运行 / 空闲都由内置分类器判断。
+只有某个 agent 的权限对话框文案不在内置规则里时，才需要补一条：
 
 ```tmux
-set -g @whistle_detect_wait-re 'esc to interrupt|Do you want to|❯ 1\. Yes|waiting for your input'
-set -g @whistle_detect_done-re '⏵⏵|Bypass Permissions on'
+set -g @whistle_detect_wait-re '需要输入|请选择'
 ```
 
 ### 改完怎么生效
@@ -680,17 +680,31 @@ terminal-notifier 不存在或发送失败时，可降级到 `osascript` / `noti
 桌面横幅仍只显示短消息；`--body` 的完整正文保存在 tmux 中，不会默认放进横幅，
 点击通知也不是正文详情查看器。
 
-## 兜底检测（可选，默认关）
+## 读屏降级（默认开）
 
-没有配 hooks 的 agent 也想被检测到：
+直接跑 `codex`（不经 `tmux-whistle-codex`）、或者 hook 没装上的 agent，也能在状态栏
+看到 `▶` / `◉` / `◔`。
+
+它每轮 `capture-pane` 一次，按 agent 分派的规则判断屏幕处于什么状态，写进**降级槽位**
+`@whistle_live`：
+
+- 有 agent 在跑时按 1 秒扫；没有 agent 时按 `@whistle_detect_interval`（默认 15 秒）。
+- 屏幕写的永远是 `@whistle_live`，`@whistle` 只放 agent 自己上报的值。
+  真源有值时**永远优先**，屏幕只是补充。
+- 一旦某个 pane 被 hook 接管过（`@whistle_src` 是 `hook` / `migration`），
+  读屏就再也不碰它。
+- `codex exec` / `claude -p` 这类非交互进程会被排除 —— 它们没有输入框，
+  读屏只会拿到一段静止输出。
+- `running → idle` 的转变会补一条「检测到回合结束」通知；running 持续不足
+  `@whistle_detect_done_min` 秒、或已经有未读通知时不补。
+
+判断错了想退回去：
 
 ```tmux
-set -g @whistle_detect on
-set -g @whistle_detect_interval 15
+set -g @whistle_detect off
 ```
 
-它每 N 秒 `capture-pane` 一次，匹配关键词。**会误报**，所以默认关闭。
-一旦某个 pane 被 hook 接管过，检测就再也不碰它 —— hook 永远优先。
+关掉会立刻清空所有 `@whistle_live`，回到只有 hook 上报的行为。
 
 另外提供可选的 OSC 133 片段，让 tmux 知道命令边界（配合
 `pane-command-finished` hook 可免轮询）：

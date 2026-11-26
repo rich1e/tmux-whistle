@@ -198,3 +198,13 @@ redraw() { printf '\033[H\033[2J' >&9; }
   sleep 1
   assert_eq "$(notice_val)" ''
 }
+
+@test "detect: 关掉开关后清空所有 live" {
+  start_agent
+  feed '› \n'
+  wt_wait_until 8000 'live_eq idle'
+
+  wt set -g @whistle_detect off
+  wt_wait_until 15000 live_empty
+  assert_eq "$(live_val)" ''
+}

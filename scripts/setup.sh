@@ -14,17 +14,17 @@ export WHISTLE_ROOT
 # 必须锁定它：$TMUX_SOCKET 会被子进程跨 server 继承，
 # 不锁就可能把状态写进用户正在用的另一个 server。
 if [ -n "${1:-}" ]; then
-  WHISTLE_TMUX_SOCKET="$1"
-  export WHISTLE_TMUX_SOCKET
+	WHISTLE_TMUX_SOCKET="$1"
+	export WHISTLE_TMUX_SOCKET
 fi
 
 for _m in core status-line deliver; do
-  if [ ! -f "$WHISTLE_ROOT/lib/$_m.sh" ]; then
-    printf 'tmux-whistle: 缺少 lib/%s.sh\n' "$_m" >&2
-    exit 1
-  fi
-  # shellcheck source=/dev/null
-  . "$WHISTLE_ROOT/lib/$_m.sh"
+	if [ ! -f "$WHISTLE_ROOT/lib/$_m.sh" ]; then
+		printf 'tmux-whistle: 缺少 lib/%s.sh\n' "$_m" >&2
+		exit 1
+	fi
+	# shellcheck source=/dev/null
+	. "$WHISTLE_ROOT/lib/$_m.sh"
 done
 unset _m
 
@@ -79,16 +79,19 @@ whistle_hooks_install "$WHISTLE_ROOT/bin/tmux-whistle"
 #    在 .tmux-whistle.conf 里写 `\;` 是对的（那是 tmux 自己解析的），
 #    但从 shell 调 tmux 时必须把反斜杠原样送过去。
 whistle_tmux bind-key -T prefix n \
-  run-shell -b "\"$WHISTLE_ROOT/bin/tmux-whistle\" menu" \
-  '\;' display-message 'whistle 菜单' 2> /dev/null || true
+	run-shell -b "\"$WHISTLE_ROOT/bin/tmux-whistle\" menu" \
+	'\;' display-message 'whistle 菜单' 2>/dev/null || true
 
-# 可选：关键词兜底检测（默认关）
-if [ "$(whistle_conf '@whistle_detect')" = on ]; then
-  if [ -f "$WHISTLE_ROOT/lib/detect.sh" ]; then
-    # shellcheck source=/dev/null
-    . "$WHISTLE_ROOT/lib/detect.sh"
-    whistle_detect_ensure_daemon
-  fi
+# 读屏降级通道（默认开）。关着的时候也要走一趟：守护可能早就不在了，
+# 而 `@whistle_live` 是 tmux option、不会自己消失 —— 不清就是一片残留。
+if [ -f "$WHISTLE_ROOT/lib/detect.sh" ]; then
+	# shellcheck source=/dev/null
+	. "$WHISTLE_ROOT/lib/detect.sh"
+	if [ "$(whistle_conf '@whistle_detect')" = on ]; then
+		whistle_detect_ensure_daemon
+	else
+		whistle_detect_clear_all
+	fi
 fi
 
 exit 0

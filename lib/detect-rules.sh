@@ -71,13 +71,13 @@ WHISTLE_DETECT_AWK_LIB='
 # whistle_screen_tail <n>
 # stdin=整屏，stdout=最后 n 行**非空**行。
 whistle_screen_tail() {
-	_dr_n="${1:-12}"
-	case "$_dr_n" in
-	'' | *[!0-9]*) _dr_n=12 ;;
-	esac
-	[ "$_dr_n" -gt 0 ] || _dr_n=1
+  _dr_n="${1:-12}"
+  case "$_dr_n" in
+  '' | *[!0-9]*) _dr_n=12 ;;
+  esac
+  [ "$_dr_n" -gt 0 ] || _dr_n=1
 
-	awk -v n="$_dr_n" '
+  awk -v n="$_dr_n" '
     $0 != "" {
       cnt++
       buf[cnt % n] = $0
@@ -94,7 +94,7 @@ whistle_screen_tail() {
 # stdin=整屏，stdout=最后一条分隔线（`---` / `──────`）之后的内容；
 # 没有分隔线时输出空。
 whistle_screen_after_rule() {
-	awk "$WHISTLE_DETECT_AWK_LIB"'
+  awk "$WHISTLE_DETECT_AWK_LIB"'
     is_rule($0) {
       seen = 1
       out = ""
@@ -113,7 +113,7 @@ whistle_screen_after_rule() {
 # stdin=整屏，stdout=最后一条提示行（`❯` / `›` 起头）到下一条分隔线或 EOF；
 # 没有分隔线时把底部状态栏一并带上。
 whistle_screen_prompt_box() {
-	awk "$WHISTLE_DETECT_AWK_LIB"'
+  awk "$WHISTLE_DETECT_AWK_LIB"'
     {
       if (is_prompt($0)) {
         inbox = 1
@@ -142,7 +142,7 @@ whistle_screen_prompt_box() {
 #
 # 整屏只扫一遍 —— 每秒每个 pane 都要跑，多次 fork 会把轮询成本堆起来。
 whistle_classify_codex() {
-	awk "$WHISTLE_DETECT_AWK_LIB"'
+  awk "$WHISTLE_DETECT_AWK_LIB"'
     {
       line[NR] = $0
       if (trim($0) != "") { ne++; _tailbuf[ne] = $0 }
@@ -198,7 +198,7 @@ whistle_classify_codex() {
 # `❯ ✻ 思考中` 既不是空闲提示符，也已经过了 UserPromptSubmit，
 # 所以提示符后面跟着 spinner 字符就是 running。
 whistle_classify_claude() {
-	awk "$WHISTLE_DETECT_AWK_LIB"'
+  awk "$WHISTLE_DETECT_AWK_LIB"'
     function spinner_lead(t,   n, cs, i) {
       n = split("⠁ ⠂ ⠄ ⠈ ⠐ ⠠ ⡀ ⢀ ✢ ✳ ✷ ✸ ✻ ✽", cs, " ")
       for (i = 1; i <= n; i++) if (index(t, cs[i]) == 1) return 1
@@ -260,11 +260,11 @@ whistle_classify_claude() {
 # whistle_classify_screen <agent>
 # stdin=整屏；agent ∈ codex / claude。未知 agent 输出空。
 whistle_classify_screen() {
-	case "${1:-}" in
-	codex) whistle_classify_codex ;;
-	claude) whistle_classify_claude ;;
-	*) return 0 ;;
-	esac
+  case "${1:-}" in
+  codex) whistle_classify_codex ;;
+  claude) whistle_classify_claude ;;
+  *) return 0 ;;
+  esac
 }
 
 # whistle_agent_kind <cmd>
@@ -274,16 +274,16 @@ whistle_classify_screen() {
 # （去 `.exe`、转小写、按前缀归类），否则「菜单里画哪个图标」与
 # 「谁可以被读屏接管」会给出两个答案。
 whistle_agent_kind() {
-	_dr_kind="${1:-}"
-	case "$_dr_kind" in
-	*[A-Z]*) _dr_kind=$(printf '%s' "$_dr_kind" | tr '[:upper:]' '[:lower:]') ;;
-	esac
-	_dr_kind=${_dr_kind%.exe}
-	case "$_dr_kind" in
-	claude*) printf 'claude' ;;
-	codex*) printf 'codex' ;;
-	opencode*) printf 'opencode' ;;
-	esac
+  _dr_kind="${1:-}"
+  case "$_dr_kind" in
+  *[A-Z]*) _dr_kind=$(printf '%s' "$_dr_kind" | tr '[:upper:]' '[:lower:]') ;;
+  esac
+  _dr_kind=${_dr_kind%.exe}
+  case "$_dr_kind" in
+  claude*) printf 'claude' ;;
+  codex*) printf 'codex' ;;
+  opencode*) printf 'opencode' ;;
+  esac
 }
 
 # whistle_detect_name <cmd> <argv>
@@ -294,14 +294,14 @@ whistle_agent_kind() {
 # 软链成 `codex` 再跑，comm 仍然是 `sleep`，只有 argv[0] 还是 `codex`。
 # 用户敲的是哪个名字，就该用哪套规则表。
 whistle_detect_name() {
-	_dr_n_argv0="${2:-}"
-	_dr_n_argv0=${_dr_n_argv0%% *}
-	_dr_n_argv0=${_dr_n_argv0##*/}
-	if [ -n "$_dr_n_argv0" ]; then
-		printf '%s' "$_dr_n_argv0"
-	else
-		printf '%s' "${1:-}"
-	fi
+  _dr_n_argv0="${2:-}"
+  _dr_n_argv0=${_dr_n_argv0%% *}
+  _dr_n_argv0=${_dr_n_argv0##*/}
+  if [ -n "$_dr_n_argv0" ]; then
+    printf '%s' "$_dr_n_argv0"
+  else
+    printf '%s' "${1:-}"
+  fi
 }
 
 # whistle_detect_eligible <cmd> <argv> <agent_cmds>
@@ -314,27 +314,27 @@ whistle_detect_name() {
 #      非交互进程，屏幕上没有输入框，读屏只会拿到一段静止输出。
 #   3. 该进程名在 @whistle_agent_cmds 名单里 —— 用户可以把某个 agent 摘掉。
 whistle_detect_eligible() {
-	_dr_argv="${2:-}"
-	_dr_cmds="${3:-}"
-	_dr_base=$(whistle_detect_name "${1:-}" "$_dr_argv")
+  _dr_argv="${2:-}"
+  _dr_cmds="${3:-}"
+  _dr_base=$(whistle_detect_name "${1:-}" "$_dr_argv")
 
-	_dr_kind=$(whistle_agent_kind "$_dr_base")
-	[ -n "$_dr_kind" ] || return 1
+  _dr_kind=$(whistle_agent_kind "$_dr_base")
+  [ -n "$_dr_kind" ] || return 1
 
-	case " $_dr_argv " in
-	*" exec "*) return 1 ;;
-	esac
-	case "$_dr_base" in
-	*[A-Z]*) _dr_base=$(printf '%s' "$_dr_base" | tr '[:upper:]' '[:lower:]') ;;
-	esac
-	_dr_base=${_dr_base%.exe}
+  case " $_dr_argv " in
+  *" exec "*) return 1 ;;
+  esac
+  case "$_dr_base" in
+  *[A-Z]*) _dr_base=$(printf '%s' "$_dr_base" | tr '[:upper:]' '[:lower:]') ;;
+  esac
+  _dr_base=${_dr_base%.exe}
 
-	# shellcheck disable=SC2086  # 名单本来就是空格分隔的词表
-	for _dr_t in $_dr_cmds; do
-		_dr_t=${_dr_t%.exe}
-		case "$_dr_base" in
-		"$_dr_t" | "$_dr_t"*) return 0 ;;
-		esac
-	done
-	return 1
+  # shellcheck disable=SC2086  # 名单本来就是空格分隔的词表
+  for _dr_t in $_dr_cmds; do
+    _dr_t=${_dr_t%.exe}
+    case "$_dr_base" in
+    "$_dr_t" | "$_dr_t"*) return 0 ;;
+    esac
+  done
+  return 1
 }

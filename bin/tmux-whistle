@@ -1010,6 +1010,23 @@ cmd_doctor() {
     printf '  %-8s %s\n' "$_c" "$_v"
   done
 
+  # 读屏降级通道：默认开。live 是**当前**有多少个 pane 正被读屏接管 ——
+  # 数字长期为 0 而用户确实在直接跑 codex 时，说明分类器没认出来。
+  printf '\n读屏降级\n'
+  _dd_detect=$(whistle_conf '@whistle_detect')
+  _dd_live=$(whistle_tmux list-panes -a -F '#{@whistle_live}' 2> /dev/null | grep -c . || true)
+  case "$_dd_live" in
+  '' | *[!0-9]*) _dd_live=0 ;;
+  esac
+  if [ "$_dd_detect" = on ]; then
+    _ok_line "detect=on live=${_dd_live}（直接跑的 codex / claude 也能判状态）"
+  else
+    _warn_line "detect=${_dd_detect}（读屏降级关了，live=${_dd_live}）"
+    printf '    → 开：set -g @whistle_detect on\n'
+  fi
+  printf '  done     %s（running 持续 ≥ %s 秒才补通知）\n' \
+    "$(whistle_conf '@whistle_detect_done')" "$(whistle_conf '@whistle_detect_done_min')"
+
   if [ "$(whistle_conf '@whistle_os')" = on ]; then
     # 点击通知时激活哪个终端。tmux server 的环境是**启动那一刻**的快照 ——
     # 换过终端之后它仍指向旧终端，通知会点回那个、甚至把已退出的它重新拉起。

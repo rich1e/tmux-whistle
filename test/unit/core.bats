@@ -742,3 +742,10 @@ EOF
 EOF
   assert_eq "$output" '%1|idle||idle|'
 }
+
+@test "conf: 读屏降级默认开启，补 done 的两道开关有默认值" {
+  # 直接跑 codex 的用户什么都没配，就该看到状态 —— 默认关等于这个功能不存在。
+  assert_eq "$(whistle_conf '@whistle_detect')" 'on'
+  assert_eq "$(whistle_conf '@whistle_detect_done')" 'on'
+  assert_eq "$(whistle_conf '@whistle_detect_done_min')" '5'
+}

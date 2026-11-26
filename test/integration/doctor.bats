@@ -403,3 +403,10 @@ TUI
   assert_contains "$output" 'session.execution.started'
   assert_not_contains "$output" '声明 3 条、实际挂上'
 }
+
+@test "doctor: 报告读屏降级开关与 live 计数" {
+  run env "$CLI" doctor
+  assert_eq "$status" 0
+  assert_contains "$output" 'detect=on'
+  assert_contains "$output" 'live=0'
+}

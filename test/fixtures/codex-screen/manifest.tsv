@@ -1,0 +1,9 @@
+# fixture	expected	baseline_plan_result
+codex-0.171.0-idle-120x40.txt	idle	empty
+codex-0.171.0-idle-80x24.txt	idle	empty
+codex-0.171.0-idle-after-turn-120x40.txt	idle	empty
+codex-0.171.0-running-120x40.txt	running	running
+codex-0.171.0-permission-wait-120x40.txt	wait	empty
+codex-0.171.0-trust-wait-120x40.txt	wait	empty
+codex-0.171.0-scroll-freeze-80x24.txt	freeze	empty
+codex-0.171.0-transcript-scroll-freeze-120x40.txt	freeze	empty
