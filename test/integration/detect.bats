@@ -144,3 +144,57 @@ redraw() { printf '\033[H\033[2J' >&9; }
   wt_wait_until 8000 'live_eq idle'
   assert_eq "$(live_val)" 'idle'
 }
+
+# -- running→idle 补 done ----------------------------------------------------
+
+@test "detect: running→idle 补一条 done 通知" {
+  wt set -g @whistle_detect_done_min 0
+  start_agent
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+  redraw
+  feed '› \n'
+  wt_wait_until 15000 'notice_eq done'
+  assert_eq "$(notice_val)" 'done'
+  assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle_notice_msg)" '检测到回合结束'
+  # 活动通道的真源不受影响
+  assert_eq "$(activity_val)" ''
+}
+
+@test "detect: running 时长不足不补 done" {
+  wt set -g @whistle_detect_done_min 30
+  start_agent
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+  redraw
+  feed '› \n'
+  wt_wait_until 15000 'live_eq idle'
+  sleep 1
+  assert_eq "$(notice_val)" ''
+}
+
+@test "detect: 已有未读通知不被 done 覆盖" {
+  wt set -g @whistle_detect_done_min 0
+  wt set -p -t "$(pane_of)" @whistle_notice wait
+  start_agent
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+  redraw
+  feed '› \n'
+  wt_wait_until 15000 'live_eq idle'
+  sleep 1
+  assert_eq "$(notice_val)" 'wait'
+}
+
+@test "detect: 开关关闭时不补 done" {
+  wt set -g @whistle_detect_done off
+  wt set -g @whistle_detect_done_min 0
+  start_agent
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+  redraw
+  feed '› \n'
+  wt_wait_until 15000 'live_eq idle'
+  sleep 1
+  assert_eq "$(notice_val)" ''
+}

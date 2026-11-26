@@ -239,7 +239,8 @@ WHISTLE_DEFAULTS='@whistle_enabled on
 @whistle_agent_cmds claude claude.exe codex codex.exe opencode
 @whistle_detect off
 @whistle_detect_interval 15
-@whistle_detect_idle 180
+@whistle_detect_done on
+@whistle_detect_done_min 5
 @whistle_sub_ttl 1800
 @whistle_codex_pane_mode strict
 @whistle_cx_session_ttl 43200'

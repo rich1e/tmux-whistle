@@ -69,7 +69,8 @@ whistle_detect_forget() {
 	_daf_id="${1#%}"
 	command rm -f "$WHISTLE_DETECT_STATE_DIR/$_daf_id.last" \
 		"$WHISTLE_DETECT_STATE_DIR/$_daf_id.pending" \
-		"$WHISTLE_DETECT_STATE_DIR/$_daf_id.count"
+		"$WHISTLE_DETECT_STATE_DIR/$_daf_id.count" \
+		"$WHISTLE_DETECT_STATE_DIR/$_daf_id.run_since"
 }
 
 # whistle_detect_apply <pane> <running|idle>
@@ -95,6 +96,8 @@ whistle_detect_apply() {
 	if [ -f "$_dap_last_file" ]; then
 		_dap_last=$(cat "$_dap_last_file" 2>/dev/null)
 	fi
+	# 供调用方判断「刚刚发生了什么转变」（running → idle 要补一条 done）
+	_dap_prev="$_dap_last"
 	if [ "$_dap_state" = "$_dap_last" ]; then
 		# 又看到了与已生效状态一致的分类 —— 中间那次「想切换」的观察作废。
 		# 不清的话，running / idle 交替闪烁时 pending 计数会被攒起来，
@@ -104,6 +107,11 @@ whistle_detect_apply() {
 	fi
 
 	if [ "$_dap_state" = running ]; then
+		# 记下这一轮从什么时候开始跑：补 done 的时长闸要用它。
+		# 只在缺失时写，否则每次扫描都会把起点推后。
+		if [ ! -f "$WHISTLE_DETECT_STATE_DIR/$_dap_id.run_since" ]; then
+			whistle_now >"$WHISTLE_DETECT_STATE_DIR/$_dap_id.run_since"
+		fi
 		printf '%s' "$_dap_state" >"$_dap_last_file"
 		command rm -f "$_dap_pend_file" "$_dap_cnt_file"
 		return 0
@@ -137,6 +145,51 @@ whistle_detect_apply() {
 	return 0
 }
 
+# whistle_detect_done_fire <pane>
+# 从 running 回落到 idle 时补一条「回合结束」通知。
+#
+# 读屏拿不到 `last_assistant_message`，但「在跑 → 停下来了」这个**转变本身**
+# 就是可靠信号：用户至少能收到提醒，而不是只看到 ▶ 悄悄变成 ◉。
+#
+# 三条硬约束，缺一不发：
+#   ① `@whistle_detect_done` 必须是 on
+#   ② running 持续 ≥ `@whistle_detect_done_min`（默认 5 秒）——
+#      TUI 重绘、瞬时闪烁都会造成假转变
+#   ③ `@whistle_notice` 为空 —— 未读通知的 rank 更高，
+#      覆盖等于把用户没看过的信息抹掉
+#
+# ⚠️ 只写通知通道，绝不写 @whistle（真源只放 agent 上报值）。
+whistle_detect_done_fire() {
+	_ddf_pane=$(whistle_resolve_pane "${1:-}")
+	[ -n "$_ddf_pane" ] || return 1
+
+	# 时长证据先读走：无论这一次发不发，这一轮的计时都到此结束。
+	# 不清的话，下一轮 running 会沿用上一次的起点，短回合也会被判成「够长」。
+	_ddf_since_file="$WHISTLE_DETECT_STATE_DIR/${_ddf_pane#%}.run_since"
+	_ddf_since=''
+	if [ -f "$_ddf_since_file" ]; then
+		_ddf_since=$(cat "$_ddf_since_file" 2>/dev/null)
+		command rm -f "$_ddf_since_file"
+	fi
+	case "$_ddf_since" in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+
+	[ "$(whistle_conf '@whistle_detect_done')" = on ] || return 1
+
+	_ddf_min=$(whistle_conf '@whistle_detect_done_min')
+	case "$_ddf_min" in
+	'' | *[!0-9]*) _ddf_min=5 ;;
+	esac
+	[ $(($(whistle_now) - _ddf_since)) -ge "$_ddf_min" ] || return 1
+
+	_ddf_notice=$(whistle_tmux show -pqv -t "$_ddf_pane" @whistle_notice 2>/dev/null) || _ddf_notice=''
+	[ -z "$_ddf_notice" ] || return 1
+
+	whistle_notice_set 'done' '检测到回合结束' '' "$_ddf_pane" >/dev/null || return 1
+	return 0
+}
+
 # 写完之后的重算与投递。
 # 只有**真的变了**才走到这里：每秒每 pane 全量重算会把 tmux 命令队列压满。
 whistle_detect_sync() {
@@ -151,6 +204,10 @@ whistle_detect_sync() {
 # 一次扫描。返回 0 表示做了至少一次状态变更。
 whistle_detect_once() {
 	_dv_cmds=$(whistle_conf '@whistle_agent_cmds')
+	# 用户自定义的 wait 判据：**只在非空时**作为额外一条规则叠加。
+	# 早先的实现里它是空的，而 `grep -qE ""` 匹配一切 —— 每个安静下来的
+	# pane 都会被写成 wait，且没有任何报错。
+	_dv_wait_re=$(whistle_conf '@whistle_detect_wait-re')
 
 	mkdir -p "$WHISTLE_DETECT_STATE_DIR" 2>/dev/null || return 0
 	command rm -f "$WHISTLE_DETECT_STATE_DIR/agent_seen"
@@ -197,12 +254,19 @@ whistle_detect_once() {
 
 		_dv_screen=$(whistle_tmux capture-pane -p -J -t "$_dv_pane" 2>/dev/null)
 		_dv_state=$(printf '%s\n' "$_dv_screen" | whistle_classify_screen "$_dv_kind")
+		if [ -n "$_dv_wait_re" ] && printf '%s\n' "$_dv_screen" | grep -qE "$_dv_wait_re"; then
+			_dv_state='wait'
+		fi
 
 		case "$_dv_state" in
 		running | idle)
 			# 防抖：running 立即生效，其余要连续两次（见 whistle_detect_apply）
 			whistle_detect_apply "$_dv_pane" "$_dv_state" || continue
 			whistle_live_set "$_dv_state" "$_dv_pane" >/dev/null || continue
+			# 刚才还在跑、现在停了 → 补一条回合结束通知（只走通知通道）
+			if [ "$_dv_state" = idle ] && [ "${_dap_prev:-}" = running ]; then
+				whistle_detect_done_fire "$_dv_pane"
+			fi
 			;;
 		wait)
 			[ -n "${_dv_notice:-}" ] && continue

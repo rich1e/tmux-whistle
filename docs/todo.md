@@ -418,7 +418,17 @@ whistle_tmux set -g @whistle_enabled "$_v"
 
 ## TODO-8 · `@whistle_detect_wait-re` / `done-re` 未文档化
 
-⬜ 待处理
+✅ 已修复（2026-11-26，读屏降级通道重做）
+
+**结论**：`done-re` 随「静默 180 秒判完成」那条分支一起**作废并删除** ——
+现在完成信号来自 `running → idle` 这个**转变**（`whistle_detect_done_fire`），
+不再靠匹配屏幕关键词，也不再需要 `@whistle_detect_idle`。
+`wait-re` 保留，但语义变窄成「**用户额外附加**的 wait 正则」：
+分类器（`lib/detect-rules.sh`）负责判断，`wait-re` 非空时才作为补充判据叠加。
+下面记的两个毛病此时都不成立了：
+空值不再匹配一切（`[ -n "$_dv_wait_re" ]` 有守卫），死代码兜底已随重写删除。
+
+**（以下为原记录）**
 
 **现象**：兜底检测的两个正则选项代码在读，但 `README.md` 和默认值表里都查不到，
 用户无从得知可以自定义。
