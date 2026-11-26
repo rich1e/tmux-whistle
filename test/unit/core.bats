@@ -708,3 +708,37 @@ EOF
     [ "$status" -ne 0 ]
     unset _WC_SNAP
 }
+
+# -- 屏幕降级通道（@whistle_live） -------------------------------------------
+#
+# 列契约（sc=2）：pane|@whistle|notice|活动消息|通知消息|sub|live|cmd
+# 注意 4/5 列是「活动消息 / 通知消息」，live 插在 sub 之后、命令列之前。
+
+@test "resolve: live 在活动态为空时生效" {
+  run whistle_resolve_idle_panes 'claude' 2 <<'EOF'
+%1|||||1700000000|running|claude
+EOF
+  assert_eq "$output" '%1|running||running|'
+}
+
+@test "resolve: hook 活动态优先于 live" {
+  run whistle_resolve_idle_panes 'claude' 2 <<'EOF'
+%1|idle||||1700000000|running|claude
+EOF
+  assert_eq "$output" '%1|idle||idle|'
+}
+
+@test "resolve: 旧 6 列输入仍然有效" {
+  run whistle_resolve_idle_panes 'claude' 2 <<'EOF'
+%1|||活动消息|通知消息|claude
+EOF
+  assert_eq "$output" '%1|idle||idle|通知消息'
+}
+
+@test "resolve: 7 列输入（有 sub 无 live）不会把命令名当 live" {
+  # 少一列时 live 列不存在，命令名不能被误当成状态读走。
+  run whistle_resolve_idle_panes 'claude' 2 <<'EOF'
+%1|||||1700000000|claude
+EOF
+  assert_eq "$output" '%1|idle||idle|'
+}

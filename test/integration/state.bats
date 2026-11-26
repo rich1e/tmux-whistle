@@ -734,3 +734,39 @@ pane_of() {
   run whistle_conf '@whistle_cx_session_ttl'
   assert_eq "$output" '43200'
 }
+
+# -- 屏幕降级通道（@whistle_live） -------------------------------------------
+
+@test "live_set: 写 @whistle_live，绝不动活动通道" {
+  local p
+  p=$(pane_of)
+  whistle_live_set idle > /dev/null
+  assert_eq "$(wt show -pqv -t "$p" @whistle_live)" 'idle'
+  assert_eq "$(wt show -pqv -t "$p" @whistle)" ''
+}
+
+@test "live_set: 空值清掉槽位" {
+  local p
+  p=$(pane_of)
+  whistle_live_set running > /dev/null
+  whistle_live_set '' > /dev/null
+  assert_eq "$(wt show -pqv -t "$p" @whistle_live)" ''
+}
+
+@test "live_set: 未知状态被拒绝" {
+  local p
+  p=$(pane_of)
+  run whistle_live_set gone
+  assert_eq "$status" 1
+  assert_eq "$(wt show -pqv -t "$p" @whistle_live)" ''
+}
+
+@test "recompute_window: @whistle_live 参与有效态与窗口徽章" {
+  local p w
+  p=$(pane_of)
+  w=$(wt display -p -t w1 '#{window_id}')
+  whistle_live_set running > /dev/null
+  whistle_recompute_window "$w"
+  assert_eq "$(wt show -wv -t "$w" @whistle_win)" 'running'
+  assert_eq "$(wt show -pqv -t "$p" @whistle_eff)" 'running'
+}
