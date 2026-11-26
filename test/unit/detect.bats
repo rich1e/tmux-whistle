@@ -51,3 +51,57 @@ status
 EOF
   assert_eq "$output" '❯ hello'
 }
+
+@test "codex: 权限表单判 wait" {
+  run whistle_classify_codex <<'EOF'
+──────
+Allow command?
+❯ 1. Yes
+  2. No
+enter to confirm · esc to cancel
+EOF
+  assert_eq "$output" 'wait'
+}
+
+@test "codex: 计时器判 running" {
+  run whistle_classify_codex <<'EOF'
+• Working (12s • esc to interrupt)
+› 
+EOF
+  assert_eq "$output" 'running'
+}
+
+@test "codex: 空提示符判 idle" {
+  run whistle_classify_codex <<'EOF'
+done
+› 
+EOF
+  assert_eq "$output" 'idle'
+}
+
+@test "codex: 对话框滚出可视区不判 idle" {
+  run whistle_classify_codex <<'EOF'
+esc to cancel
+enter to confirm
+...
+› still waiting
+EOF
+  [ "$output" != "idle" ]
+}
+
+@test "codex: 0.171.0 真机 fixtures" {
+  for fixture in \
+    codex-0.171.0-idle-120x40 \
+    codex-0.171.0-idle-80x24 \
+    codex-0.171.0-idle-after-turn-120x40 \
+    codex-0.171.0-running-120x40 \
+    codex-0.171.0-permission-wait-120x40 \
+    codex-0.171.0-trust-wait-120x40 \
+    codex-0.171.0-scroll-freeze-80x24 \
+    codex-0.171.0-transcript-scroll-freeze-120x40; do
+    expected=$(awk -F '\t' -v f="$fixture.txt" '$1 == f { print $2 }' \
+      "$WHISTLE_ROOT/test/fixtures/codex-screen/manifest.tsv")
+    run whistle_classify_codex < "$WHISTLE_ROOT/test/fixtures/codex-screen/$fixture.txt"
+    assert_eq "$output" "$expected"
+  done
+}
