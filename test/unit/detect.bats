@@ -1,0 +1,53 @@
+#!/usr/bin/env bats
+# shellcheck shell=bash
+#
+# L1 纯函数：读屏分类器的区域切分与规则。
+#
+# 设计要点：屏幕分类器是「屏幕永远只是补充」那一层的全部实现 ——
+# 它读的是 tmux capture-pane 的整屏文本，输出一个状态词，**不碰任何 tmux 状态**。
+# 真源仍然是 hook 上报的值（见 lib/core.sh 推导层的 D1/D2）。
+#
+# 区域切分先做，规则再基于区域判断：`tail(n)` 看底部动态行，`after_rule` 看
+# 最后一条分隔线之后，`prompt_box` 看最后那个输入框。真实 Codex 0.171.0
+# **没有** `─{3,}` 分隔线，所以区域缺失时规则必须能从底部继续判断。
+
+load '../test_helper/whistle'
+
+setup() {
+  : "${WHISTLE_ROOT:?helper 未加载}"
+  export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+  # shellcheck source=/dev/null
+  source "$WHISTLE_ROOT/lib/detect-rules.sh"
+}
+
+@test "screen_tail: 只取最后 n 行非空" {
+  run whistle_screen_tail 2 <<'EOF'
+a
+
+b
+c
+EOF
+  assert_eq "$output" 'b
+c'
+}
+
+@test "screen_after_rule: 取最后分隔线之后" {
+  run whistle_screen_after_rule <<'EOF'
+old
+──────
+new1
+new2
+EOF
+  assert_eq "$output" 'new1
+new2'
+}
+
+@test "screen_prompt_box: 取最后提示行" {
+  run whistle_screen_prompt_box <<'EOF'
+x
+❯ hello
+────────
+status
+EOF
+  assert_eq "$output" '❯ hello'
+}
