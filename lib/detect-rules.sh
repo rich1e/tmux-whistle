@@ -19,7 +19,20 @@
 # 四个扫描函数共用的 awk 序言。抄四遍的话，多字节那条坑改一处漏三处。
 WHISTLE_DETECT_AWK_LIB='
   function has(s, n) { return index(s, n) > 0 }
-  function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+  # ⚠️ 提示符后面跟的是 **U+00A0（NBSP）**，不是普通空格 —— Claude Code 与
+  # Codex 的真实屏幕都这样（实测 capture-pane 取到 ❯ c2 a0 20 20 …）。
+  # 只剥 [ \t] 的话「空输入框」永远剥不干净，空闲态被判成空分类。
+  # 统一先归一化成普通空格，再按行首尾剥。
+  # ⚠️ NBSP 必须写成**字符串字面量**再交给 gsub：awk 的正则字面量里
+  # 八进制转义不被解释成字节（POSIX 只规定字符串字面量有这种转义），
+  # 写成正则字面量会去匹配字面上的反斜杠加数字，永远命中不了。
+  function trim(s,   nbsp) {
+    nbsp = "\302\240"
+    gsub(nbsp, " ", s)
+    sub(/^[ \t]+/, "", s)
+    sub(/[ \t]+$/, "", s)
+    return s
+  }
   # 分隔线：整行只有 - 或 ─，且至少 3 个字符
   function is_rule(s,   t, c) {
     t = trim(s)

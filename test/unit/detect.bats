@@ -163,3 +163,8 @@ EOF
   run whistle_detect_eligible codex 'codex --no-daemon' 'codex claude'
   assert_eq "$status" 0
 }
+
+@test "claude: 提示符后跟 NBSP 也判 idle（真实 TUI 用的是 U+00A0）" {
+  out=$(printf '❯\302\240\302\240\n' | whistle_classify_claude)
+  assert_eq "$out" 'idle'
+}
