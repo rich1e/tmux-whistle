@@ -286,6 +286,24 @@ whistle_agent_kind() {
 	esac
 }
 
+# whistle_detect_name <cmd> <argv>
+# stdout = 前台进程的「有效名字」：优先 argv[0] 的 basename，取不到才用 comm。
+#
+# 为什么不用 comm 就够：`#{pane_current_command}` 是内核的进程名，
+# 而通过软链 / 包装器启动时它会是**目标二进制**的名字。实测把 `/bin/sleep`
+# 软链成 `codex` 再跑，comm 仍然是 `sleep`，只有 argv[0] 还是 `codex`。
+# 用户敲的是哪个名字，就该用哪套规则表。
+whistle_detect_name() {
+	_dr_n_argv0="${2:-}"
+	_dr_n_argv0=${_dr_n_argv0%% *}
+	_dr_n_argv0=${_dr_n_argv0##*/}
+	if [ -n "$_dr_n_argv0" ]; then
+		printf '%s' "$_dr_n_argv0"
+	else
+		printf '%s' "${1:-}"
+	fi
+}
+
 # whistle_detect_eligible <cmd> <argv> <agent_cmds>
 # exit 0 = 这个 pane 可以被读屏接管。
 #
@@ -296,18 +314,16 @@ whistle_agent_kind() {
 #      非交互进程，屏幕上没有输入框，读屏只会拿到一段静止输出。
 #   3. 该进程名在 @whistle_agent_cmds 名单里 —— 用户可以把某个 agent 摘掉。
 whistle_detect_eligible() {
-	_dr_cmd="${1:-}"
 	_dr_argv="${2:-}"
 	_dr_cmds="${3:-}"
+	_dr_base=$(whistle_detect_name "${1:-}" "$_dr_argv")
 
-	_dr_kind=$(whistle_agent_kind "$_dr_cmd")
+	_dr_kind=$(whistle_agent_kind "$_dr_base")
 	[ -n "$_dr_kind" ] || return 1
 
 	case " $_dr_argv " in
 	*" exec "*) return 1 ;;
 	esac
-
-	_dr_base="$_dr_cmd"
 	case "$_dr_base" in
 	*[A-Z]*) _dr_base=$(printf '%s' "$_dr_base" | tr '[:upper:]' '[:lower:]') ;;
 	esac

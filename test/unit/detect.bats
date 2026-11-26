@@ -168,3 +168,16 @@ EOF
   out=$(printf '❯\302\240\302\240\n' | whistle_classify_claude)
   assert_eq "$out" 'idle'
 }
+
+@test "detect_name: 软链 / 包装器下以 argv0 为准" {
+  # comm（pane_current_command）在软链下会是**目标二进制**的名字，
+  # 而 argv[0] 才是用户实际敲的那个 —— 读屏要按后者选规则表。
+  assert_eq "$(whistle_detect_name sleep '/tmp/x/codex 30')" 'codex'
+  assert_eq "$(whistle_detect_name codex '')" 'codex'
+  assert_eq "$(whistle_detect_name claude.exe 'claude --continue')" 'claude'
+}
+
+@test "eligible: argv0 就是已知 agent 时放行（哪怕 comm 是目标二进制）" {
+  run whistle_detect_eligible sleep '/tmp/x/codex 30' 'codex claude'
+  assert_eq "$status" 0
+}
