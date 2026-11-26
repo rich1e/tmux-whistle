@@ -916,7 +916,8 @@ whistle_notice_set() {
   whistle_tmux set -p -t "$_ns_pane" @whistle_notice "$_ns_state" \
     \; set -p -t "$_ns_pane" @whistle_notice_msg "$_ns_msg" \
     \; set -p -t "$_ns_pane" @whistle_notice_body "$_ns_body" \
-    \; set -p -t "$_ns_pane" @whistle_notice_at "$(whistle_now)" || return 1
+    \; set -p -t "$_ns_pane" @whistle_notice_at "$(whistle_now)" \
+    \; set -p -t "$_ns_pane" @whistle_notice_src "${WHISTLE_SRC:-manual}" || return 1
 
   printf '%s' "$_ns_pane"
 }

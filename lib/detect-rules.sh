@@ -257,6 +257,19 @@ whistle_classify_claude() {
   '
 }
 
+# whistle_classify_supported <agent>
+# exit 0 = 这个 agent 有规则表，值得被读屏接管。
+#
+# **必须与 whistle_classify_screen 的 case 同时改。** 没有规则表的 agent
+# （opencode）不该进入轮询：每轮一次 capture-pane + ps 却永远得不出结论，
+# 还会把节奏钉在 1 秒，等于永久空转。
+whistle_classify_supported() {
+  case "${1:-}" in
+  codex | claude) return 0 ;;
+  esac
+  return 1
+}
+
 # whistle_classify_screen <agent>
 # stdin=整屏；agent ∈ codex / claude。未知 agent 输出空。
 whistle_classify_screen() {
@@ -321,9 +334,23 @@ whistle_detect_eligible() {
   _dr_kind=$(whistle_agent_kind "$_dr_base")
   [ -n "$_dr_kind" ] || return 1
 
-  case " $_dr_argv " in
-  *" exec "*) return 1 ;;
+  # 非交互子命令没有输入框，读屏只会拿到一段静止输出 —— 判据按 agent 分：
+  #   codex  `exec`
+  #   claude `-p` / `--print`
+  # ⚠️ codex 的 `-p` 是 `--profile`，仍然是交互 TUI，不能照抄 claude 的规则。
+  case "$_dr_kind" in
+  codex)
+    case " $_dr_argv " in
+    *" exec "*) return 1 ;;
+    esac
+    ;;
+  claude)
+    case " $_dr_argv " in
+    *" -p "* | *" --print "*) return 1 ;;
+    esac
+    ;;
   esac
+
   case "$_dr_base" in
   *[A-Z]*) _dr_base=$(printf '%s' "$_dr_base" | tr '[:upper:]' '[:lower:]') ;;
   esac

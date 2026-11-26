@@ -181,3 +181,27 @@ EOF
   run whistle_detect_eligible sleep '/tmp/x/codex 30' 'codex claude'
   assert_eq "$status" 0
 }
+
+@test "classify_supported: 只有有规则表的 agent 才值得读屏" {
+  run whistle_classify_supported codex
+  assert_eq "$status" 0
+  run whistle_classify_supported claude
+  assert_eq "$status" 0
+  run whistle_classify_supported opencode
+  assert_eq "$status" 1
+  run whistle_classify_supported ''
+  assert_eq "$status" 1
+}
+
+@test "eligible: claude -p 非交互被排除" {
+  run whistle_detect_eligible claude 'claude -p hello' 'claude codex'
+  assert_eq "$status" 1
+  run whistle_detect_eligible claude 'claude --print hello' 'claude codex'
+  assert_eq "$status" 1
+}
+
+@test "eligible: codex 的 -p 是 profile，不能当成非交互" {
+  # codex -p 是 --profile，仍是交互 TUI；按 claude 的规则排掉就错了。
+  run whistle_detect_eligible codex 'codex -p myprofile' 'claude codex'
+  assert_eq "$status" 0
+}

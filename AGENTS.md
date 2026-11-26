@@ -107,6 +107,13 @@ hook 归因 fail-closed 时（用户直接跑 `codex`），状态栏上那个 pa
   pending 计数。有 agent 时 1 秒一轮，否则回 `@whistle_detect_interval`。
 - `running → idle` 补一条 done：开关 on + 持续 ≥ `@whistle_detect_done_min` +
   `@whistle_notice` 为空，三条缺一不发，且只写通知通道。
+- 读屏写的 `wait` 带 `@whistle_notice_src=detect`，屏幕回到 running/idle、pane 退出、
+  开关关闭时由读屏自己收掉；别人写的通知不碰。写 `wait` 是**升级**（rank 4），
+  只有已是 wait/error 才跳过 —— 「已有通知就不写」会挡住真实的权限请求。
+- 写完走 `whistle_finish`（在 `lib/deliver.sh`，与 CLI 共用）：少了投递就只有徽章变，
+  边框 / 瞬时提示 / 桌面通知全不发。守护要 source core + status-line + deliver。
+- 只轮询**有规则表**的 agent（codex / claude）；`opencode` 进来就是每秒空转。
+- 一轮只取一次 `ps` 快照，别逐 pane fork。
 - ⚠️ macOS 的 `/bin/sh` 是 **bash 3.2**，解析器**不接受 `$(` 直接跟 `case`**
   （报 `syntax error near unexpected token ';;'`）。改完跑 `sh -n`。
 - ⚠️ awk 判多字节只能用 `index()`：`"─" == "❯"` 在这个 locale 下为真，

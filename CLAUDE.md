@@ -130,6 +130,20 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 - **节奏**：有 agent 在跑时 1 秒一轮，没有则回到 `@whistle_detect_interval`。
 - **`running → idle` 补一条 done**（`whistle_detect_done_fire`）：三道闸 = 开关 on /
   running 持续 ≥ `@whistle_detect_done_min` / `@whistle_notice` 为空。只写通知通道。
+- **通知有生命周期**。读屏写的 `wait` 带 `@whistle_notice_src=detect`，在「屏幕回到
+  running / idle」「pane 不再是 agent」「开关关闭」三条路径上由读屏自己收掉 ——
+  用户批准权限时焦点没动过，没有任何 `after-select-*` 会替它清。hook / CLI 写的
+  通知（src 不是 `detect`）一个字都不碰；`done` 也不清（那是历史提醒）。
+- **写 `wait` 是升级不是覆盖**：只有已有通知的 rank ≥ 4（同为 `wait` 或更高的
+  `error`）才跳过。早先「已有通知就不写」会让一条未读 `done` 挡住真实的权限请求，
+  agent 卡在那儿而徽章写着「做完了」。
+- **写完之后走 `whistle_finish`**（在 `lib/deliver.sh`，CLI 与守护共用）：
+  只重算 + 不投递的话，边框 / 瞬时提示 / 桌面通知全都不发，读屏补的那条 done
+  就只有徽章变。守护进程因此必须 source `core` + `status-line` + `deliver` 三个文件。
+- **只认有规则表的 agent**（`whistle_classify_supported`）：`opencode` 没有规则表，
+  放进轮询就是每秒一次 `capture-pane` + `ps` 却永远得不出结论，还把节奏钉在 1 秒。
+- **一轮只取一次 `ps`**（`whistle_detect_fg_snapshot`）：逐 pane 各跑一次 `ps`
+  的话，15 个 pane 的 server 就是 15 次 `ps`/秒，而绝大多数只是普通 shell。
 - **状态目录按 socket 隔离**（`/tmp/tmux-whistle-<uid>-<cksum(socket)>`）。
   按 uid 命名会让真 server 与测试的隔离 server 共用一个 pidfile，互相把对方的
   守护挡在门外，其中一边的状态永远不更新而界面上看不出原因。
@@ -161,6 +175,7 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 | pane | `@whistle` `@whistle_msg` `@whistle_at` `@whistle_src` `@whistle_body` | **活动通道真源**，只有这里能写 |
 | pane | `@whistle_notice` `@whistle_notice_msg` `@whistle_notice_at` `@whistle_notice_body` | **通知通道真源**，只有这里能写 |
 | pane | `@whistle_live` | **读屏降级通道**。只能是 `running` / `idle` / 空；由 `lib/detect.sh` 写，**只在 `@whistle` 为空时**被推导层采用 |
+| pane | `@whistle_notice_src` | 这条通知是谁写的：`detect`（读屏）或 `manual`（hook / CLI）。读屏只清自己写的那条 `wait` |
 | pane | `@whistle_sub` | 子 agent 标记。Claude 用单个过期时间戳；Codex 用 `agent_id:expiry` 集合 |
 | pane | `@whistle_cx_quiet` | Codex 内部会话 `session_id` 列表，空格分隔；这些会话不进入状态机 |
 | pane | `@whistle_cx_running` `@whistle_cx_idle` | Codex pane 内 session 集合，条目为 `session_id:expiry` |

@@ -64,3 +64,11 @@ setup() {
   run whistle_detect_apply '%1' idle
   assert_eq "$status" 1
 }
+
+@test "interval: 非法值回落到 15，0 与空也不放行" {
+  assert_eq "$(whistle_detect_interval_value '1')" '1'
+  assert_eq "$(whistle_detect_interval_value '30')" '30'
+  assert_eq "$(whistle_detect_interval_value '1s')" '15'
+  assert_eq "$(whistle_detect_interval_value '0')" '15'
+  assert_eq "$(whistle_detect_interval_value '')" '15'
+}

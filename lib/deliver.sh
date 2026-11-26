@@ -1,8 +1,12 @@
 #!/bin/sh
 # tmux-whistle 四渠道投递。
 #
-# 只读状态，不写状态（唯一写入点是 core.sh）。
+# 只读**真源**状态（@whistle / @whistle_notice 只有 core.sh 能写）；
+# 派生值（@whistle_eff / @whistle_win / 计数）由这里调 core.sh 的重算写入。
 # 四条通道互不依赖，各自留开关；投递永远排在状态写入之后。
+#
+# whistle_finish 也在这里：它把「重算 + 投递」编成一步，CLI（bin/tmux-whistle）
+# 与常驻的读屏守护（lib/detect.sh）共用同一份实现 —— 复制两份必然分叉。
 
 # -- 调试日志 --------------------------------------------------------------
 # @whistle_debug on 时写这里。KP-9 的静默失败就是靠它才能被看见。
@@ -489,4 +493,53 @@ whistle_deliver() {
     whistle_display_fanout "$1" "$2" "$3"
     whistle_os_notify "$1" "$2" "$3" "${4:-}" "${5:-}"
   fi
+}
+
+# whistle_finish <pane> <这次写的是哪条通道的状态>
+#
+# 写完状态之后的统一编排：重算窗口与全局派生值，然后投递。
+# cmd_set / cmd_run / 子 agent 标记 / 内部子命令共用 —— 复制几份必然分叉。
+#
+# 第二个参数只用来区分「这次动的是通知通道还是活动通道」，投递的状态由
+# 重算后的 @whistle_eff 决定：
+#
+#   - 通知写入（done / wait / error）：有效态就是它（rank 3~5，比重算后可能
+#     还留着的 running / idle 都高），按有效态投递。瞬时提示与桌面通知会
+#     扇出，这正是「有事等你」该有的行为。
+#
+#   - 活动写入（running / idle）：按**活动态**投递，不按有效态。
+#     有效态可能是上一轮还没读掉的 done（rank 高于 running）；拿它投递的话，
+#     每一次 PreToolUse 的 `--activity running` 都会把那条旧通知重新弹一遍。
+#     边框与徽章读的是重算写进 option 的派生值，不依赖投递参数。
+whistle_finish() {
+  _ff_pane="$1"
+  _ff_wrote="$2"
+
+  _ff_win=$(whistle_pane_window "$_ff_pane")
+  [ -n "$_ff_win" ] || return 1
+
+  whistle_recompute_window "$_ff_win"
+  whistle_recompute_global
+
+  # 重算已经写好 @whistle_eff —— 读它，而不是在本函数里再算一遍 rank。
+  _ff_eff=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_eff 2> /dev/null) || _ff_eff=''
+
+  if whistle_is_activity "$_ff_wrote" && whistle_is_notified "$_ff_eff"; then
+    # 活动通道的写入遇上了未读通知：不重新扇出那条旧通知
+    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
+    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
+      "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
+    return 0
+  fi
+
+  if whistle_is_notified "$_ff_eff"; then
+    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_msg 2> /dev/null) || _ff_msg=''
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_body 2> /dev/null) || _ff_body=''
+  else
+    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
+    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
+  fi
+  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
+    "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
 }

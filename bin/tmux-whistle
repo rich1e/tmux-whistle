@@ -168,55 +168,6 @@ whistle_state_write() {
   fi
 }
 
-# whistle_finish <pane> <这次写的是哪条通道的状态>
-#
-# 写完状态之后的统一编排：重算窗口与全局派生值，然后投递。
-# cmd_set / cmd_run / 子 agent 标记 / 内部子命令共用 —— 复制几份必然分叉。
-#
-# 第二个参数只用来区分「这次动的是通知通道还是活动通道」，投递的状态由
-# 重算后的 @whistle_eff 决定：
-#
-#   - 通知写入（done / wait / error）：有效态就是它（rank 3~5，比重算后可能
-#     还留着的 running / idle 都高），按有效态投递。瞬时提示与桌面通知会
-#     扇出，这正是「有事等你」该有的行为。
-#
-#   - 活动写入（running / idle）：按**活动态**投递，不按有效态。
-#     有效态可能是上一轮还没读掉的 done（rank 高于 running）；拿它投递的话，
-#     每一次 PreToolUse 的 `--activity running` 都会把那条旧通知重新弹一遍。
-#     边框与徽章读的是重算写进 option 的派生值，不依赖投递参数。
-whistle_finish() {
-  _ff_pane="$1"
-  _ff_wrote="$2"
-
-  _ff_win=$(whistle_pane_window "$_ff_pane")
-  [ -n "$_ff_win" ] || return 1
-
-  whistle_recompute_window "$_ff_win"
-  whistle_recompute_global
-
-  # 重算已经写好 @whistle_eff —— 读它，而不是在本函数里再算一遍 rank。
-  _ff_eff=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_eff 2> /dev/null) || _ff_eff=''
-
-  if whistle_is_activity "$_ff_wrote" && whistle_is_notified "$_ff_eff"; then
-    # 活动通道的写入遇上了未读通知：不重新扇出那条旧通知
-    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
-    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
-    whistle_deliver "$_ff_win" "$_ff_wrote" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
-      "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
-    return 0
-  fi
-
-  if whistle_is_notified "$_ff_eff"; then
-    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_msg 2> /dev/null) || _ff_msg=''
-    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_notice_body 2> /dev/null) || _ff_body=''
-  else
-    _ff_msg=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_msg 2> /dev/null) || _ff_msg=''
-    _ff_body=$(whistle_tmux show -pqv -t "$_ff_pane" @whistle_body 2> /dev/null) || _ff_body=''
-  fi
-  whistle_deliver "$_ff_win" "$_ff_eff" "$(whistle_sanitize "$_ff_msg")" "$_ff_pane" \
-    "$(whistle_sanitize "$_ff_body" "$WHISTLE_BODY_MAX")"
-}
-
 # cmd_set <状态> [选项...] [消息...]
 #
 # 消息与选项的顺序无关 —— 早期版本直接把 $2 当消息，于是

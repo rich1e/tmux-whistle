@@ -64,6 +64,10 @@ live_val() { wt show -pqv -t "$(pane_of)" @whistle_live 2> /dev/null; }
 notice_val() { wt show -pqv -t "$(pane_of)" @whistle_notice 2> /dev/null; }
 activity_val() { wt show -pqv -t "$(pane_of)" @whistle 2> /dev/null; }
 live_eq() { [ "$(live_val)" = "$1" ]; }
+notice_empty() { [ -z "$(notice_val)" ]; }
+win_eq() { [ "$(wt show -wv -t w1 @whistle_win 2> /dev/null)" = "$1" ]; }
+win_empty() { [ -z "$(wt show -wv -t w1 @whistle_win 2> /dev/null)" ]; }
+tn_fired() { [ -s "$WHISTLE_TEST_TN_LOG" ]; }
 live_empty() { [ -z "$(live_val)" ]; }
 notice_eq() { [ "$(notice_val)" = "$1" ]; }
 
@@ -207,4 +211,72 @@ redraw() { printf '\033[H\033[2J' >&9; }
   wt set -g @whistle_detect off
   wt_wait_until 15000 live_empty
   assert_eq "$(live_val)" ''
+}
+
+# -- 评审补充（通知生命周期 / 投递 / 快节奏边界） ---------------------------
+
+@test "detect: 读屏写的 wait 在批准后自动清掉" {
+  start_agent
+  feed 'Press enter to confirm or esc to cancel\n'
+  wt_wait_until 8000 'notice_eq wait'
+
+  # 用户按了 y：屏幕回到「在跑」。焦点没动过，没有任何 after-select-*
+  # 会触发已读路径 —— 只能由读屏自己收掉它写的那条通知。
+  redraw
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 12000 notice_empty
+  assert_eq "$(notice_val)" ''
+  assert_eq "$(live_val)" 'running'
+}
+
+@test "detect: 未读 done 不挡住新的权限请求（wait 是升级不是覆盖）" {
+  wt set -g @whistle_detect_done off
+  wt set -p -t "$(pane_of)" @whistle_notice 'done' 
+  start_agent
+  feed 'Press enter to confirm or esc to cancel\n'
+  wt_wait_until 10000 'notice_eq wait'
+  assert_eq "$(notice_val)" 'wait'
+}
+
+@test "detect: opencode 没有规则表，不写 live" {
+  wt set -g @whistle_agent_cmds 'opencode'
+  ln -sf /bin/cat "$FAKE_BIN/opencode"
+  wt_wait_until 5000 pane_ready
+  wt send-keys -t w1 'exec /bin/sh' Enter
+  wt_wait_until 5000 fg_not_zsh
+  wt send-keys -t w1 "$FAKE_BIN/opencode $FAKE_FIFO" Enter
+  exec 9> "$FAKE_FIFO"
+  feed '› \n'
+  sleep 3
+  assert_eq "$(live_val)" ''
+}
+
+@test "detect: 读屏写 wait 时走投递层（桌面通知）" {
+  wt set -g @whistle_os on
+  start_agent
+  feed 'Press enter to confirm or esc to cancel\n'
+  wt_wait_until 12000 'notice_eq wait'
+  wt_wait_until 8000 'tn_fired'
+  assert_eq "$(notice_val)" 'wait'
+}
+
+@test "detect: 守护进程日志里没有 command not found" {
+  start_agent
+  feed '› \n'
+  wt_wait_until 8000 'live_eq idle'
+  sleep 1
+  run grep -c 'command not found' "$BATS_TEST_TMPDIR/detect.log"
+  assert_eq "$output" '0'
+}
+
+@test "detect: 关掉开关后窗口徽标也清空" {
+  start_agent
+  feed '› \n'
+  wt_wait_until 8000 'live_eq idle'
+  wt_wait_until 8000 'win_eq idle'
+
+  wt set -g @whistle_detect off
+  wt_wait_until 15000 live_empty
+  wt_wait_until 8000 win_empty
+  assert_eq "$(wt show -wv -t w1 @whistle_win 2> /dev/null)" ''
 }

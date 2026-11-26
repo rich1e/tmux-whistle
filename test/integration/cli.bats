@@ -32,9 +32,12 @@ make_deliver_spy_cli() {
   ln -s "$WHISTLE_ROOT/lib/core.sh" "$root/lib/core.sh"
   ln -s "$WHISTLE_ROOT/lib/status-line.sh" "$root/lib/status-line.sh"
   ln -s "$WHISTLE_ROOT/lib/menu.sh" "$root/lib/menu.sh"
-  cat > "$root/lib/deliver.sh" <<'EOF'
+  # 真实的 deliver.sh 里还有 whistle_finish（重算 + 投递的编排），
+  # 只把它 source 进来、替换掉 whistle_deliver 这一层。
+  cat > "$root/lib/deliver.sh" <<EOF
+. "$WHISTLE_ROOT/lib/deliver.sh"
 whistle_deliver() {
-  printf '%s|%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "${4:-}" "${5:-}" >> "$DELIVER_LOG"
+  printf '%s|%s|%s|%s|%s|%s\n' "\$#" "\$1" "\$2" "\$3" "\${4:-}" "\${5:-}" >> "\$DELIVER_LOG"
 }
 EOF
   SPY_CLI="$root/bin/tmux-whistle"
