@@ -105,3 +105,61 @@ EOF
     assert_eq "$output" "$expected"
   done
 }
+
+@test "claude: 空提示框判 idle（下方还有状态行）" {
+  run whistle_classify_claude <<'EOF'
+✻ Worked for 16s
+────────
+❯ 
+────────
+  ⏵⏵ bypass permissions on
+EOF
+  assert_eq "$output" 'idle'
+}
+
+@test "claude: 提示框内转圈判 running" {
+  run whistle_classify_claude <<'EOF'
+❯ ✻ 思考中
+EOF
+  assert_eq "$output" 'running'
+}
+
+@test "claude: 权限对话框判 wait" {
+  run whistle_classify_claude <<'EOF'
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+esc to cancel
+EOF
+  assert_eq "$output" 'wait'
+}
+
+@test "classify_screen: 按 agent 分派" {
+  run whistle_classify_screen codex <<'EOF'
+› 
+EOF
+  assert_eq "$output" 'idle'
+}
+
+@test "classify_screen: 未知 agent 返回空" {
+  run whistle_classify_screen vim <<'EOF'
+› 
+EOF
+  assert_eq "$output" ''
+}
+
+@test "agent_kind: 去 .exe 后按前缀归一化" {
+  assert_eq "$(whistle_agent_kind 'claude.exe')" 'claude'
+  assert_eq "$(whistle_agent_kind 'codex')" 'codex'
+  assert_eq "$(whistle_agent_kind 'zsh')" ''
+}
+
+@test "eligible: codex exec 非交互被排除" {
+  run whistle_detect_eligible codex 'codex exec --json' 'codex claude'
+  assert_eq "$status" 1
+}
+
+@test "eligible: 交互 TUI 被接受" {
+  run whistle_detect_eligible codex 'codex --no-daemon' 'codex claude'
+  assert_eq "$status" 0
+}
