@@ -730,10 +730,14 @@ whistle_resolve_idle_panes() {
       }
 
       # 活动态推导：真源为空时先看屏幕，再看前台进程名。
+      # gone 是上一轮退出留下的墓碑；同一 pane 再次跑起 agent 时，新的
+      # live 可以覆盖它。running / idle 仍优先，屏幕不能改 Hook 的有效上报。
       # strict 模式的 Codex 例外：没有 Hook 上报时状态未知，不猜 idle。
-      if (act == "") {
-        if (live != "") act = live
-        else if ((cmd in list) && !(pane_mode == "strict" && is_codex(cmd))) act = "idle"
+      if (live != "" && (act == "" || act == "gone")) {
+        act = live
+      } else if (act == "" &&
+                 (cmd in list) && !(pane_mode == "strict" && is_codex(cmd))) {
+        act = "idle"
       }
       # 子 agent 还在跑 → 活动态强制 running（哪怕主回合已经结束）
       if (sub_alive) act = "running"

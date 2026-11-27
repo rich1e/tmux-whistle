@@ -728,6 +728,15 @@ EOF
   assert_eq "$output" '%1|idle||idle|'
 }
 
+@test "resolve: gone 不妨碍新一次读屏状态" {
+  # 同一个 pane 里上一轮 Codex 正常退出会留下 gone；随后直接重开
+  # codex 时 Hook 在 strict 模式下 fail closed，只能靠 live 恢复显示。
+  run whistle_resolve_idle_panes 'codex' 2 0 strict <<'EOF'
+%1|gone|||||running|codex
+EOF
+  assert_eq "$output" '%1|running||running|'
+}
+
 @test "resolve: 旧 6 列输入仍然有效" {
   run whistle_resolve_idle_panes 'claude' 2 <<'EOF'
 %1|||活动消息|通知消息|claude

@@ -4,7 +4,7 @@
 # 读屏轮询（lib/detect.sh）：谁可以被接管、写到哪个槽位、什么时候算数。
 #
 # 三条不变量：
-#   1. hook / migration 接管过的 pane 一个字都不碰（屏幕永远只是补充）
+#   1. hook / migration 写下了 running / idle 的 pane 一个字都不碰
 #   2. 只处理 whistle_detect_eligible 放行的 pane（认识的 agent + 交互式）
 #   3. running / idle 只写 @whistle_live，绝不写 @whistle
 #
@@ -100,11 +100,24 @@ redraw() { printf '\033[H\033[2J' >&9; }
 }
 
 @test "detect: hook 接管的 pane 不写 live" {
-  wt set -p -t "$(pane_of)" @whistle_src hook
+  wt set -p -t "$(pane_of)" @whistle idle \
+    \; set -p -t "$(pane_of)" @whistle_src hook
   start_agent
   feed '› \n'
   sleep 3
   assert_eq "$(live_val)" ''
+}
+
+@test "detect: 复用 pane 时 gone 与旧 migration 来源不阻止读屏接管" {
+  # 上一轮 Hook 退出会留下 gone；旧迁移还可能把 src 留成 migration。
+  # 新一次直接运行 codex 没有 PaneBinding，必须重新交给读屏通道。
+  wt set -p -t "$(pane_of)" @whistle gone \
+    \; set -p -t "$(pane_of)" @whistle_src migration
+  start_agent
+  feed '› \n'
+  wt_wait_until 8000 'live_eq idle'
+  wt_wait_until 8000 'win_eq idle'
+  assert_eq "$(activity_val)" 'gone'
 }
 
 @test "detect: 非 agent pane 不写 live（普通输出含 esc to cancel 也不触发）" {

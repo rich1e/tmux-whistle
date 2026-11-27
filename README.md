@@ -690,9 +690,10 @@ terminal-notifier 不存在或发送失败时，可降级到 `osascript` / `noti
 
 - 有 agent 在跑时按 1 秒扫；没有 agent 时按 `@whistle_detect_interval`（默认 15 秒）。
 - 屏幕写的永远是 `@whistle_live`，`@whistle` 只放 agent 自己上报的值。
-  真源有值时**永远优先**，屏幕只是补充。
-- 一旦某个 pane 被 hook 接管过（`@whistle_src` 是 `hook` / `migration`），
-  读屏就再也不碰它。
+  Hook 上报的 `running` / `idle` 永远优先；`gone` 只是上一轮退出的墓碑，
+  同一 pane 重新跑起 agent 时会被新的 live 状态恢复。
+- 只有 hook 仍写下 `running` / `idle`（`@whistle_src` 是 `hook` / `migration`）
+  时，读屏才跳过该 pane；裸 `src` 或残留 `gone` 不会把回退通道永久关掉。
 - `codex exec` / `claude -p` 这类非交互进程会被排除 —— 它们没有输入框，
   读屏只会拿到一段静止输出。
 - `running → idle` 的转变会补一条「检测到回合结束」通知；running 持续不足

@@ -107,11 +107,12 @@ pane 信息**（99 个 V2 事件一个都没有），而 server 的环境是**�
 
 - **D1 三个槽位、两条通道不变**：屏幕写 `@whistle_live`，hook 写 `@whistle`，
   永不互相覆盖。`@whistle_live` **不进** `WHISTLE_DEFAULTS`（那是用户可配表）。
-- **D2 优先级**：`@whistle` 有值 → 用它；否则 `@whistle_live` 有值 → 用它；
-  否则前台是 agent → `idle`。推导层把它读作 `$(sc+5)`，并要求 `NF >= sc+6` ——
-  命令列永远在最后，列数不够就说明是旧格式或这一行根本没有 live 列。
-- **D3 仲裁**：只跳过 `@whistle_src` 为 `hook` / `migration` 的 pane。早先是
-  「src 非空就跳过」，把 deliver 之类的旁路写入也一起挡掉了。
+- **D2 优先级**：`@whistle` 是 `running` / `idle` → 用它；否则 `@whistle_live`
+  有值 → 用它；否则前台是 agent → `idle`。`gone` 是上一轮退出的墓碑，同一 pane
+  重新跑起 agent 时允许新的 live 覆盖。推导层把它读作 `$(sc+5)`，并要求
+  `NF >= sc+6` —— 命令列永远在最后，列数不够就说明是旧格式或这一行没有 live 列。
+- **D3 仲裁**：只有 `@whistle_src` 为 `hook` / `migration` **且** `@whistle` 为
+  `running` / `idle` 时才跳过 pane。bare `src` 与残留 `gone` 不能永久关掉读屏。
 
 其余几条容易踩的：
 

@@ -6,8 +6,9 @@
 #   @whistle_live  读屏分类出来的活动态（本文件）      ← 只在真源为空时生效
 #   @whistle_notice 有没有事等你（wait 也走这里）
 #
-# 与 hooks 路径的关系：hook / migration 接管过的 pane 一律跳过 —— 一旦某个
-# pane 被 hook 接管过，这里的轮询就再也不碰它，不会覆盖更准确的语义。
+# 与 hooks 路径的关系：hook / migration 只要写下了 running / idle，就跳过该
+# pane。bare src 与 gone 都是上一轮的残留，不能阻止同一 pane 的新 agent 回退
+# 到读屏通道。
 #
 # 单实例：pidfile 守卫。进程由 tmux 的 run-shell -b 拉起，
 # 常驻循环本身就是被 run-shell 托管的那条命令。
@@ -304,21 +305,26 @@ whistle_detect_once() {
   command rm -f "$WHISTLE_DETECT_STATE_DIR/agent_seen"
 
   _dv_panes=$(whistle_tmux list-panes -a \
-    -F '#{pane_id}|#{pane_current_command}|#{@whistle_src}|#{@whistle_live}|#{@whistle_notice}|#{@whistle_notice_src}|#{pane_tty}' 2> /dev/null)
+    -F '#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_src}|#{@whistle_live}|#{@whistle_notice}|#{@whistle_notice_src}|#{pane_tty}' 2> /dev/null)
 
   # 一轮一次 ps（见 whistle_detect_fg_snapshot）
   _dv_fg=$(whistle_detect_fg_snapshot)
 
-  printf '%s\n' "$_dv_panes" | while IFS='|' read -r _dv_pane _dv_cmd _dv_src _dv_live _dv_notice _dv_nsrc _dv_tty; do
+  printf '%s\n' "$_dv_panes" | while IFS='|' read -r _dv_pane _dv_cmd _dv_act _dv_src _dv_live _dv_notice _dv_nsrc _dv_tty; do
     case "${_dv_pane:-}" in
     '%'*) ;;
     *) continue ;;
     esac
 
-    # 仲裁：只跳过 hook / migration 真正接管过的 pane。
-    # 早先是「src 非空就跳过」，把 deliver 之类的旁路写入也一起挡掉了。
+    # 仲裁：只有 hook / migration 写下了 running / idle 才算接管。
+    # gone 是上一轮退出的墓碑；残留的 src 本身也不能让同一 pane 的新 agent
+    # 永久失去读屏回退。
     case "${_dv_src:-}" in
-    hook | migration) continue ;;
+    hook | migration)
+      case "${_dv_act:-}" in
+      running | idle) continue ;;
+      esac
+      ;;
     esac
 
     whistle_detect_fg "$_dv_fg" "$_dv_tty"

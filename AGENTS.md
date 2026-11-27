@@ -98,9 +98,12 @@ tmux-whistle doctor                            # 环境自检（也报「本机�
 
 hook 归因 fail-closed 时（用户直接跑 `codex`），状态栏上那个 pane 只能靠读屏补。
 
-- 屏幕写 `@whistle_live`，hook 写 `@whistle`，**永不互相覆盖**。推导层的优先级是
-  `@whistle` > `@whistle_live` > 前台进程名。绝不把屏幕结论写进 `@whistle`。
-- 只跳过 `@whistle_src` 为 `hook` / `migration` 的 pane（别退回「src 非空就跳过」）。
+- 屏幕写 `@whistle_live`，hook 写 `@whistle`，**永不互相覆盖**。推导层优先用
+  `@whistle` 的 `running` / `idle`，其次 `@whistle_live`，最后前台进程名。
+  `gone` 是上一轮退出留下的墓碑，同一 pane 重新跑起 agent 时可被新的 live 覆盖。
+  绝不把屏幕结论写进 `@whistle`。
+- 只有 `@whistle_src` 为 `hook` / `migration` **且** `@whistle` 为
+  `running` / `idle` 时才跳过该 pane；裸 `src` 或残留 `gone` 不能关掉读屏回退。
 - 「前台进程叫什么」按 **argv[0] 的 basename** 认：软链/包装器下
   `#{pane_current_command}` 是目标二进制的名字。
 - 防抖：`→ running` 立即生效，其余要连续两次；看到与已生效状态一致的分类要清掉
