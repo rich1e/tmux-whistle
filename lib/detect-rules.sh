@@ -141,8 +141,32 @@ whistle_screen_prompt_box() {
 # 滚动冻结时底部仍有 `› Ask Codex…` 提示框，freeze 必须压在 idle 之上。
 #
 # 整屏只扫一遍 —— 每秒每个 pane 都要跑，多次 fork 会把轮询成本堆起来。
+#
+# whistle_codex_title_busy <pane_title>
+# Codex 干活时会把终端标题改成 spinner 帧开头。它是比屏幕正文更稳定的
+# 「仍在跑」信号：长答案会把 Worked for 顶出可视区，但标题 spinner 会
+# 一直转到本轮回合真正结束。
+whistle_codex_title_busy() {
+  case "${1:-}" in
+  ⠋* | ⠙* | ⠹* | ⠸* | ⠼* | ⠴* | ⠦* | ⠧* | ⠇* | ⠏*) return 0 ;;
+  ⣾* | ⣽* | ⣻* | ⢿* | ⡿* | ⣟* | ⣯* | ⣷*) return 0 ;;
+  esac
+  return 1
+}
+
+# whistle_classify_codex [pane_title] [title_seen_busy]
 whistle_classify_codex() {
-  awk "$WHISTLE_DETECT_AWK_LIB"'
+  _drcc_title="${1:-}"
+  _drcc_seen="${2:-0}"
+  _drcc_busy=0
+  _drcc_present=0
+  whistle_codex_title_busy "$_drcc_title" && _drcc_busy=1
+  [ -n "$_drcc_title" ] && _drcc_present=1
+
+  awk -v title_busy="$_drcc_busy" \
+    -v title_seen="$_drcc_seen" \
+    -v title_present="$_drcc_present" \
+    "$WHISTLE_DETECT_AWK_LIB"'
     # 活动行可能被长工具输出顶出底部 12 行，但仍在当前可视区内。
     # 只认以项目符号开头的真实活动行，避免普通输出里提到
     # “esc to interrupt” 时被永久误判成 running。
@@ -205,12 +229,19 @@ whistle_classify_codex() {
         print "wait"
         exit
       }
-      if (!has(tail20, "Reconnect failed") && active) {
+      if (!has(tail20, "Reconnect failed") &&
+          (title_busy == 1 || active)) {
         print "running"
         exit
       }
       if (has(box, "› Ask Codex to do anything") ||
           has(box, "› Ask a follow-up question") || empty_prompt(box)) {
+        # 本轮曾经观察过标题 spinner，现在 spinner 消失且输入框回来：
+        # 即使 Worked for 已被最终答案顶出屏幕，也能确认回合结束。
+        if (title_seen == 1 && title_present == 1 && title_busy == 0) {
+          print "idle"
+          exit
+        }
         # 回合进行中两个工具之间会暂时收起活动行，但输入框占位文案
         # 已经出现；如果这一轮在最后一条 “Worked for” 之后还有用户
         # 输入或工具动作，说明回合尚未收尾，不能把它当 idle。
@@ -305,11 +336,14 @@ whistle_classify_supported() {
   return 1
 }
 
-# whistle_classify_screen <agent>
+# whistle_classify_screen <agent> [pane_title] [title_seen_busy]
 # stdin=整屏；agent ∈ codex / claude。未知 agent 输出空。
 whistle_classify_screen() {
-  case "${1:-}" in
-  codex) whistle_classify_codex ;;
+  _dcs_agent="${1:-}"
+  _dcs_title="${2:-}"
+  _dcs_seen="${3:-0}"
+  case "$_dcs_agent" in
+  codex) whistle_classify_codex "$_dcs_title" "$_dcs_seen" ;;
   claude) whistle_classify_claude ;;
   *) return 0 ;;
   esac

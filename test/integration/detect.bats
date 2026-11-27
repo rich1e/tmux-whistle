@@ -176,6 +176,28 @@ redraw() { printf '\033[H\033[2J' >&9; }
   assert_eq "$(live_val)" 'running'
 }
 
+@test "detect: Worked for 滚出屏幕后仍补 done 并发送桌面通知" {
+  wt set -g @whistle_detect_done_min 0
+  wt set -g @whistle_os on
+  start_agent
+  wt select-pane -t w1 -T '⠹ 修复通知投递 | tmux-whistle'
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+
+  # 长答案会把 “Worked for” 顶出当前可视区；标题 spinner 消失是
+  # 比正文启发式更可靠的「本轮已经收尾」信号。
+  wt select-pane -t w1 -T '修复通知投递 | tmux-whistle'
+  redraw
+  feed '› 修复 Codex 完成通知\n• Ran make check\n  └ all tests passed\n• 最终答案较长，Worked for 已不可见\n› Ask Codex to do anything\n'
+  wt_wait_until 15000 'notice_eq done'
+  wt_wait_until 8000 'tn_fired'
+  assert_eq "$(live_val)" 'idle'
+  tn_args=$(cat "$WHISTLE_TEST_TN_LOG")
+  assert_contains "$tn_args" '-execute'
+  assert_contains "$tn_args" '--desktop-jump'
+  assert_contains "$tn_args" "$(pane_of)"
+}
+
 # -- running→idle 补 done ----------------------------------------------------
 
 @test "detect: running→idle 补 done 并发送桌面通知" {

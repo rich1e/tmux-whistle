@@ -120,6 +120,17 @@ EOF
   assert_eq "$output" ''
 }
 
+@test "codex: 标题 spinner 结束且 Worked for 滚出屏幕仍判 idle" {
+  run whistle_classify_codex '修复通知投递 | tmux-whistle' 1 <<'EOF'
+› 修复 Codex 完成通知
+• Ran make check
+  └ all tests passed
+• 最终答案较长，Worked for 已被顶出可视区
+› Ask Codex to do anything
+EOF
+  assert_eq "$output" 'idle'
+}
+
 @test "codex: 启动前的 shell 提示符不算未结束回合" {
   run whistle_classify_codex <<'EOF'
 ❯ exec /bin/sh

@@ -26,6 +26,14 @@ if [ -z "${WHISTLE_ROOT:-}" ]; then
 fi
 export WHISTLE_ROOT
 
+# deliver.sh 只有在 WHISTLE_SELF 是绝对 CLI 路径时才生成通知点击回调。
+# CLI 入口会自己设置它；读屏守护是直接执行 lib/detect.sh 的，必须在这里补上，
+# 否则桌面通知能弹出，但 terminal-notifier 收不到 -execute，点击不会跳转。
+if [ -z "${WHISTLE_SELF:-}" ]; then
+  WHISTLE_SELF="$WHISTLE_ROOT/bin/tmux-whistle"
+  export WHISTLE_SELF
+fi
+
 # shellcheck source=/dev/null
 . "$WHISTLE_ROOT/lib/core.sh"
 # shellcheck source=/dev/null
@@ -132,7 +140,8 @@ whistle_detect_forget() {
   command rm -f "$WHISTLE_DETECT_STATE_DIR/$_daf_id.last" \
     "$WHISTLE_DETECT_STATE_DIR/$_daf_id.pending" \
     "$WHISTLE_DETECT_STATE_DIR/$_daf_id.count" \
-    "$WHISTLE_DETECT_STATE_DIR/$_daf_id.run_since"
+    "$WHISTLE_DETECT_STATE_DIR/$_daf_id.run_since" \
+    "$WHISTLE_DETECT_STATE_DIR/$_daf_id.title"
 }
 
 # whistle_detect_apply <pane> <running|idle>
@@ -305,12 +314,12 @@ whistle_detect_once() {
   command rm -f "$WHISTLE_DETECT_STATE_DIR/agent_seen"
 
   _dv_panes=$(whistle_tmux list-panes -a \
-    -F '#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_src}|#{@whistle_live}|#{@whistle_notice}|#{@whistle_notice_src}|#{pane_tty}' 2> /dev/null)
+    -F '#{pane_id}|#{pane_current_command}|#{@whistle}|#{@whistle_src}|#{@whistle_live}|#{@whistle_notice}|#{@whistle_notice_src}|#{pane_tty}|#{pane_title}' 2> /dev/null)
 
   # 一轮一次 ps（见 whistle_detect_fg_snapshot）
   _dv_fg=$(whistle_detect_fg_snapshot)
 
-  printf '%s\n' "$_dv_panes" | while IFS='|' read -r _dv_pane _dv_cmd _dv_act _dv_src _dv_live _dv_notice _dv_nsrc _dv_tty; do
+  printf '%s\n' "$_dv_panes" | while IFS='|' read -r _dv_pane _dv_cmd _dv_act _dv_src _dv_live _dv_notice _dv_nsrc _dv_tty _dv_title; do
     case "${_dv_pane:-}" in
     '%'*) ;;
     *) continue ;;
@@ -339,8 +348,9 @@ whistle_detect_once() {
     if [ -z "$_dv_kind" ] || ! whistle_classify_supported "$_dv_kind" \
       || ! whistle_detect_eligible "$_dv_cmd" "$_dv_argv" "$_dv_cmds"; then
       _dv_dirty=0
-      if [ -n "${_dv_live:-}" ]; then
-        whistle_live_set '' "$_dv_pane" > /dev/null
+      _dv_title_file="$WHISTLE_DETECT_STATE_DIR/${_dv_pane#%}.title"
+      if [ -n "${_dv_live:-}" ] || [ -f "$_dv_title_file" ]; then
+        [ -n "${_dv_live:-}" ] && whistle_live_set '' "$_dv_pane" > /dev/null
         whistle_detect_forget "$_dv_pane"
         _dv_dirty=1
       fi
@@ -364,8 +374,19 @@ whistle_detect_once() {
       whistle_detect_forget "$_dv_pane"
     fi
 
+    # Codex 的 pane title spinner 是回合仍在跑的高置信信号。记下“本轮曾
+    # 出现过 spinner”，供 spinner 消失后的长答案完成判定使用；没有标题
+    # 能力的环境仍走原有正文规则，不改变行为。
+    _dv_title_seen=0
+    _dv_title_file="$WHISTLE_DETECT_STATE_DIR/${_dv_pane#%}.title"
+    [ -f "$_dv_title_file" ] && _dv_title_seen=1
+    if [ "$_dv_kind" = codex ] && whistle_codex_title_busy "$_dv_title"; then
+      : > "$_dv_title_file"
+      _dv_title_seen=1
+    fi
+
     _dv_screen=$(whistle_tmux capture-pane -p -J -t "$_dv_pane" 2> /dev/null)
-    _dv_state=$(printf '%s\n' "$_dv_screen" | whistle_classify_screen "$_dv_kind")
+    _dv_state=$(printf '%s\n' "$_dv_screen" | whistle_classify_screen "$_dv_kind" "$_dv_title" "$_dv_title_seen")
     if [ -n "$_dv_wait_re" ] && printf '%s\n' "$_dv_screen" | grep -qE "$_dv_wait_re"; then
       _dv_state='wait'
     fi
@@ -376,6 +397,7 @@ whistle_detect_once() {
       whistle_detect_apply "$_dv_pane" "$_dv_state" || continue
       whistle_live_set "$_dv_state" "$_dv_pane" > /dev/null || continue
       _dv_sync_state=$_dv_state
+      [ "$_dv_state" = idle ] && command rm -f "$_dv_title_file"
       # 收掉本通道自己写的那条 wait：批准之后屏幕已经回到「在跑 / 空闲」，
       # 而焦点自始至终没动过 —— 没有任何 after-select-* 会触发已读路径。
       # 只认 wait：done 是「这一轮做完了」的历史提醒，不该被下一轮抹掉。
@@ -413,10 +435,13 @@ whistle_detect_once() {
 
   # 已经消失的 pane 没人再 forget 它，状态文件会一直堆在 /tmp 里。
   # 用本轮的 pane 列表做对照，纯 shell 遍历，不多 fork。
-  for _dv_f in "$WHISTLE_DETECT_STATE_DIR"/*.last; do
+  for _dv_f in "$WHISTLE_DETECT_STATE_DIR"/*.last "$WHISTLE_DETECT_STATE_DIR"/*.title; do
     [ -f "$_dv_f" ] || continue
     _dv_fid=${_dv_f##*/}
-    _dv_fid=${_dv_fid%.last}
+    case "$_dv_fid" in
+    *.last) _dv_fid=${_dv_fid%.last} ;;
+    *.title) _dv_fid=${_dv_fid%.title} ;;
+    esac
     case "$_dv_panes" in
     *"$_dv_fid|"*) continue ;;
     esac
