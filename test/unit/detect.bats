@@ -71,6 +71,64 @@ EOF
   assert_eq "$output" 'running'
 }
 
+@test "codex: 长工具输出不把活动行挤出判定区" {
+  run whistle_classify_codex <<'EOF'
+• Working (12s • esc to interrupt)
+  └ output 1
+  └ output 2
+  └ output 3
+  └ output 4
+  └ output 5
+  └ output 6
+  └ output 7
+  └ output 8
+  └ output 9
+  └ output 10
+  └ output 11
+  └ output 12
+  └ output 13
+  └ output 14
+  └ output 15
+›
+EOF
+  assert_eq "$output" 'running'
+}
+
+@test "codex: 普通输出里提到 esc to interrupt 不误判 running" {
+  run whistle_classify_codex <<'EOF'
+  └ Search pattern: esc to interrupt
+›
+EOF
+  assert_eq "$output" 'idle'
+}
+
+@test "codex: 活动行尾部被终端截断仍判 running" {
+  run whistle_classify_codex <<'EOF'
+• Command rejected due rm -f policy. Use a safer approach. (6m 27s • esc …
+›
+EOF
+  assert_eq "$output" 'running'
+}
+
+@test "codex: 回合中的思考间隙不判 idle" {
+  run whistle_classify_codex <<'EOF'
+• Ran make check
+  └ all tests passed
+• 正在检查剩余风险
+› Ask Codex to do anything
+EOF
+  assert_eq "$output" ''
+}
+
+@test "codex: 启动前的 shell 提示符不算未结束回合" {
+  run whistle_classify_codex <<'EOF'
+❯ exec /bin/sh
+sh-3.2$ codex
+›
+EOF
+  assert_eq "$output" 'idle'
+}
+
 @test "codex: 空提示符判 idle" {
   run whistle_classify_codex <<'EOF'
 done

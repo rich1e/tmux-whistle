@@ -375,6 +375,7 @@ whistle_detect_once() {
       # 防抖：running 立即生效，其余要连续两次（见 whistle_detect_apply）
       whistle_detect_apply "$_dv_pane" "$_dv_state" || continue
       whistle_live_set "$_dv_state" "$_dv_pane" > /dev/null || continue
+      _dv_sync_state=$_dv_state
       # 收掉本通道自己写的那条 wait：批准之后屏幕已经回到「在跑 / 空闲」，
       # 而焦点自始至终没动过 —— 没有任何 after-select-* 会触发已读路径。
       # 只认 wait：done 是「这一轮做完了」的历史提醒，不该被下一轮抹掉。
@@ -384,7 +385,9 @@ whistle_detect_once() {
       fi
       # 刚才还在跑、现在停了 → 补一条回合结束通知（只走通知通道）
       if [ "$_dv_state" = idle ] && [ "${_dap_prev:-}" = running ]; then
-        whistle_detect_done_fire "$_dv_pane"
+        # done 是本轮刚写入的通知通道，必须把“这次写的是通知”告诉
+        # whistle_finish；仍传 idle 会被“活动写入不重放旧通知”的保护拦掉。
+        whistle_detect_done_fire "$_dv_pane" && _dv_sync_state='done'
       fi
       ;;
     wait)
@@ -396,6 +399,7 @@ whistle_detect_once() {
         continue
       fi
       WHISTLE_SRC=detect whistle_state_set "wait" '检测到等待输入' "$_dv_pane" > /dev/null || continue
+      _dv_sync_state='wait'
       ;;
     *)
       # freeze 与「认不出来」都不动状态：滚动冻结只是视线离开底部，
@@ -404,7 +408,7 @@ whistle_detect_once() {
       ;;
     esac
 
-    whistle_detect_sync "$_dv_pane" "$_dv_state"
+    whistle_detect_sync "$_dv_pane" "$_dv_sync_state"
   done
 
   # 已经消失的 pane 没人再 forget 它，状态文件会一直堆在 /tmp 里。

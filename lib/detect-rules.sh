@@ -143,17 +143,47 @@ whistle_screen_prompt_box() {
 # 整屏只扫一遍 —— 每秒每个 pane 都要跑，多次 fork 会把轮询成本堆起来。
 whistle_classify_codex() {
   awk "$WHISTLE_DETECT_AWK_LIB"'
+    # 活动行可能被长工具输出顶出底部 12 行，但仍在当前可视区内。
+    # 只认以项目符号开头的真实活动行，避免普通输出里提到
+    # “esc to interrupt” 时被永久误判成 running。
+    function codex_active(s,   t) {
+      t = trim(s)
+      return index(t, "• ") == 1 &&
+             (has(t, "esc to interrupt") ||
+              has(t, "• esc") ||
+              index(t, "• Working (") == 1 ||
+              index(t, "• Running ") == 1)
+    }
+    # Codex 自己的输入行是 ›；启动前的 zsh 提示符是 ❯，不能混进回合历史。
+    function is_codex_prompt(s,   t) {
+      t = trim(s)
+      return index(t, "›") == 1
+    }
     {
       line[NR] = $0
       if (trim($0) != "") { ne++; _tailbuf[ne] = $0 }
-      if (is_prompt($0)) pstart = NR
+      if (is_codex_prompt($0)) {
+        prev_prompt = pstart
+        pstart = NR
+      }
       if (is_rule($0)) rule[NR] = 1
+      t = trim($0)
+      if (index(t, "Worked for ") == 1 ||
+          index(t, "• Worked for ") == 1) worked_at = NR
+      else if (index(t, "• ") == 1) last_event_at = NR
     }
     END {
       # 尾部只看**非空**行：真实 TUI 的对话框上方/下方常有大量空白行，
       # 按物理行取 tail 会把信号行挡在窗口外（trust 页就是这么漏的）。
       tail20 = joins(ne - 19, ne)
       tail12 = joins(ne - 11, ne)
+      active = 0
+      for (i = 1; i <= NR; i++) {
+        if (codex_active(line[i])) {
+          active = 1
+          break
+        }
+      }
 
       box = ""
       if (pstart > 0) {
@@ -175,14 +205,19 @@ whistle_classify_codex() {
         print "wait"
         exit
       }
-      if (!has(tail20, "Reconnect failed") &&
-          (has(tail12, "esc to interrupt") || has(tail12, "• Working (") ||
-           has(tail12, "• Running "))) {
+      if (!has(tail20, "Reconnect failed") && active) {
         print "running"
         exit
       }
       if (has(box, "› Ask Codex to do anything") ||
           has(box, "› Ask a follow-up question") || empty_prompt(box)) {
+        # 回合进行中两个工具之间会暂时收起活动行，但输入框占位文案
+        # 已经出现；如果这一轮在最后一条 “Worked for” 之后还有用户
+        # 输入或工具动作，说明回合尚未收尾，不能把它当 idle。
+        if (prev_prompt > worked_at || last_event_at > worked_at) {
+          print ""
+          exit
+        }
         print "idle"
         exit
       }

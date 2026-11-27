@@ -162,16 +162,32 @@ redraw() { printf '\033[H\033[2J' >&9; }
   assert_eq "$(live_val)" 'idle'
 }
 
+@test "detect: 回合中的思考间隙保持 running" {
+  start_agent
+  feed '• Working (3s • esc to interrupt)\n'
+  wt_wait_until 5000 'live_eq running'
+
+  # Codex 在两个工具之间会暂时收起活动行，只剩提示框；
+  # 此时回合还没结束，不能连续两次 idle 就把 ▶ 降成 ◉。
+  redraw
+  feed '• Ran make check\n  └ all tests passed\n• 正在检查剩余风险\n› Ask Codex to do anything\n'
+  # 扫描本身约 1 秒一轮，留足至少两次 idle 分类的时间，旧逻辑才会真正翻红。
+  sleep 6
+  assert_eq "$(live_val)" 'running'
+}
+
 # -- running→idle 补 done ----------------------------------------------------
 
-@test "detect: running→idle 补一条 done 通知" {
+@test "detect: running→idle 补 done 并发送桌面通知" {
   wt set -g @whistle_detect_done_min 0
+  wt set -g @whistle_os on
   start_agent
   feed '• Working (3s • esc to interrupt)\n'
   wt_wait_until 5000 'live_eq running'
   redraw
   feed '› \n'
   wt_wait_until 15000 'notice_eq done'
+  wt_wait_until 8000 'tn_fired'
   assert_eq "$(notice_val)" 'done'
   assert_eq "$(wt show -pqv -t "$(pane_of)" @whistle_notice_msg)" '检测到回合结束'
   # 活动通道的真源不受影响
